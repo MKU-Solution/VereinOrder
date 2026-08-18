@@ -38,6 +38,9 @@ export const AppLayout = () => {
             <button onClick={() => navigate('/revision')} className="px-4 py-2 rounded-xl hover:bg-slate-800/50 text-sm font-medium text-slate-300 transition-colors">
               Revision
             </button>
+            <button onClick={() => navigate('/admin')} className="px-4 py-2 rounded-xl hover:bg-slate-800/50 text-sm font-medium text-slate-300 transition-colors text-indigo-400">
+              Verwaltung
+            </button>
           </nav>
         </div>
         
