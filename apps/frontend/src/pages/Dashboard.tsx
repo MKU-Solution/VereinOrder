@@ -3,9 +3,12 @@ import { api } from '../lib/api';
 import { useCartStore } from '../store/useCartStore';
 import { ShoppingCart, Plus, Minus, Trash2, CheckCircle2 } from 'lucide-react';
 
+import { CheckoutModal } from '../components/CheckoutModal';
+
 export const Dashboard = () => {
   const [products, setProducts] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isCheckoutOpen, setIsCheckoutOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [successMsg, setSuccessMsg] = useState('');
   
@@ -25,17 +28,16 @@ export const Dashboard = () => {
     fetchProducts();
   }, []);
 
-  const handleCheckout = async () => {
-    if (items.length === 0) return;
+  const handleCheckoutSubmit = async (payments: { amount: number; method: 'CASH' | 'CARD' | 'VOUCHER' }[]) => {
+    setIsCheckoutOpen(false);
     setIsSubmitting(true);
     try {
-      // Assuming all products belong to the same active event for MVP
       const eventId = items[0].product.eventId; 
       const orderItems = items.map(i => ({ productId: i.product.id, quantity: i.quantity }));
       
-      await api.post('/orders', { eventId, items: orderItems });
+      await api.post('/orders', { eventId, items: orderItems, payments });
       
-      setSuccessMsg('Bestellung erfolgreich gebucht!');
+      setSuccessMsg('Bestellung erfolgreich!');
       clearCart();
       setTimeout(() => setSuccessMsg(''), 3000);
     } catch (err) {
@@ -117,7 +119,7 @@ export const Dashboard = () => {
           </div>
 
           <button
-            onClick={handleCheckout}
+            onClick={() => setIsCheckoutOpen(true)}
             disabled={items.length === 0 || isSubmitting}
             className="w-full bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-400 hover:to-emerald-500 text-white font-bold py-4 rounded-2xl shadow-lg shadow-emerald-500/20 active:scale-[0.98] disabled:opacity-50 disabled:active:scale-100 transition-all flex justify-center items-center gap-2 text-lg"
           >
@@ -126,11 +128,18 @@ export const Dashboard = () => {
             ) : successMsg ? (
               <><CheckCircle2 className="w-6 h-6" /> {successMsg}</>
             ) : (
-              'Buchen'
+              'Abrechnen'
             )}
           </button>
         </div>
       </div>
+
+      <CheckoutModal
+        isOpen={isCheckoutOpen}
+        total={total}
+        onClose={() => setIsCheckoutOpen(false)}
+        onConfirm={handleCheckoutSubmit}
+      />
     </div>
   );
 };
