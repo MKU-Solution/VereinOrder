@@ -26,6 +26,40 @@ export const Dashboard = () => {
       }
     };
     fetchProducts();
+
+    // Offline Sync loop
+    const syncOffline = async () => {
+      try {
+        const { getOfflineOrders, removeOfflineOrder } = await import('../lib/offlineSync');
+        const offlineOrders = await getOfflineOrders();
+        for (const order of offlineOrders) {
+          try {
+            await api.post('/orders', { 
+              eventId: order.eventId, 
+              items: order.items, 
+              payments: order.payments, 
+              idempotencyKey: order.idempotencyKey 
+            });
+            await removeOfflineOrder(order.idempotencyKey);
+            console.log("Synced offline order:", order.idempotencyKey);
+          } catch (e: any) {
+            if (e.response) {
+              // Server rejected it (e.g. invalid), remove it to avoid endless loop
+              await removeOfflineOrder(order.idempotencyKey);
+            }
+          }
+        }
+      } catch (e) {
+        console.error("Sync error", e);
+      }
+    };
+    
+    window.addEventListener('online', syncOffline);
+    // Try sync on mount if online
+    if (navigator.onLine) {
+      syncOffline();
+    }
+    return () => window.removeEventListener('online', syncOffline);
   }, []);
 
   const handleCheckoutSubmit = async (payments: { amount: number; method: 'CASH' | 'CARD' | 'VOUCHER' }[]) => {
@@ -34,15 +68,37 @@ export const Dashboard = () => {
     try {
       const eventId = items[0].product.eventId; 
       const orderItems = items.map(i => ({ productId: i.product.id, quantity: i.quantity }));
+      const idempotencyKey = crypto.randomUUID();
       
-      await api.post('/orders', { eventId, items: orderItems, payments });
+      await api.post('/orders', { eventId, items: orderItems, payments, idempotencyKey });
       
       setSuccessMsg('Bestellung erfolgreich!');
       clearCart();
       setTimeout(() => setSuccessMsg(''), 3000);
-    } catch (err) {
+    } catch (err: any) {
       console.error("Order failed", err);
-      alert('Fehler bei der Buchung!');
+      // Check if network error
+      if (!err.response) {
+        const eventId = items[0].product.eventId; 
+        const orderItems = items.map(i => ({ productId: i.product.id, quantity: i.quantity }));
+        const idempotencyKey = crypto.randomUUID();
+        
+        import('../lib/offlineSync').then(({ saveOrderOffline }) => {
+          saveOrderOffline({
+            idempotencyKey,
+            eventId,
+            items: orderItems,
+            payments,
+            createdAt: Date.now()
+          });
+        });
+        
+        setSuccessMsg('Offline gespeichert!');
+        clearCart();
+        setTimeout(() => setSuccessMsg(''), 3000);
+      } else {
+        alert('Fehler bei der Buchung!');
+      }
     } finally {
       setIsSubmitting(false);
     }
