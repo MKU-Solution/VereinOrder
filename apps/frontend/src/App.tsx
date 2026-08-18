@@ -3,6 +3,7 @@ import { Login } from './pages/Login';
 import { Dashboard } from './pages/Dashboard';
 import { StationSelection } from './pages/StationSelection';
 import { StationView } from './pages/StationView';
+import { RevisionDashboard } from './pages/RevisionDashboard';
 import { AuthGuard } from './components/layout/AuthGuard';
 import { AppLayout } from './components/layout/AppLayout';
 
@@ -17,6 +18,7 @@ function App() {
             <Route path="/" element={<Dashboard />} />
             <Route path="/stations" element={<StationSelection />} />
             <Route path="/stations/:id" element={<StationView />} />
+            <Route path="/revision" element={<RevisionDashboard />} />
             {/* Future routes: /order, /admin, etc. */}
           </Route>
         </Route>
