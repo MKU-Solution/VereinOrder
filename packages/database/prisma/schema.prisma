@@ -1,0 +1,113 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMINISTRATOR
+  EVENT_MANAGER
+  WAITER
+  CASHIER
+  STATION
+  REVISION
+}
+
+model User {
+  id        String   @id @default(uuid())
+  username  String   @unique
+  pinHash   String
+  role      Role     @default(WAITER)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+enum EventStatus {
+  DRAFT
+  PREPARED
+  TEST_MODE
+  ACTIVE
+  PAUSED
+  COMPLETED
+  ARCHIVED
+}
+
+model Event {
+  id         String      @id @default(uuid())
+  name       String
+  organizer  String?
+  location   String?
+  startTime  DateTime?
+  endTime    DateTime?
+  timezone   String      @default("Europe/Vienna")
+  status     EventStatus @default(DRAFT)
+  testMode   Boolean     @default(false)
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
+
+  categories ProductCategory[]
+  products   Product[]
+  stations   Station[]
+}
+
+model Station {
+  id        String   @id @default(uuid())
+  name      String
+  shortName String?
+  color     String?
+  sortOrder Int      @default(0)
+  isActive  Boolean  @default(true)
+  eventId   String
+  event     Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  products Product[]
+}
+
+model ProductCategory {
+  id        String   @id @default(uuid())
+  name      String
+  sortOrder Int      @default(0)
+  eventId   String
+  event     Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  products Product[]
+}
+
+enum ProductAvailability {
+  AVAILABLE
+  LOW_STOCK
+  OUT_OF_STOCK
+  DISABLED
+}
+
+model Product {
+  id              String              @id @default(uuid())
+  name            String
+  shortName       String?
+  description     String?
+  price           Int                 // in cents
+  taxRate         Int                 @default(2000) // 20.00% = 2000, or just 20 depending on logic, let's keep it as standard integer
+  color           String?
+  sortOrder       Int                 @default(0)
+  imageUrl        String?
+  availability    ProductAvailability @default(AVAILABLE)
+  
+  categoryId      String?
+  category        ProductCategory?    @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  
+  targetStationId String?
+  targetStation   Station?            @relation(fields: [targetStationId], references: [id], onDelete: SetNull)
+  
+  eventId         String
+  event           Event               @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+}
