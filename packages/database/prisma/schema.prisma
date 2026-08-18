@@ -139,6 +139,31 @@ model Order {
   updatedAt   DateTime    @updatedAt
 
   items       OrderItem[]
+  payments    Payment[]
+}
+
+enum PaymentMethod {
+  CASH
+  CARD
+  VOUCHER
+}
+
+enum PaymentStatus {
+  COMPLETED
+  REFUNDED
+}
+
+model Payment {
+  id          String        @id @default(uuid())
+  amount      Int           // in cents
+  method      PaymentMethod
+  status      PaymentStatus @default(COMPLETED)
+  
+  orderId     String
+  order       Order         @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
 }
 
 enum OrderItemStatus {

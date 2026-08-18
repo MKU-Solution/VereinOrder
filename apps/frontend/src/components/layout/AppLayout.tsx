@@ -29,6 +29,9 @@ export const AppLayout = () => {
             <button onClick={() => navigate('/')} className="px-4 py-2 rounded-xl hover:bg-slate-800/50 text-sm font-medium text-slate-300 transition-colors">
               Bestellaufnahme
             </button>
+            <button onClick={() => navigate('/unpaid')} className="px-4 py-2 rounded-xl hover:bg-slate-800/50 text-sm font-medium text-slate-300 transition-colors">
+              Offene Tische
+            </button>
             <button onClick={() => navigate('/stations')} className="px-4 py-2 rounded-xl hover:bg-slate-800/50 text-sm font-medium text-slate-300 transition-colors">
               Stationen
             </button>

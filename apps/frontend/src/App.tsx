@@ -4,6 +4,7 @@ import { Dashboard } from './pages/Dashboard';
 import { StationSelection } from './pages/StationSelection';
 import { StationView } from './pages/StationView';
 import { RevisionDashboard } from './pages/RevisionDashboard';
+import { UnpaidOrders } from './pages/UnpaidOrders';
 import { AuthGuard } from './components/layout/AuthGuard';
 import { AppLayout } from './components/layout/AppLayout';
 
@@ -16,6 +17,7 @@ function App() {
         <Route element={<AuthGuard />}>
           <Route element={<AppLayout />}>
             <Route path="/" element={<Dashboard />} />
+            <Route path="/unpaid" element={<UnpaidOrders />} />
             <Route path="/stations" element={<StationSelection />} />
             <Route path="/stations/:id" element={<StationView />} />
             <Route path="/revision" element={<RevisionDashboard />} />
