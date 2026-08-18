@@ -115,7 +115,27 @@ model Product {
   createdAt       DateTime            @default(now())
   updatedAt       DateTime            @updatedAt
 
+  variants        ProductVariant[]
+  extras          ProductExtra[]
   orderItems      OrderItem[]
+}
+
+model ProductVariant {
+  id        String   @id @default(uuid())
+  name      String
+  price     Int      // price in cents (absolute price for this variant)
+  sortOrder Int      @default(0)
+  productId String
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+}
+
+model ProductExtra {
+  id        String   @id @default(uuid())
+  name      String
+  price     Int      @default(0) // additional cost in cents
+  sortOrder Int      @default(0)
+  productId String
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
 }
 
 enum OrderStatus {
@@ -180,8 +200,12 @@ enum OrderItemStatus {
 model OrderItem {
   id          String          @id @default(uuid())
   quantity    Int
-  priceAtTime Int             // in cents, snapshot of product price
+  priceAtTime Int             // in cents, snapshot of product price + variant price + extras
   status      OrderItemStatus @default(PENDING)
+  
+  variantId   String?
+  variantName String?
+  extras      Json?           // Array of selected extras: [{ id, name, price }]
   
   orderId     String
   order       Order           @relation(fields: [orderId], references: [id], onDelete: Cascade)

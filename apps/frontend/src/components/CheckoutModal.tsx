@@ -1,17 +1,26 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { X, Coins, CreditCard, Clock, SplitSquareHorizontal } from 'lucide-react';
 
 interface CheckoutModalProps {
   isOpen: boolean;
   total: number;
+  initialTableName?: string;
   onClose: () => void;
   onConfirm: (payments: { amount: number; method: 'CASH' | 'CARD' | 'VOUCHER' }[], tableName?: string) => void;
 }
 
-export const CheckoutModal = ({ isOpen, total, onClose, onConfirm }: CheckoutModalProps) => {
+export const CheckoutModal = ({ isOpen, total, initialTableName = '', onClose, onConfirm }: CheckoutModalProps) => {
   const [mode, setMode] = useState<'SELECT' | 'SPLIT'>('SELECT');
   const [cashAmount, setCashAmount] = useState<number>(0);
   const [tableName, setTableName] = useState<string>('');
+
+  useEffect(() => {
+    if (isOpen) {
+      setTableName(initialTableName);
+      setMode('SELECT');
+      setCashAmount(0);
+    }
+  }, [isOpen, initialTableName]);
 
   if (!isOpen) return null;
 

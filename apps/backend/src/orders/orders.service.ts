@@ -4,7 +4,13 @@ import { PRISMA_CLIENT } from '../prisma/prisma.module';
 
 interface CreateOrderDto {
   eventId: string;
-  items: { productId: string; quantity: number }[];
+  items: { 
+    productId: string; 
+    quantity: number;
+    variantId?: string;
+    variantName?: string;
+    extras?: { id: string; name: string; price: number }[];
+  }[];
   payments?: { amount: number, method: 'CASH' | 'CARD' | 'VOUCHER' }[];
   idempotencyKey?: string;
   tableName?: string;
@@ -34,7 +40,8 @@ export class OrdersService {
 
     const productIds = dto.items.map(i => i.productId);
     const products = await this.prisma.product.findMany({
-      where: { id: { in: productIds } }
+      where: { id: { in: productIds } },
+      include: { variants: true, extras: true }
     });
 
     const productMap = new Map(products.map(p => [p.id, p]));
@@ -45,14 +52,33 @@ export class OrdersService {
       if (!product) throw new BadRequestException(`Product ${item.productId} not found`);
       if (product.availability !== 'AVAILABLE') throw new BadRequestException(`Product ${product.name} is not available`);
       
-      const itemTotal = product.price * item.quantity;
+      let basePrice = product.price;
+      
+      if (item.variantId) {
+        const variant = product.variants.find(v => v.id === item.variantId);
+        if (variant) basePrice = variant.price;
+      }
+      
+      let extrasCost = 0;
+      if (item.extras && item.extras.length > 0) {
+        for (const ext of item.extras) {
+          const dbExtra = product.extras.find(e => e.id === ext.id);
+          if (dbExtra) extrasCost += dbExtra.price;
+        }
+      }
+
+      const finalItemPrice = basePrice + extrasCost;
+      const itemTotal = finalItemPrice * item.quantity;
       totalAmount += itemTotal;
 
       return {
         productId: product.id,
         quantity: item.quantity,
-        priceAtTime: product.price,
-        status: 'PENDING' as any
+        priceAtTime: finalItemPrice,
+        status: 'PENDING' as any,
+        variantId: item.variantId,
+        variantName: item.variantName,
+        extras: item.extras as any,
       };
     });
 
