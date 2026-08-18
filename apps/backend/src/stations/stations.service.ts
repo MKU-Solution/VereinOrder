@@ -32,7 +32,6 @@ export class StationsService {
   async update(id: string, data: any) {
     return this.prisma.station.update({ where: { id }, data });
   }
-
   async getPendingItems(stationId: string) {
     return this.prisma.orderItem.findMany({
       where: {

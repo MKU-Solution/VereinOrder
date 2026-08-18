@@ -38,7 +38,6 @@ export class StationsController {
   async update(@Param('id') id: string, @Body() data: any) {
     return this.stationsService.update(id, data);
   }
-
   @Patch('items/:itemId/status')
   @Roles('ADMINISTRATOR', 'STATION', 'WAITER')
   async updateItemStatus(@Param('itemId') itemId: string, @Body('status') status: string) {
