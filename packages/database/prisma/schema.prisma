@@ -23,6 +23,8 @@ model User {
   role      Role     @default(WAITER)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  orders    Order[]
 }
 
 enum EventStatus {
@@ -51,6 +53,7 @@ model Event {
   categories ProductCategory[]
   products   Product[]
   stations   Station[]
+  orders     Order[]
 }
 
 model Station {
@@ -93,7 +96,7 @@ model Product {
   shortName       String?
   description     String?
   price           Int                 // in cents
-  taxRate         Int                 @default(2000) // 20.00% = 2000, or just 20 depending on logic, let's keep it as standard integer
+  taxRate         Int                 @default(2000) // 20.00% = 2000
   color           String?
   sortOrder       Int                 @default(0)
   imageUrl        String?
@@ -110,4 +113,54 @@ model Product {
   
   createdAt       DateTime            @default(now())
   updatedAt       DateTime            @updatedAt
+
+  orderItems      OrderItem[]
+}
+
+enum OrderStatus {
+  PENDING
+  PAID
+  CANCELLED
+}
+
+model Order {
+  id          String      @id @default(uuid())
+  orderNumber Int         @default(autoincrement())
+  totalAmount Int         // in cents
+  status      OrderStatus @default(PENDING)
+  
+  userId      String
+  user        User        @relation(fields: [userId], references: [id])
+  
+  eventId     String
+  event       Event       @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  items       OrderItem[]
+}
+
+enum OrderItemStatus {
+  PENDING
+  PREPARING
+  READY
+  DELIVERED
+  CANCELLED
+}
+
+model OrderItem {
+  id          String          @id @default(uuid())
+  quantity    Int
+  priceAtTime Int             // in cents, snapshot of product price
+  status      OrderItemStatus @default(PENDING)
+  
+  orderId     String
+  order       Order           @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  
+  productId   String
+  product     Product         @relation(fields: [productId], references: [id])
+  
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
 }
