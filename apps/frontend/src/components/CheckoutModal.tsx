@@ -5,23 +5,24 @@ interface CheckoutModalProps {
   isOpen: boolean;
   total: number;
   onClose: () => void;
-  onConfirm: (payments: { amount: number; method: 'CASH' | 'CARD' | 'VOUCHER' }[]) => void;
+  onConfirm: (payments: { amount: number; method: 'CASH' | 'CARD' | 'VOUCHER' }[], tableName?: string) => void;
 }
 
 export const CheckoutModal = ({ isOpen, total, onClose, onConfirm }: CheckoutModalProps) => {
   const [mode, setMode] = useState<'SELECT' | 'SPLIT'>('SELECT');
   const [cashAmount, setCashAmount] = useState<number>(0);
+  const [tableName, setTableName] = useState<string>('');
 
   if (!isOpen) return null;
 
   const formatPrice = (cents: number) => `€ ${(cents / 100).toFixed(2)}`;
 
   const handleFullPayment = (method: 'CASH' | 'CARD') => {
-    onConfirm([{ amount: total, method }]);
+    onConfirm([{ amount: total, method }], tableName);
   };
 
   const handlePayLater = () => {
-    onConfirm([]); // No payments immediately
+    onConfirm([], tableName);
   };
 
   const handleSplitSubmit = () => {
@@ -30,7 +31,7 @@ export const CheckoutModal = ({ isOpen, total, onClose, onConfirm }: CheckoutMod
     onConfirm([
       { amount: cashAmount, method: 'CASH' },
       { amount: cardAmount, method: 'CARD' }
-    ]);
+    ], tableName);
   };
 
   return (
@@ -44,7 +45,18 @@ export const CheckoutModal = ({ isOpen, total, onClose, onConfirm }: CheckoutMod
         </button>
 
         <h2 className="text-2xl font-bold mb-2">Abrechnung</h2>
-        <div className="text-3xl font-bold text-indigo-400 mb-8">{formatPrice(total)}</div>
+        <div className="text-3xl font-bold text-indigo-400 mb-6">{formatPrice(total)}</div>
+
+        <div className="mb-6">
+          <label className="block text-sm font-medium text-slate-400 mb-2">Tisch / Bereich (optional)</label>
+          <input 
+            type="text" 
+            placeholder="z.B. Zelt 12, Bar, Abholung" 
+            className="w-full bg-slate-900 border border-slate-700 rounded-xl p-3 text-white placeholder-slate-500"
+            value={tableName}
+            onChange={(e) => setTableName(e.target.value)}
+          />
+        </div>
 
         {mode === 'SELECT' ? (
           <div className="space-y-3">

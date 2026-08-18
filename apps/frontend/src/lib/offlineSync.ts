@@ -9,6 +9,7 @@ interface OfflineOrder {
   eventId: string;
   items: { productId: string; quantity: number }[];
   payments: { amount: number, method: 'CASH' | 'CARD' | 'VOUCHER' }[];
+  tableName?: string;
   createdAt: number;
 }
 
