@@ -57,46 +57,72 @@ async function main() {
   console.log(`Kategorien erstellt: Getränke, Speisen`);
 
   // Create Products
-  await prisma.product.createMany({
-    data: [
-      {
-        name: 'Bier vom Fass',
-        shortName: 'Bier',
-        price: 450, // 4.50 EUR
-        categoryId: catGetraenke.id,
-        targetStationId: schank.id,
-        eventId: event.id,
-        sortOrder: 1,
-      },
-      {
-        name: 'Cola',
-        price: 350, // 3.50 EUR
-        categoryId: catGetraenke.id,
-        targetStationId: schank.id,
-        eventId: event.id,
-        sortOrder: 2,
-      },
-      {
-        name: 'Wienerschnitzel mit Pommes',
-        shortName: 'Schnitzel',
-        price: 1200, // 12.00 EUR
-        categoryId: catSpeisen.id,
-        targetStationId: kueche.id,
-        eventId: event.id,
-        sortOrder: 1,
-      },
-      {
-        name: 'Pommes Frites',
-        shortName: 'Pommes',
-        price: 450, // 4.50 EUR
-        categoryId: catSpeisen.id,
-        targetStationId: kueche.id,
-        eventId: event.id,
-        sortOrder: 2,
+  await prisma.product.create({
+    data: {
+      name: 'Bier vom Fass',
+      shortName: 'Bier',
+      price: 450, // default 0.5l price
+      categoryId: catGetraenke.id,
+      targetStationId: schank.id,
+      eventId: event.id,
+      sortOrder: 1,
+      variants: {
+        create: [
+          { name: '0,3l', price: 350, sortOrder: 1 },
+          { name: '0,5l', price: 450, sortOrder: 2 },
+        ]
       }
-    ]
+    }
   });
-  console.log(`Test-Produkte erstellt.`);
+
+  await prisma.product.create({
+    data: {
+      name: 'Cola',
+      price: 350,
+      categoryId: catGetraenke.id,
+      targetStationId: schank.id,
+      eventId: event.id,
+      sortOrder: 2,
+    }
+  });
+
+  await prisma.product.create({
+    data: {
+      name: 'Wienerschnitzel mit Pommes',
+      shortName: 'Schnitzel',
+      price: 1200,
+      categoryId: catSpeisen.id,
+      targetStationId: kueche.id,
+      eventId: event.id,
+      sortOrder: 1,
+      extras: {
+        create: [
+          { name: 'ohne Beilage', price: -200, sortOrder: 1 },
+          { name: 'Ketchup', price: 50, sortOrder: 2 },
+          { name: 'Zitrone extra', price: 0, sortOrder: 3 }
+        ]
+      }
+    }
+  });
+
+  await prisma.product.create({
+    data: {
+      name: 'Pommes Frites',
+      shortName: 'Pommes',
+      price: 450,
+      categoryId: catSpeisen.id,
+      targetStationId: kueche.id,
+      eventId: event.id,
+      sortOrder: 2,
+      extras: {
+        create: [
+          { name: 'Ketchup', price: 50, sortOrder: 1 },
+          { name: 'Mayo', price: 50, sortOrder: 2 }
+        ]
+      }
+    }
+  });
+  console.log(`Test-Produkte mit Varianten und Extras erstellt.`);
 }
 
 main()

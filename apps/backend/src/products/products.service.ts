@@ -10,10 +10,12 @@ export class ProductsService {
     return this.prisma.product.findMany({
       where: {
         availability: 'AVAILABLE',
-        event: { status: 'ACTIVE' } // simplified for MVP, assume fetching for the active event
+        event: { status: 'ACTIVE' } 
       },
       include: {
         category: true,
+        variants: { orderBy: { sortOrder: 'asc' } },
+        extras: { orderBy: { sortOrder: 'asc' } }
       },
       orderBy: [
         { category: { sortOrder: 'asc' } },
