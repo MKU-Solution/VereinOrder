@@ -21,6 +21,7 @@ model User {
   username  String   @unique
   pinHash   String
   role      Role     @default(WAITER)
+  isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -128,6 +129,8 @@ model Order {
   orderNumber Int         @default(autoincrement())
   totalAmount Int         // in cents
   status      OrderStatus @default(PENDING)
+  idempotencyKey String?  @unique
+  tableName   String?
   
   userId      String
   user        User        @relation(fields: [userId], references: [id])
@@ -139,6 +142,31 @@ model Order {
   updatedAt   DateTime    @updatedAt
 
   items       OrderItem[]
+  payments    Payment[]
+}
+
+enum PaymentMethod {
+  CASH
+  CARD
+  VOUCHER
+}
+
+enum PaymentStatus {
+  COMPLETED
+  REFUNDED
+}
+
+model Payment {
+  id          String        @id @default(uuid())
+  amount      Int           // in cents
+  method      PaymentMethod
+  status      PaymentStatus @default(COMPLETED)
+  
+  orderId     String
+  order       Order         @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
 }
 
 enum OrderItemStatus {
@@ -163,4 +191,34 @@ model OrderItem {
   
   createdAt   DateTime        @default(now())
   updatedAt   DateTime        @updatedAt
+}
+
+enum PrintJobStatus {
+  PENDING
+  PRINTED
+  FAILED
+}
+
+model Printer {
+  id              String      @id @default(uuid())
+  name            String
+  type            String      // e.g., 'CONSOLE', 'LAN', 'USB'
+  ipAddress       String?
+  port            Int?
+  isActive        Boolean     @default(true)
+  jobs            PrintJob[]
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+}
+
+model PrintJob {
+  id              String          @id @default(uuid())
+  printerId       String
+  printer         Printer         @relation(fields: [printerId], references: [id])
+  content         Json            // The data payload for the printed ticket
+  status          PrintJobStatus  @default(PENDING)
+  orderId         String?         // Optional reference to the order
+  errorMessage    String?
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
 }

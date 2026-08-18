@@ -1,4 +1,4 @@
-import { Controller, Post, Body, UseGuards, Request } from '@nestjs/common';
+import { Controller, Post, Get, Body, Param, Query, UseGuards, Request } from '@nestjs/common';
 import { OrdersService } from './orders.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
@@ -14,5 +14,20 @@ export class OrdersController {
   async createOrder(@Request() req, @Body() body: any) {
     const userId = req.user.userId;
     return this.ordersService.createOrder(userId, body);
+  }
+
+  @Get('unpaid')
+  @Roles('ADMINISTRATOR', 'WAITER', 'CASHIER')
+  async getUnpaidOrders(@Query('eventId') eventId: string) {
+    return this.ordersService.getUnpaidOrders(eventId);
+  }
+
+  @Post(':id/payments')
+  @Roles('ADMINISTRATOR', 'CASHIER', 'WAITER')
+  async addPayments(
+    @Param('id') id: string,
+    @Body('payments') payments: { amount: number, method: 'CASH' | 'CARD' | 'VOUCHER' }[]
+  ) {
+    return this.ordersService.addPaymentsToOrder(id, payments);
   }
 }

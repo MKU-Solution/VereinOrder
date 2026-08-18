@@ -3,9 +3,12 @@ import { api } from '../lib/api';
 import { useCartStore } from '../store/useCartStore';
 import { ShoppingCart, Plus, Minus, Trash2, CheckCircle2 } from 'lucide-react';
 
+import { CheckoutModal } from '../components/CheckoutModal';
+
 export const Dashboard = () => {
   const [products, setProducts] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isCheckoutOpen, setIsCheckoutOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [successMsg, setSuccessMsg] = useState('');
   
@@ -23,24 +26,80 @@ export const Dashboard = () => {
       }
     };
     fetchProducts();
+
+    // Offline Sync loop
+    const syncOffline = async () => {
+      try {
+        const { getOfflineOrders, removeOfflineOrder } = await import('../lib/offlineSync');
+        const offlineOrders = await getOfflineOrders();
+        for (const order of offlineOrders) {
+          try {
+            await api.post('/orders', { 
+              eventId: order.eventId, 
+              items: order.items, 
+              payments: order.payments, 
+              idempotencyKey: order.idempotencyKey 
+            });
+            await removeOfflineOrder(order.idempotencyKey);
+            console.log("Synced offline order:", order.idempotencyKey);
+          } catch (e: any) {
+            if (e.response) {
+              // Server rejected it (e.g. invalid), remove it to avoid endless loop
+              await removeOfflineOrder(order.idempotencyKey);
+            }
+          }
+        }
+      } catch (e) {
+        console.error("Sync error", e);
+      }
+    };
+    
+    window.addEventListener('online', syncOffline);
+    // Try sync on mount if online
+    if (navigator.onLine) {
+      syncOffline();
+    }
+    return () => window.removeEventListener('online', syncOffline);
   }, []);
 
-  const handleCheckout = async () => {
-    if (items.length === 0) return;
+  const handleCheckoutSubmit = async (payments: { amount: number; method: 'CASH' | 'CARD' | 'VOUCHER' }[], tableName?: string) => {
+    setIsCheckoutOpen(false);
     setIsSubmitting(true);
     try {
-      // Assuming all products belong to the same active event for MVP
       const eventId = items[0].product.eventId; 
       const orderItems = items.map(i => ({ productId: i.product.id, quantity: i.quantity }));
+      const idempotencyKey = crypto.randomUUID();
       
-      await api.post('/orders', { eventId, items: orderItems });
+      await api.post('/orders', { eventId, items: orderItems, payments, idempotencyKey, tableName });
       
-      setSuccessMsg('Bestellung erfolgreich gebucht!');
+      setSuccessMsg('Bestellung erfolgreich!');
       clearCart();
       setTimeout(() => setSuccessMsg(''), 3000);
-    } catch (err) {
+    } catch (err: any) {
       console.error("Order failed", err);
-      alert('Fehler bei der Buchung!');
+      // Check if network error
+      if (!err.response) {
+        const eventId = items[0].product.eventId; 
+        const orderItems = items.map(i => ({ productId: i.product.id, quantity: i.quantity }));
+        const idempotencyKey = crypto.randomUUID();
+        
+        import('../lib/offlineSync').then(({ saveOrderOffline }) => {
+          saveOrderOffline({
+            idempotencyKey,
+            eventId,
+            items: orderItems,
+            payments,
+            tableName,
+            createdAt: Date.now()
+          });
+        });
+        
+        setSuccessMsg('Offline gespeichert!');
+        clearCart();
+        setTimeout(() => setSuccessMsg(''), 3000);
+      } else {
+        alert('Fehler bei der Buchung!');
+      }
     } finally {
       setIsSubmitting(false);
     }
@@ -117,7 +176,7 @@ export const Dashboard = () => {
           </div>
 
           <button
-            onClick={handleCheckout}
+            onClick={() => setIsCheckoutOpen(true)}
             disabled={items.length === 0 || isSubmitting}
             className="w-full bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-400 hover:to-emerald-500 text-white font-bold py-4 rounded-2xl shadow-lg shadow-emerald-500/20 active:scale-[0.98] disabled:opacity-50 disabled:active:scale-100 transition-all flex justify-center items-center gap-2 text-lg"
           >
@@ -126,11 +185,18 @@ export const Dashboard = () => {
             ) : successMsg ? (
               <><CheckCircle2 className="w-6 h-6" /> {successMsg}</>
             ) : (
-              'Buchen'
+              'Abrechnen'
             )}
           </button>
         </div>
       </div>
+
+      <CheckoutModal
+        isOpen={isCheckoutOpen}
+        total={total}
+        onClose={() => setIsCheckoutOpen(false)}
+        onConfirm={handleCheckoutSubmit}
+      />
     </div>
   );
 };

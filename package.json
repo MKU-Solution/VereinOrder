@@ -10,8 +10,8 @@
     "lint": "pnpm -r run lint"
   },
   "engines": {
-    "node": ">=26.0.0",
-    "pnpm": ">=11.0.0"
+    "node": ">=20.0.0",
+    "pnpm": ">=9.0.0"
   },
   "pnpm": {
     "approvedBuilds": {
