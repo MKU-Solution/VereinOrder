@@ -19,6 +19,14 @@ async function main() {
   });
   console.log(`Initialer Admin-User erstellt: ${admin.username} / PIN: ${rawPin}`);
 
+  const printer = await prisma.printer.create({
+    data: {
+      name: 'Hauptkasse Drucker',
+      type: 'CONSOLE',
+    }
+  });
+  console.log(`Drucker erstellt: ${printer.name}`);
+
   // Create Test Event
   const event = await prisma.event.create({
     data: {
