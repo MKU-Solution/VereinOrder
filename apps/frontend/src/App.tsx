@@ -5,6 +5,7 @@ import { StationSelection } from './pages/StationSelection';
 import { StationView } from './pages/StationView';
 import { RevisionDashboard } from './pages/RevisionDashboard';
 import { UnpaidOrders } from './pages/UnpaidOrders';
+import { AdminDashboard } from './pages/AdminDashboard';
 import { AuthGuard } from './components/layout/AuthGuard';
 import { AppLayout } from './components/layout/AppLayout';
 
@@ -21,6 +22,7 @@ function App() {
             <Route path="/stations" element={<StationSelection />} />
             <Route path="/stations/:id" element={<StationView />} />
             <Route path="/revision" element={<RevisionDashboard />} />
+            <Route path="/admin" element={<AdminDashboard />} />
             {/* Future routes: /order, /admin, etc. */}
           </Route>
         </Route>

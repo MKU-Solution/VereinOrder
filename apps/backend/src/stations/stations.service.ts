@@ -16,6 +16,23 @@ export class StationsService {
     });
   }
 
+  // --- ADMIN METHODS: STATIONS ---
+
+  async findAllAdmin(eventId: string) {
+    return this.prisma.station.findMany({
+      where: { eventId },
+      orderBy: { sortOrder: 'asc' }
+    });
+  }
+
+  async create(data: any) {
+    return this.prisma.station.create({ data });
+  }
+
+  async update(id: string, data: any) {
+    return this.prisma.station.update({ where: { id }, data });
+  }
+
   async getPendingItems(stationId: string) {
     return this.prisma.orderItem.findMany({
       where: {
