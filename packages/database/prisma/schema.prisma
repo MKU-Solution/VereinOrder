@@ -21,6 +21,7 @@ model User {
   username  String   @unique
   pinHash   String
   role      Role     @default(WAITER)
+  isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
