@@ -16,7 +16,6 @@ export class OrdersService {
       throw new BadRequestException('Order must contain at least one item');
     }
 
-    // Fetch current prices from database to calculate total amount securely
     const productIds = dto.items.map(i => i.productId);
     const products = await this.prisma.product.findMany({
       where: { id: { in: productIds } }
@@ -41,22 +40,47 @@ export class OrdersService {
       };
     });
 
-    // Save transactionally
-    const order = await this.prisma.order.create({
-      data: {
-        totalAmount,
-        status: 'PENDING',
-        userId,
-        eventId: dto.eventId,
-        items: {
-          create: orderItemsData
+    return await this.prisma.$transaction(async (prisma) => {
+      const order = await prisma.order.create({
+        data: {
+          totalAmount,
+          status: 'PENDING',
+          userId,
+          eventId: dto.eventId,
+          items: {
+            create: orderItemsData
+          }
+        },
+        include: {
+          items: {
+            include: {
+              product: true
+            }
+          }
         }
-      },
-      include: {
-        items: true
-      }
-    });
+      });
 
-    return order;
+      // Automatically create a PrintJob for the MVP (using the first active printer)
+      const printer = await prisma.printer.findFirst({ where: { isActive: true } });
+      if (printer) {
+        await prisma.printJob.create({
+          data: {
+            printerId: printer.id,
+            orderId: order.id,
+            content: {
+              orderNumber: order.id,
+              totalAmount: order.totalAmount,
+              items: order.items.map(item => ({
+                productName: item.product.name,
+                quantity: item.quantity,
+                price: item.priceAtTime
+              }))
+            }
+          }
+        });
+      }
+
+      return order;
+    });
   }
 }

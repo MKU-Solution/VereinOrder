@@ -164,3 +164,33 @@ model OrderItem {
   createdAt   DateTime        @default(now())
   updatedAt   DateTime        @updatedAt
 }
+
+enum PrintJobStatus {
+  PENDING
+  PRINTED
+  FAILED
+}
+
+model Printer {
+  id              String      @id @default(uuid())
+  name            String
+  type            String      // e.g., 'CONSOLE', 'LAN', 'USB'
+  ipAddress       String?
+  port            Int?
+  isActive        Boolean     @default(true)
+  jobs            PrintJob[]
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+}
+
+model PrintJob {
+  id              String          @id @default(uuid())
+  printerId       String
+  printer         Printer         @relation(fields: [printerId], references: [id])
+  content         Json            // The data payload for the printed ticket
+  status          PrintJobStatus  @default(PENDING)
+  orderId         String?         // Optional reference to the order
+  errorMessage    String?
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+}
