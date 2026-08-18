@@ -62,7 +62,7 @@ export const Dashboard = () => {
     return () => window.removeEventListener('online', syncOffline);
   }, []);
 
-  const handleCheckoutSubmit = async (payments: { amount: number; method: 'CASH' | 'CARD' | 'VOUCHER' }[]) => {
+  const handleCheckoutSubmit = async (payments: { amount: number; method: 'CASH' | 'CARD' | 'VOUCHER' }[], tableName?: string) => {
     setIsCheckoutOpen(false);
     setIsSubmitting(true);
     try {
@@ -70,7 +70,7 @@ export const Dashboard = () => {
       const orderItems = items.map(i => ({ productId: i.product.id, quantity: i.quantity }));
       const idempotencyKey = crypto.randomUUID();
       
-      await api.post('/orders', { eventId, items: orderItems, payments, idempotencyKey });
+      await api.post('/orders', { eventId, items: orderItems, payments, idempotencyKey, tableName });
       
       setSuccessMsg('Bestellung erfolgreich!');
       clearCart();
@@ -89,6 +89,7 @@ export const Dashboard = () => {
             eventId,
             items: orderItems,
             payments,
+            tableName,
             createdAt: Date.now()
           });
         });

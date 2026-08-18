@@ -7,6 +7,7 @@ interface CreateOrderDto {
   items: { productId: string; quantity: number }[];
   payments?: { amount: number, method: 'CASH' | 'CARD' | 'VOUCHER' }[];
   idempotencyKey?: string;
+  tableName?: string;
 }
 
 @Injectable()
@@ -66,6 +67,7 @@ export class OrdersService {
           userId,
           eventId: dto.eventId,
           idempotencyKey: dto.idempotencyKey,
+          tableName: dto.tableName,
           items: {
             create: orderItemsData
           },

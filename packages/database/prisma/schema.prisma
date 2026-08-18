@@ -130,6 +130,7 @@ model Order {
   totalAmount Int         // in cents
   status      OrderStatus @default(PENDING)
   idempotencyKey String?  @unique
+  tableName   String?
   
   userId      String
   user        User        @relation(fields: [userId], references: [id])
