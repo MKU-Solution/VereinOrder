@@ -6,6 +6,7 @@ interface CreateOrderDto {
   eventId: string;
   items: { productId: string; quantity: number }[];
   payments?: { amount: number, method: 'CASH' | 'CARD' | 'VOUCHER' }[];
+  idempotencyKey?: string;
 }
 
 @Injectable()
@@ -15,6 +16,19 @@ export class OrdersService {
   async createOrder(userId: string, dto: CreateOrderDto) {
     if (!dto.items || dto.items.length === 0) {
       throw new BadRequestException('Order must contain at least one item');
+    }
+
+    if (dto.idempotencyKey) {
+      const existingOrder = await this.prisma.order.findUnique({
+        where: { idempotencyKey: dto.idempotencyKey },
+        include: {
+          items: { include: { product: true } },
+          payments: true
+        }
+      });
+      if (existingOrder) {
+        return existingOrder;
+      }
     }
 
     const productIds = dto.items.map(i => i.productId);
@@ -51,6 +65,7 @@ export class OrdersService {
           status: initialStatus,
           userId,
           eventId: dto.eventId,
+          idempotencyKey: dto.idempotencyKey,
           items: {
             create: orderItemsData
           },
