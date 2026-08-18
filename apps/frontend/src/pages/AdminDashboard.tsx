@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react';
 import { api } from '../lib/api';
-import { LayoutDashboard, Calendar, Store, Tag, Package, Plus, Edit2 } from 'lucide-react';
+import { Users, LayoutDashboard, Calendar, Store, Tag, Package, Plus, Edit2 } from 'lucide-react';
 
-type Tab = 'events' | 'stations' | 'categories' | 'products';
+type Tab = 'events' | 'stations' | 'categories' | 'products' | 'users';
 
 export const AdminDashboard = () => {
   const [activeTab, setActiveTab] = useState<Tab>('events');
@@ -24,6 +24,7 @@ export const AdminDashboard = () => {
       if (activeTab === 'stations') endpoint = `/stations/admin/all?eventId=${eventId}`;
       if (activeTab === 'categories') endpoint = `/categories?eventId=${eventId}`;
       if (activeTab === 'products') endpoint = `/products/admin?eventId=${eventId}`;
+      if (activeTab === 'users') endpoint = '/users';
 
       const res = await api.get(endpoint);
       setData(res.data);
@@ -39,6 +40,7 @@ export const AdminDashboard = () => {
     { id: 'stations', label: 'Stationen', icon: Store },
     { id: 'categories', label: 'Kategorien', icon: Tag },
     { id: 'products', label: 'Produkte', icon: Package },
+    { id: 'users', label: 'Mitarbeiter', icon: Users },
   ] as const;
 
   return (
@@ -91,8 +93,9 @@ export const AdminDashboard = () => {
               <tbody className="divide-y divide-slate-700/50">
                 {data.map((item: any) => (
                   <tr key={item.id} className="hover:bg-slate-800/30 transition-colors">
-                    <td className="py-4 font-semibold">{item.name}</td>
+                    <td className="py-4 font-semibold">{item.name || item.username}</td>
                     <td className="py-4 text-sm text-slate-400">
+                      {item.role && <span className="bg-indigo-500/20 text-indigo-300 px-2 py-1 rounded-md mr-2">{item.role}</span>}
                       {item.status && <span className="bg-slate-800 px-2 py-1 rounded-md">{item.status}</span>}
                       {item.isActive !== undefined && (
                         <span className={item.isActive ? 'text-emerald-400' : 'text-slate-500'}>
