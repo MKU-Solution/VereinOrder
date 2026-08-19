@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useAuthStore } from '../store/useAuthStore';
 import { api } from '../lib/api';
-import { Wallet, Banknote, CreditCard, ReceiptRefund, Activity, Play, CheckCircle2 } from 'lucide-react';
+import { Wallet, Banknote, CreditCard, Activity, Play, CheckCircle2 } from 'lucide-react';
 
 interface SessionSummary {
   id: string;
@@ -17,7 +17,8 @@ interface SessionSummary {
 }
 
 export const CashierDashboard = () => {
-  const { eventId, user } = useAuthStore();
+  const { user } = useAuthStore();
+  const [eventId, setEventId] = useState<string>('');
   const [activeSession, setActiveSession] = useState<{ id: string, startingBalance: number } | null>(null);
   const [summary, setSummary] = useState<SessionSummary | null>(null);
   const [loading, setLoading] = useState(true);
@@ -48,7 +49,21 @@ export const CashierDashboard = () => {
   };
 
   useEffect(() => {
-    fetchSession();
+    const fetchEvent = async () => {
+      try {
+        const res = await api.get('/events');
+        if (res.data && res.data.length > 0) {
+          setEventId(res.data[0].id);
+        }
+      } catch (err) {
+        console.error('Failed to load initial event', err);
+      }
+    };
+    fetchEvent();
+  }, []);
+
+  useEffect(() => {
+    if (eventId) fetchSession();
   }, [eventId]);
 
   const handleStartSession = async (e: React.FormEvent) => {
