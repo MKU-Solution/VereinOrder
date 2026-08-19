@@ -85,6 +85,11 @@ export class OrdersService {
     const totalPaid = dto.payments?.reduce((sum, p) => sum + p.amount, 0) || 0;
     const initialPaymentStatus = totalPaid >= totalAmount ? 'PAID' : (totalPaid > 0 ? 'PARTIALLY_PAID' : 'OPEN');
 
+    const activeSession = userId ? await this.prisma.cashierSession.findFirst({
+      where: { userId, eventId: dto.eventId, status: 'ACTIVE' }
+    }) : null;
+    const cashierSessionId = activeSession?.id || null;
+
     return await this.prisma.$transaction(async (prisma) => {
       const order = await prisma.order.create({
         data: {
@@ -96,6 +101,7 @@ export class OrdersService {
           eventId: dto.eventId,
           idempotencyKey: dto.idempotencyKey,
           tableName: dto.tableName,
+          cashierSessionId,
           items: {
             create: orderItemsData
           },
@@ -103,7 +109,8 @@ export class OrdersService {
             create: dto.payments.map(p => ({
               amount: p.amount,
               method: p.method,
-              status: 'COMPLETED'
+              status: 'COMPLETED',
+              cashierSessionId
             }))
           } : undefined
         },
@@ -162,7 +169,7 @@ export class OrdersService {
     });
   }
 
-  async addPaymentsToOrder(orderId: string, payments: { amount: number, method: 'CASH' | 'CARD' | 'VOUCHER' }[]) {
+  async addPaymentsToOrder(orderId: string, payments: { amount: number, method: 'CASH' | 'CARD' | 'VOUCHER' }[], userId: string) {
     if (!payments || payments.length === 0) {
       throw new BadRequestException('No payments provided');
     }
@@ -177,13 +184,19 @@ export class OrdersService {
       if (order.paymentStatus === 'PAID') throw new BadRequestException('Order is already fully paid');
       if (order.lifecycleStatus === 'CANCELLED') throw new BadRequestException('Order is cancelled');
 
+      const activeSession = userId ? await prisma.cashierSession.findFirst({
+        where: { userId, eventId: order.eventId, status: 'ACTIVE' }
+      }) : null;
+      const cashierSessionId = activeSession?.id || null;
+
       // Add new payments
       await prisma.payment.createMany({
         data: payments.map(p => ({
           orderId: order.id,
           amount: p.amount,
           method: p.method,
-          status: 'COMPLETED'
+          status: 'COMPLETED',
+          cashierSessionId
         }))
       });
 
@@ -233,6 +246,11 @@ export class OrdersService {
         data: { status: 'CANCELLED' }
       });
 
+      const activeSession = userId ? await prisma.cashierSession.findFirst({
+        where: { userId, eventId: order.eventId, status: 'ACTIVE' }
+      }) : null;
+      const cashierSessionId = activeSession?.id || null;
+
       // Issue refund if there were payments
       const totalPaid = order.payments.reduce((sum, p) => sum + p.amount, 0);
       if (totalPaid > 0) {
@@ -242,7 +260,8 @@ export class OrdersService {
             orderId: order.id,
             amount: -totalPaid,
             method: 'REFUND',
-            status: 'COMPLETED'
+            status: 'COMPLETED',
+            cashierSessionId
           }
         });
       }
@@ -296,6 +315,11 @@ export class OrdersService {
       
       const totalPaid = order.payments.reduce((sum, p) => sum + p.amount, 0);
       
+      const activeSession = userId ? await prisma.cashierSession.findFirst({
+        where: { userId, eventId: order.eventId, status: 'ACTIVE' }
+      }) : null;
+      const cashierSessionId = activeSession?.id || null;
+
       let newPaymentStatus = order.paymentStatus;
       if (totalPaid > newTotalAmount) {
         // Refund the difference
@@ -305,7 +329,8 @@ export class OrdersService {
             orderId: order.id,
             amount: -refundAmount,
             method: 'REFUND',
-            status: 'COMPLETED'
+            status: 'COMPLETED',
+            cashierSessionId
           }
         });
         newPaymentStatus = 'PAID';

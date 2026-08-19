@@ -25,10 +25,12 @@ export class OrdersController {
   @Post(':id/payments')
   @Roles('ADMINISTRATOR', 'CASHIER', 'WAITER')
   async addPayments(
+    @Request() req,
     @Param('id') id: string,
     @Body('payments') payments: { amount: number, method: 'CASH' | 'CARD' | 'VOUCHER' }[]
   ) {
-    return this.ordersService.addPaymentsToOrder(id, payments);
+    const userId = req.user?.userId || null;
+    return this.ordersService.addPaymentsToOrder(id, payments, userId);
   }
 
   @Post(':id/cancel')

@@ -27,6 +27,7 @@ model User {
 
   orders    Order[]
   auditLogs AuditLog[]
+  cashierSessions CashierSession[]
 }
 
 enum EventStatus {
@@ -57,6 +58,7 @@ model Event {
   stations   Station[]
   orders     Order[]
   areas      Area[]
+  cashierSessions CashierSession[]
 }
 
 model Area {
@@ -196,6 +198,9 @@ model Order {
 
   items             OrderItem[]
   payments          Payment[]
+  
+  cashierSessionId  String?
+  cashierSession    CashierSession?        @relation(fields: [cashierSessionId], references: [id])
 }
 
 enum PaymentMethod {
@@ -218,6 +223,9 @@ model Payment {
   
   orderId     String
   order       Order         @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  
+  cashierSessionId String?
+  cashierSession   CashierSession? @relation(fields: [cashierSessionId], references: [id])
   
   createdAt   DateTime      @default(now())
   updatedAt   DateTime      @updatedAt
@@ -290,4 +298,26 @@ model AuditLog {
   user        User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
   details     Json?
   createdAt   DateTime @default(now())
+}
+
+enum SessionStatus {
+  ACTIVE
+  CLOSED
+}
+
+model CashierSession {
+  id              String        @id @default(uuid())
+  startingBalance Int           @default(0) // in cents
+  closingBalance  Int?          // in cents
+  status          SessionStatus @default(ACTIVE)
+  startTime       DateTime      @default(now())
+  endTime         DateTime?
+  
+  userId          String
+  user            User          @relation(fields: [userId], references: [id])
+  eventId         String
+  event           Event         @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  
+  orders          Order[]
+  payments        Payment[]
 }

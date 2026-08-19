@@ -1,6 +1,6 @@
 import { Outlet, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../../store/useAuthStore';
-import { LogOut, LayoutDashboard } from 'lucide-react';
+import { LogOut, LayoutDashboard, Wallet } from 'lucide-react';
 
 export const AppLayout = () => {
   const logout = useAuthStore((state) => state.logout);
@@ -44,12 +44,22 @@ export const AppLayout = () => {
           </nav>
         </div>
         
-        <button 
-          onClick={handleLogout}
-          className="p-2 rounded-xl bg-slate-800/50 hover:bg-slate-700/50 text-slate-300 transition-colors"
-        >
-          <LogOut className="w-5 h-5" />
-        </button>
+        <div className="flex items-center gap-2">
+          <button 
+            onClick={() => navigate('/cashier')}
+            className="hidden sm:flex items-center gap-2 px-3 py-2 rounded-xl bg-slate-800/50 hover:bg-slate-700/50 text-slate-300 transition-colors"
+          >
+            <Wallet className="w-4 h-4 text-emerald-400" />
+            <span className="text-sm font-medium">Meine Kassa</span>
+          </button>
+          
+          <button 
+            onClick={handleLogout}
+            className="p-2 rounded-xl bg-slate-800/50 hover:bg-slate-700/50 text-slate-300 transition-colors"
+          >
+            <LogOut className="w-5 h-5" />
+          </button>
+        </div>
       </header>
 
       {/* Main Content Area */}
