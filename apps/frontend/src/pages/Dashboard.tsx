@@ -1,7 +1,7 @@
 import { useEffect, useState, useMemo } from 'react';
 import { api } from '../lib/api';
 import { useCartStore, CartItem as CartItemType } from '../store/useCartStore';
-import { Trash2, Check, ArrowLeft, LayoutGrid, List, Minus } from 'lucide-react';
+import { Trash2, Check, LayoutGrid, List, Minus } from 'lucide-react';
 import { CheckoutModal } from '../components/CheckoutModal';
 import { ProductOptionsModal } from '../components/ProductOptionsModal';
 
@@ -221,8 +221,6 @@ export const Dashboard = () => {
       setTableName(input);
     }
   };
-
-  const totalItems = items.reduce((acc, i) => acc + i.quantity, 0);
 
   const getProductColor = (p: any) => {
     if (p.color) return p.color;
