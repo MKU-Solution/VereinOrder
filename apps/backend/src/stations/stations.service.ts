@@ -35,16 +35,19 @@ export class StationsService {
   async getPendingItems(stationId: string) {
     return this.prisma.orderItem.findMany({
       where: {
-        status: 'PENDING',
+        status: { in: ['PENDING', 'PREPARING'] },
         product: { targetStationId: stationId }
       },
       include: {
         product: true,
         order: {
-          select: { orderNumber: true, createdAt: true }
+          select: { orderNumber: true, createdAt: true, isPriority: true }
         }
       },
-      orderBy: { createdAt: 'asc' }
+      orderBy: [
+        { order: { isPriority: 'desc' } },
+        { createdAt: 'asc' }
+      ]
     });
   }
 
