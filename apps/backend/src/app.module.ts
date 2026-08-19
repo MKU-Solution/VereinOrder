@@ -10,8 +10,9 @@ import { EventsModule } from './events/events.module';
 import { UsersModule } from './users/users.module';
 import { AreasModule } from './areas/areas.module';
 import { SessionsModule } from './sessions/sessions.module';
+import { RealtimeModule } from './realtime/realtime.module';
 
 @Module({
-  imports: [PrismaModule, AuthModule, ProductsModule, OrdersModule, StationsModule, ReportsModule, PrintJobsModule, EventsModule, UsersModule, AreasModule, SessionsModule],
+  imports: [PrismaModule, AuthModule, ProductsModule, OrdersModule, StationsModule, ReportsModule, PrintJobsModule, EventsModule, UsersModule, AreasModule, SessionsModule, RealtimeModule],
 })
 export class AppModule {}

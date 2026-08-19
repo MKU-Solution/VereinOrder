@@ -1,8 +1,9 @@
-import { Controller, Get, Post, Patch, Param, Body, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Param, Body, Query, UseGuards, Request } from '@nestjs/common';
 import { ProductsService } from './products.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
+import { ProductAvailability } from '@vereinorder/database';
 
 @Controller('products')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -10,7 +11,7 @@ export class ProductsController {
   constructor(private readonly productsService: ProductsService) {}
 
   @Get()
-  @Roles('ADMINISTRATOR', 'WAITER', 'CASHIER')
+  @Roles('ADMINISTRATOR', 'WAITER', 'CASHIER', 'EVENT_MANAGER')
   async findAll() {
     return this.productsService.findAllActive();
   }
@@ -19,6 +20,23 @@ export class ProductsController {
   @Roles('ADMINISTRATOR', 'EVENT_MANAGER')
   async findAllProductsAdmin(@Query('eventId') eventId: string) {
     return this.productsService.findAllProductsAdmin(eventId);
+  }
+
+  @Get('station/:stationId')
+  @Roles('ADMINISTRATOR', 'STATION', 'EVENT_MANAGER')
+  async findByStation(@Param('stationId') stationId: string) {
+    return this.productsService.findByStation(stationId);
+  }
+
+  @Patch(':id/availability')
+  @Roles('ADMINISTRATOR', 'STATION', 'EVENT_MANAGER')
+  async updateAvailability(
+    @Request() req: any,
+    @Param('id') id: string,
+    @Body('availability') availability: ProductAvailability
+  ) {
+    const userId = req.user?.userId;
+    return this.productsService.updateAvailability(id, availability, userId);
   }
 
   @Post()

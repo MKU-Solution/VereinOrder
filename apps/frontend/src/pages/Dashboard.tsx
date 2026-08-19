@@ -1,7 +1,7 @@
 import { useEffect, useState, useMemo } from 'react';
 import { api } from '../lib/api';
 import { useCartStore, CartItem as CartItemType } from '../store/useCartStore';
-import { Trash2, Check, LayoutGrid, List, Minus } from 'lucide-react';
+import { Trash2, Check, LayoutGrid, List, Minus, Bell } from 'lucide-react';
 import { CheckoutModal } from '../components/CheckoutModal';
 import { ProductOptionsModal } from '../components/ProductOptionsModal';
 import { TableSelectionModal } from '../components/TableSelectionModal';
@@ -31,8 +31,10 @@ const CartItem = ({ item, removeItem, deleteItem }: { item: CartItemType, remove
     }
   };
 
+  const isOutOfStock = item.product?.availability === 'OUT_OF_STOCK';
+
   return (
-    <div className="relative overflow-hidden border-b border-slate-200">
+    <div className={`relative overflow-hidden border-b border-slate-200 ${isOutOfStock ? 'bg-red-50' : 'bg-white'}`}>
       <div className="absolute inset-y-0 right-0 w-[140px] flex">
         <button 
           onClick={() => { removeItem(item.id); setTranslateX(0); }}
@@ -50,7 +52,7 @@ const CartItem = ({ item, removeItem, deleteItem }: { item: CartItemType, remove
         </button>
       </div>
       <div 
-        className="flex justify-between items-center p-3 bg-white relative transition-transform"
+        className={`flex justify-between items-center p-3 relative transition-transform ${isOutOfStock ? 'bg-red-50' : 'bg-white'}`}
         style={{ transform: `translateX(${translateX}px)` }}
         onTouchStart={onTouchStart}
         onTouchMove={onTouchMove}
@@ -59,7 +61,14 @@ const CartItem = ({ item, removeItem, deleteItem }: { item: CartItemType, remove
       >
         <div className="w-12 text-center text-lg font-bold text-slate-800">{item.quantity}</div>
         <div className="flex-1 truncate pr-2">
-          <div className="text-lg font-semibold text-slate-800">{item.product.shortName || item.product.name}</div>
+          <div className="flex items-center gap-1.5">
+            <span className="text-lg font-semibold text-slate-800">{item.product.shortName || item.product.name}</span>
+            {isOutOfStock && (
+              <span className="bg-rose-600 text-white text-xs px-1.5 py-0.5 rounded font-bold uppercase">
+                Ausverkauft
+              </span>
+            )}
+          </div>
           {(item.variant || (item.extras && item.extras.length > 0)) && (
             <div className="text-sm text-slate-500 leading-tight">
               {item.variant?.name}
@@ -96,19 +105,23 @@ export const Dashboard = () => {
   const [selectedProductForOptions, setSelectedProductForOptions] = useState<any | null>(null);
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
 
+  // Realtime Toast State
+  const [toastMessage, setToastMessage] = useState<{ text: string, type: 'warning' | 'info' } | null>(null);
+
   const { items, addItem, removeItem, deleteItem, clearCart, total } = useCartStore();
 
+  const fetchProducts = async () => {
+    try {
+      const res = await api.get('/products');
+      setProducts(res.data);
+    } catch (err) {
+      console.error("Failed to load products", err);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   useEffect(() => {
-    const fetchProducts = async () => {
-      try {
-        const res = await api.get('/products');
-        setProducts(res.data);
-      } catch (err) {
-        console.error("Failed to load products", err);
-      } finally {
-        setIsLoading(false);
-      }
-    };
     fetchProducts();
 
     const syncOffline = async () => {
@@ -120,24 +133,74 @@ export const Dashboard = () => {
             await api.post('/orders', { 
               eventId: order.eventId, 
               items: order.items, 
-              payments: order.payments, 
+              payments: order.payments,
               idempotencyKey: order.idempotencyKey,
               tableName: order.tableName
             });
             await removeOfflineOrder(order.idempotencyKey);
-          } catch (e: any) {
-            if (e.response) await removeOfflineOrder(order.idempotencyKey);
+          } catch (e) {
+            console.error("Failed to sync offline order", e);
           }
         }
-      } catch (e) {
-        console.error("Sync error", e);
+      } catch (err) {
+        console.error("Offline sync error", err);
       }
     };
-    
+
+    syncOffline();
     window.addEventListener('online', syncOffline);
-    if (navigator.onLine) syncOffline();
     return () => window.removeEventListener('online', syncOffline);
   }, []);
+
+  // Realtime SSE Connection for Stock & Availability Updates
+  useEffect(() => {
+    const eventId = products[0]?.eventId;
+    const streamUrl = eventId ? `/realtime/stream?eventId=${eventId}` : '/realtime/stream';
+    
+    let eventSource: EventSource | null = null;
+    try {
+      eventSource = new EventSource(streamUrl);
+
+      eventSource.onmessage = (event) => {
+        try {
+          const payload = JSON.parse(event.data);
+          if (payload.type === 'PRODUCT_AVAILABILITY_CHANGED') {
+            const { productId, productName, availability } = payload.data;
+            
+            setProducts(prev => prev.map(p => p.id === productId ? { ...p, availability } : p));
+
+            if (availability === 'OUT_OF_STOCK') {
+              setToastMessage({
+                text: `⚠️ Achtung: ${productName} ist soeben AUSVERKAUFT!`,
+                type: 'warning'
+              });
+            } else if (availability === 'LOW_STOCK') {
+              setToastMessage({
+                text: `⚡ Hinweis: ${productName} ist fast ausverkauft (Knapp)!`,
+                type: 'info'
+              });
+            }
+
+            setTimeout(() => {
+              setToastMessage(null);
+            }, 4500);
+          }
+        } catch (e) {
+          console.error("Error parsing realtime message", e);
+        }
+      };
+
+      eventSource.onerror = () => {
+        // SSE handles reconnection automatically
+      };
+    } catch (err) {
+      console.warn("Realtime EventSource not available, falling back to polling", err);
+    }
+
+    return () => {
+      if (eventSource) eventSource.close();
+    };
+  }, [products]);
 
   const categories = useMemo(() => {
     const cats = new Set<string>();
@@ -152,57 +215,76 @@ export const Dashboard = () => {
     return products.filter(p => p.category?.name === selectedCategory);
   }, [products, selectedCategory]);
 
-  const handleProductClick = (p: any) => {
-    if ((p.variants && p.variants.length > 0) || (p.extras && p.extras.length > 0)) {
-      setSelectedProductForOptions(p);
+  const handleProductClick = (product: any) => {
+    if (product.availability === 'OUT_OF_STOCK' || product.availability === 'DISABLED') {
+      return; // Do not allow adding out-of-stock products
+    }
+
+    if ((product.variants && product.variants.length > 0) || (product.extras && product.extras.length > 0)) {
+      setSelectedProductForOptions(product);
     } else {
-      addItem(p);
+      addItem(product);
     }
   };
 
-  const handleCheckoutSubmit = async (payments: { amount: number; method: 'CASH' | 'CARD' | 'VOUCHER' }[], finalTableName?: string) => {
-    setIsCheckoutOpen(false);
+  const handleCheckoutSubmit = async (payments?: { amount: number, method: 'CASH' | 'CARD' | 'VOUCHER' }[]) => {
+    if (items.length === 0) return;
+    
+    // Check if any cart items are out of stock
+    const outOfStockItems = items.filter(i => i.product?.availability === 'OUT_OF_STOCK');
+    if (outOfStockItems.length > 0) {
+      alert(`Folgende Artikel sind ausverkauft und können nicht bestellt werden: ${outOfStockItems.map(i => i.product.name).join(', ')}`);
+      return;
+    }
+
     setIsSubmitting(true);
+    const idempotencyKey = crypto.randomUUID();
+    const nameToUse = tableName || 'Unbekannt';
+
     try {
-      const eventId = items[0].product.eventId; 
-      const orderItems = items.map(i => ({ 
-        productId: i.product.id, 
+      const orderItems = items.map(i => ({
+        productId: i.product.id,
         quantity: i.quantity,
         variantId: i.variant?.id,
         variantName: i.variant?.name,
         extras: i.extras
       }));
-      const idempotencyKey = crypto.randomUUID();
-      const nameToUse = finalTableName || tableName;
-      
-      await api.post('/orders', { eventId, items: orderItems, payments, idempotencyKey, tableName: nameToUse });
-      
-      setSuccessMsg('Bestellung erfolgreich!');
+
+      const eventId = items[0].product.eventId; 
+
+      await api.post('/orders', { 
+        eventId, 
+        items: orderItems, 
+        payments, 
+        idempotencyKey,
+        tableName: nameToUse 
+      });
+
+      setSuccessMsg('Gesendet!');
       clearCart();
       setTableName('');
-      setTimeout(() => setSuccessMsg(''), 3000);
+      setTimeout(() => setSuccessMsg(''), 2000);
     } catch (err: any) {
-      if (!err.response) {
-        const eventId = items[0].product.eventId; 
-        const orderItems = items.map(i => ({ 
-          productId: i.product.id, 
+      console.error("Order submission failed, saving offline", err);
+      
+      if (!navigator.onLine || err.code === 'ERR_NETWORK') {
+        const { saveOrderOffline } = await import('../lib/offlineSync');
+        const orderItems = items.map(i => ({
+          productId: i.product.id,
           quantity: i.quantity,
           variantId: i.variant?.id,
           variantName: i.variant?.name,
           extras: i.extras
         }));
-        const idempotencyKey = crypto.randomUUID();
-        const nameToUse = finalTableName || tableName;
+        const eventId = items[0].product.eventId; 
         
-        import('../lib/offlineSync').then(({ saveOrderOffline }) => {
-          saveOrderOffline({
-            idempotencyKey,
-            eventId,
-            items: orderItems,
-            payments,
-            tableName: nameToUse,
-            createdAt: Date.now()
-          });
+        await saveOrderOffline({
+          idempotencyKey,
+          eventId,
+          items: orderItems,
+          payments: payments || [],
+          tableName: nameToUse,
+          createdAt: Date.now()
         });
         
         setSuccessMsg('Offline gespeichert!');
@@ -210,7 +292,7 @@ export const Dashboard = () => {
         setTableName('');
         setTimeout(() => setSuccessMsg(''), 3000);
       } else {
-        alert('Fehler bei der Buchung!');
+        alert('Fehler bei der Buchung: ' + (err.response?.data?.message || err.message));
       }
     } finally {
       setIsSubmitting(false);
@@ -234,6 +316,18 @@ export const Dashboard = () => {
 
   return (
     <div className="fixed inset-0 top-[64px] bg-white flex flex-col z-50 overflow-hidden">
+      {/* Live Toast Notification */}
+      {toastMessage && (
+        <div className={`fixed top-20 left-1/2 -translate-x-1/2 z-50 px-5 py-3 rounded-2xl shadow-2xl flex items-center gap-3 animate-bounce border text-sm font-bold ${
+          toastMessage.type === 'warning'
+            ? 'bg-rose-600 border-rose-400 text-white shadow-rose-600/50'
+            : 'bg-amber-500 border-amber-300 text-slate-950 shadow-amber-500/50'
+        }`}>
+          <Bell className="w-5 h-5 animate-pulse" />
+          <span>{toastMessage.text}</span>
+        </div>
+      )}
+
       {/* Cart List (White background) */}
       <div className="flex-1 overflow-y-auto bg-white pb-2 touch-pan-y">
         {items.length === 0 ? (
@@ -281,37 +375,87 @@ export const Dashboard = () => {
       <div className="h-[40vh] bg-slate-800 overflow-y-auto shrink-0 overscroll-contain">
         {viewMode === 'grid' ? (
           <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-1 p-1">
-            {filteredProducts.map(p => (
-              <button
-                key={p.id}
-                onClick={() => handleProductClick(p)}
-                style={{ backgroundColor: getProductColor(p) }}
-                className="aspect-square flex flex-col justify-center items-center text-center p-2 hover:opacity-80 active:opacity-60 transition-opacity rounded-md"
-              >
-                <span className="text-white font-bold drop-shadow-md text-sm md:text-base leading-tight">
-                  {p.shortName || p.name}
-                </span>
-                <span className="text-white/80 text-xs mt-1 drop-shadow-md">{formatPrice(p.price)}</span>
-              </button>
-            ))}
+            {filteredProducts.map(p => {
+              const isOut = p.availability === 'OUT_OF_STOCK';
+              const isLow = p.availability === 'LOW_STOCK';
+
+              return (
+                <button
+                  key={p.id}
+                  disabled={isOut}
+                  onClick={() => handleProductClick(p)}
+                  style={{ backgroundColor: isOut ? '#1e293b' : getProductColor(p) }}
+                  className={`aspect-square flex flex-col justify-center items-center text-center p-2 transition-all rounded-md relative overflow-hidden ${
+                    isOut 
+                      ? 'opacity-40 cursor-not-allowed border border-rose-500/60' 
+                      : 'hover:opacity-85 active:scale-95'
+                  }`}
+                >
+                  {isOut && (
+                    <div className="absolute inset-0 bg-black/60 backdrop-blur-[1px] flex items-center justify-center p-1">
+                      <span className="bg-rose-600 text-white font-black text-[10px] sm:text-xs px-1.5 py-0.5 rounded shadow-lg uppercase tracking-wider text-center">
+                        Ausverkauft
+                      </span>
+                    </div>
+                  )}
+
+                  {isLow && (
+                    <div className="absolute top-1 right-1">
+                      <span className="bg-amber-400 text-slate-950 font-black text-[9px] px-1 py-0.5 rounded shadow-md uppercase">
+                        Knapp
+                      </span>
+                    </div>
+                  )}
+
+                  <span className={`font-bold drop-shadow-md text-sm md:text-base leading-tight ${isOut ? 'line-through text-slate-400' : 'text-white'}`}>
+                    {p.shortName || p.name}
+                  </span>
+                  <span className={`text-xs mt-1 drop-shadow-md ${isOut ? 'text-slate-500' : 'text-white/80'}`}>
+                    {formatPrice(p.price)}
+                  </span>
+                </button>
+              );
+            })}
           </div>
         ) : (
           <div className="flex flex-col gap-1 p-1">
-            {filteredProducts.map(p => (
-              <button
-                key={p.id}
-                onClick={() => handleProductClick(p)}
-                style={{ backgroundColor: getProductColor(p) }}
-                className="flex justify-between items-center text-left p-4 hover:opacity-80 active:opacity-60 transition-opacity rounded-md"
-              >
-                <span className="text-white font-bold text-lg drop-shadow-md">
-                  {p.name}
-                </span>
-                <span className="text-white font-bold text-lg drop-shadow-md">
-                  {formatPrice(p.price)}
-                </span>
-              </button>
-            ))}
+            {filteredProducts.map(p => {
+              const isOut = p.availability === 'OUT_OF_STOCK';
+              const isLow = p.availability === 'LOW_STOCK';
+
+              return (
+                <button
+                  key={p.id}
+                  disabled={isOut}
+                  onClick={() => handleProductClick(p)}
+                  style={{ backgroundColor: isOut ? '#1e293b' : getProductColor(p) }}
+                  className={`flex justify-between items-center text-left p-4 transition-all rounded-md relative ${
+                    isOut 
+                      ? 'opacity-40 cursor-not-allowed border border-rose-500/60' 
+                      : 'hover:opacity-85 active:scale-98'
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    <span className={`font-bold text-lg drop-shadow-md ${isOut ? 'line-through text-slate-400' : 'text-white'}`}>
+                      {p.name}
+                    </span>
+                    {isOut && (
+                      <span className="bg-rose-600 text-white text-xs px-2 py-0.5 rounded font-black uppercase">
+                        Ausverkauft
+                      </span>
+                    )}
+                    {isLow && (
+                      <span className="bg-amber-400 text-slate-950 text-xs px-2 py-0.5 rounded font-black uppercase">
+                        Knapp
+                      </span>
+                    )}
+                  </div>
+                  <span className={`font-bold text-lg drop-shadow-md ${isOut ? 'text-slate-500' : 'text-white'}`}>
+                    {formatPrice(p.price)}
+                  </span>
+                </button>
+              );
+            })}
           </div>
         )}
       </div>

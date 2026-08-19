@@ -1,16 +1,20 @@
-import { Injectable, Inject } from '@nestjs/common';
-import { PrismaClient } from '@vereinorder/database';
+import { Injectable, Inject, NotFoundException } from '@nestjs/common';
+import { PrismaClient, ProductAvailability } from '@vereinorder/database';
 import { PRISMA_CLIENT } from '../prisma/prisma.module';
+import { RealtimeService } from '../realtime/realtime.service';
 
 @Injectable()
 export class ProductsService {
-  constructor(@Inject(PRISMA_CLIENT) private prisma: PrismaClient) {}
+  constructor(
+    @Inject(PRISMA_CLIENT) private prisma: PrismaClient,
+    private realtimeService: RealtimeService
+  ) {}
 
   async findAllActive() {
     return this.prisma.product.findMany({
       where: {
-        availability: 'AVAILABLE',
-        event: { status: 'ACTIVE' } 
+        availability: { not: 'DISABLED' },
+        event: { status: { in: ['ACTIVE', 'TEST_MODE'] } } 
       },
       include: {
         category: true,
@@ -24,12 +28,54 @@ export class ProductsService {
     });
   }
 
+  async updateAvailability(id: string, availability: ProductAvailability, userId?: string) {
+    const product = await this.prisma.product.findUnique({ where: { id } });
+    if (!product) throw new NotFoundException('Product not found');
+
+    const updated = await this.prisma.product.update({
+      where: { id },
+      data: { availability }
+    });
+
+    this.realtimeService.broadcast(product.eventId, 'PRODUCT_AVAILABILITY_CHANGED', {
+      productId: updated.id,
+      productName: updated.name,
+      availability: updated.availability
+    });
+
+    if (userId) {
+      await this.prisma.auditLog.create({
+        data: {
+          action: 'PRODUCT_AVAILABILITY_CHANGED',
+          entityId: id,
+          entityType: 'Product',
+          userId,
+          details: {
+            productName: updated.name,
+            previousAvailability: product.availability,
+            newAvailability: updated.availability
+          }
+        }
+      });
+    }
+
+    return updated;
+  }
+
   // --- ADMIN METHODS: PRODUCTS ---
   
   async findAllProductsAdmin(eventId: string) {
     return this.prisma.product.findMany({
       where: { eventId },
       include: { category: true, targetStation: true },
+      orderBy: { sortOrder: 'asc' }
+    });
+  }
+
+  async findByStation(stationId: string) {
+    return this.prisma.product.findMany({
+      where: { targetStationId: stationId },
+      include: { category: true },
       orderBy: { sortOrder: 'asc' }
     });
   }
