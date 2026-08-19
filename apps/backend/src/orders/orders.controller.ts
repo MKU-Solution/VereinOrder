@@ -30,4 +30,24 @@ export class OrdersController {
   ) {
     return this.ordersService.addPaymentsToOrder(id, payments);
   }
+
+  @Post(':id/cancel')
+  async cancelOrder(
+    @Request() req,
+    @Param('id') id: string,
+    @Body('reason') reason?: string
+  ) {
+    const userId = req.user?.userId || null;
+    return this.ordersService.cancelOrder(id, userId, reason);
+  }
+
+  @Post('items/:itemId/cancel')
+  async cancelOrderItem(
+    @Request() req,
+    @Param('itemId') itemId: string,
+    @Body('reason') reason?: string
+  ) {
+    const userId = req.user?.userId || null;
+    return this.ordersService.cancelOrderItem(itemId, userId, reason);
+  }
 }

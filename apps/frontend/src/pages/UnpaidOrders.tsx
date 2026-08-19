@@ -1,13 +1,15 @@
 import { useEffect, useState } from 'react';
 import { api } from '../lib/api';
-import { Clock, RefreshCw, CheckCircle } from 'lucide-react';
+import { Clock, RefreshCw, CheckCircle, Settings2 } from 'lucide-react';
 import { CheckoutModal } from '../components/CheckoutModal';
+import { OrderDetailsModal } from '../components/OrderDetailsModal';
 
 export const UnpaidOrders = () => {
   const [orders, setOrders] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [selectedOrder, setSelectedOrder] = useState<any | null>(null);
+  const [editingOrder, setEditingOrder] = useState<any | null>(null);
 
   const fetchOrders = async () => {
     try {
@@ -99,14 +101,22 @@ export const UnpaidOrders = () => {
                         <span className="bg-slate-800 text-slate-300 px-3 py-1 rounded-full text-sm font-medium">
                           #{order.orderNumber}
                         </span>
+                        <span className="text-xs font-medium text-slate-500 bg-slate-800/50 px-2 py-1 rounded-md">
+                          {order.lifecycleStatus}
+                        </span>
                       </div>
-                      <span className="text-lg font-bold">{formatPrice(order.totalAmount)}</span>
+                      <div className="flex items-center gap-4">
+                        <span className="text-lg font-bold">{formatPrice(order.totalAmount)}</span>
+                        <button onClick={() => setEditingOrder(order)} className="p-2 hover:bg-slate-700 rounded-xl transition-colors text-slate-400">
+                          <Settings2 className="w-5 h-5" />
+                        </button>
+                      </div>
                     </div>
                     
                     <div className="flex-1 space-y-2">
                       {order.items.map((item: any) => (
-                        <div key={item.id} className="flex justify-between text-slate-300 text-sm">
-                          <span>{item.quantity}x {item.product.name}</span>
+                        <div key={item.id} className={`flex justify-between text-sm ${item.status === 'CANCELLED' ? 'text-slate-600 line-through' : 'text-slate-300'}`}>
+                          <span>{item.quantity}x {item.product.name} {item.variantName ? `(${item.variantName})` : ''}</span>
                           <span>{formatPrice(item.priceAtTime * item.quantity)}</span>
                         </div>
                       ))}
@@ -120,8 +130,8 @@ export const UnpaidOrders = () => {
                         </div>
                         {order.payments.map((p: any) => (
                           <div key={p.id} className="flex justify-between text-xs text-slate-500">
-                            <span>{p.method === 'CASH' ? 'Bar' : 'Karte'}</span>
-                            <span>{formatPrice(p.amount)}</span>
+                            <span>{p.method === 'CASH' ? 'Bar' : (p.method === 'REFUND' ? 'Erstattung' : 'Karte')}</span>
+                            <span>{p.method === 'REFUND' ? '-' : ''}{formatPrice(Math.abs(p.amount))}</span>
                           </div>
                         ))}
                       </div>
@@ -130,11 +140,14 @@ export const UnpaidOrders = () => {
                     <div className="pt-4 border-t border-slate-700/50 flex justify-between items-center">
                       <div>
                         <div className="text-sm text-slate-400">Noch offen</div>
-                        <div className="text-2xl font-bold text-orange-400">{formatPrice(remainingAmount)}</div>
+                        <div className={`text-2xl font-bold ${remainingAmount > 0 ? 'text-orange-400' : 'text-emerald-400'}`}>
+                          {formatPrice(Math.max(0, remainingAmount))}
+                        </div>
                       </div>
                       <button
+                        disabled={remainingAmount <= 0}
                         onClick={() => setSelectedOrder({ ...order, remainingAmount })}
-                        className="bg-indigo-500 hover:bg-indigo-400 text-white px-4 py-2 rounded-xl font-bold transition-colors"
+                        className="bg-indigo-500 hover:bg-indigo-400 disabled:opacity-50 text-white px-4 py-2 rounded-xl font-bold transition-colors"
                       >
                         Abkassieren
                       </button>
@@ -159,6 +172,13 @@ export const UnpaidOrders = () => {
         total={selectedOrder ? selectedOrder.remainingAmount : 0}
         onClose={() => setSelectedOrder(null)}
         onConfirm={handlePaymentConfirm}
+      />
+      
+      <OrderDetailsModal
+        order={editingOrder}
+        isOpen={editingOrder !== null}
+        onClose={() => setEditingOrder(null)}
+        onRefresh={fetchOrders}
       />
     </div>
   );
