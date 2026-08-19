@@ -344,4 +344,28 @@ export class OrdersService {
       return updatedOrder;
     });
   }
+
+  async toggleOrderPriority(orderId: string, isPriority: boolean, userId: string) {
+    return await this.prisma.$transaction(async (prisma) => {
+      const order = await prisma.order.findUnique({ where: { id: orderId } });
+      if (!order) throw new NotFoundException('Order not found');
+      
+      const updatedOrder = await prisma.order.update({
+        where: { id: orderId },
+        data: { isPriority }
+      });
+      
+      await prisma.auditLog.create({
+        data: {
+          action: 'ORDER_PRIORITY_CHANGED',
+          entityId: orderId,
+          entityType: 'Order',
+          userId,
+          details: { isPriority }
+        }
+      });
+      
+      return updatedOrder;
+    });
+  }
 }

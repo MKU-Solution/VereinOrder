@@ -1,4 +1,4 @@
-import { Controller, Post, Get, Body, Param, Query, UseGuards, Request } from '@nestjs/common';
+import { Controller, Post, Get, Patch, Body, Param, Query, UseGuards, Request } from '@nestjs/common';
 import { OrdersService } from './orders.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
@@ -49,5 +49,16 @@ export class OrdersController {
   ) {
     const userId = req.user?.userId || null;
     return this.ordersService.cancelOrderItem(itemId, userId, reason);
+  }
+
+  @Patch(':id/priority')
+  @Roles('ADMINISTRATOR', 'STATION', 'WAITER')
+  async togglePriority(
+    @Request() req,
+    @Param('id') id: string,
+    @Body('isPriority') isPriority: boolean
+  ) {
+    const userId = req.user?.userId || null;
+    return this.ordersService.toggleOrderPriority(id, isPriority, userId);
   }
 }

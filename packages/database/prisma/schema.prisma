@@ -170,6 +170,7 @@ model Order {
   lifecycleStatus   OrderLifecycleStatus   @default(SUBMITTED)
   paymentStatus     OrderPaymentStatus     @default(OPEN)
   fulfillmentStatus OrderFulfillmentStatus @default(PENDING)
+  isPriority        Boolean                @default(false)
   idempotencyKey    String?                @unique
   tableName         String?
   
