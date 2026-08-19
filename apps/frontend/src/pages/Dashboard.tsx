@@ -1,7 +1,7 @@
 import { useEffect, useState, useMemo } from 'react';
 import { api } from '../lib/api';
 import { useCartStore, CartItem as CartItemType } from '../store/useCartStore';
-import { Trash2, Check, ArrowLeft } from 'lucide-react';
+import { Trash2, Check, ArrowLeft, LayoutGrid, List } from 'lucide-react';
 import { CheckoutModal } from '../components/CheckoutModal';
 import { ProductOptionsModal } from '../components/ProductOptionsModal';
 
@@ -58,6 +58,16 @@ const CartItem = ({ item, removeItem }: { item: CartItemType, removeItem: (id: s
   );
 };
 
+const categoryColors = [
+  '#3b82f6', // blue
+  '#ef4444', // red
+  '#10b981', // emerald
+  '#f59e0b', // amber
+  '#8b5cf6', // violet
+  '#ec4899', // pink
+  '#06b6d4', // cyan
+];
+
 export const Dashboard = () => {
   const [products, setProducts] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -67,6 +77,7 @@ export const Dashboard = () => {
   const [tableName, setTableName] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [selectedProductForOptions, setSelectedProductForOptions] = useState<any | null>(null);
+  const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
 
   const { items, addItem, removeItem, clearCart, total } = useCartStore();
 
@@ -198,6 +209,15 @@ export const Dashboard = () => {
 
   const totalItems = items.reduce((acc, i) => acc + i.quantity, 0);
 
+  const getProductColor = (p: any) => {
+    if (p.color) return p.color;
+    if (p.category?.name) {
+      const idx = categories.indexOf(p.category.name);
+      if (idx !== -1) return categoryColors[idx % categoryColors.length];
+    }
+    return '#334155';
+  };
+
   if (isLoading) return <div className="text-center py-20 animate-pulse text-slate-400">Lade Produkte...</div>;
 
   return (
@@ -215,43 +235,73 @@ export const Dashboard = () => {
         )}
       </div>
 
-      {/* Category Slider */}
-      <div className="shrink-0 bg-slate-900 overflow-x-auto whitespace-nowrap scrollbar-hide border-t-4 border-slate-800 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)]">
-        <div className="flex p-2 gap-2">
-          <button
-            onClick={() => setSelectedCategory(null)}
-            className={`px-4 py-2 rounded-xl font-bold transition-colors ${!selectedCategory ? 'bg-orange-500 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}
-          >
-            Alle
-          </button>
-          {categories.map(cat => (
+      {/* Category Slider & View Toggle */}
+      <div className="shrink-0 bg-slate-900 flex items-center border-t-4 border-slate-800 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)]">
+        <div className="flex-1 overflow-x-auto whitespace-nowrap scrollbar-hide">
+          <div className="flex p-2 gap-2">
             <button
-              key={cat}
-              onClick={() => setSelectedCategory(cat)}
-              className={`px-4 py-2 rounded-xl font-bold transition-colors ${selectedCategory === cat ? 'bg-orange-500 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}
+              onClick={() => setSelectedCategory(null)}
+              className={`px-4 py-2 rounded-xl font-bold transition-colors ${!selectedCategory ? 'bg-orange-500 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}
             >
-              {cat}
+              Alle
             </button>
-          ))}
+            {categories.map(cat => (
+              <button
+                key={cat}
+                onClick={() => setSelectedCategory(cat)}
+                className={`px-4 py-2 rounded-xl font-bold transition-colors ${selectedCategory === cat ? 'bg-orange-500 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}
+              >
+                {cat}
+              </button>
+            ))}
+          </div>
         </div>
+        <button 
+          onClick={() => setViewMode(prev => prev === 'grid' ? 'list' : 'grid')}
+          className="p-3 mr-2 bg-slate-800 text-slate-300 rounded-xl hover:bg-slate-700 transition-colors"
+          aria-label="Ansicht umschalten"
+        >
+          {viewMode === 'grid' ? <List className="w-5 h-5" /> : <LayoutGrid className="w-5 h-5" />}
+        </button>
       </div>
 
-      {/* Product Grid (Kacheln) */}
+      {/* Product List/Grid */}
       <div className="h-[40vh] bg-slate-800 overflow-y-auto shrink-0 overscroll-contain">
-        <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-1 p-1">
-          {filteredProducts.map(p => (
-            <button
-              key={p.id}
-              onClick={() => handleProductClick(p)}
-              style={{ backgroundColor: p.color || '#334155' }}
-              className="aspect-square flex flex-col justify-center items-center text-center p-2 hover:opacity-80 active:opacity-60 transition-opacity rounded-md"
-            >
-              <span className="text-white font-bold drop-shadow-md text-sm md:text-base leading-tight">
-                {p.shortName || p.name}
-              </span>
-            </button>
-          ))}
-        </div>
+        {viewMode === 'grid' ? (
+          <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-1 p-1">
+            {filteredProducts.map(p => (
+              <button
+                key={p.id}
+                onClick={() => handleProductClick(p)}
+                style={{ backgroundColor: getProductColor(p) }}
+                className="aspect-square flex flex-col justify-center items-center text-center p-2 hover:opacity-80 active:opacity-60 transition-opacity rounded-md"
+              >
+                <span className="text-white font-bold drop-shadow-md text-sm md:text-base leading-tight">
+                  {p.shortName || p.name}
+                </span>
+                <span className="text-white/80 text-xs mt-1 drop-shadow-md">{formatPrice(p.price)}</span>
+              </button>
+            ))}
+          </div>
+        ) : (
+          <div className="flex flex-col gap-1 p-1">
+            {filteredProducts.map(p => (
+              <button
+                key={p.id}
+                onClick={() => handleProductClick(p)}
+                style={{ backgroundColor: getProductColor(p) }}
+                className="flex justify-between items-center text-left p-4 hover:opacity-80 active:opacity-60 transition-opacity rounded-md"
+              >
+                <span className="text-white font-bold text-lg drop-shadow-md">
+                  {p.name}
+                </span>
+                <span className="text-white font-bold text-lg drop-shadow-md">
+                  {formatPrice(p.price)}
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Bottom Action Bar (Orange) */}
