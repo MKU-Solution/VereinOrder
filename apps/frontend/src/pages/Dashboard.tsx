@@ -1,14 +1,14 @@
 import { useEffect, useState, useMemo } from 'react';
 import { api } from '../lib/api';
 import { useCartStore, CartItem as CartItemType } from '../store/useCartStore';
-import { Trash2, Check, ArrowLeft, LayoutGrid, List } from 'lucide-react';
+import { Trash2, Check, ArrowLeft, LayoutGrid, List, Minus } from 'lucide-react';
 import { CheckoutModal } from '../components/CheckoutModal';
 import { ProductOptionsModal } from '../components/ProductOptionsModal';
 
 const formatPrice = (cents: number) => `€ ${(cents / 100).toFixed(2)}`;
 
-// Sub-Komponente für Swipe-to-Delete
-const CartItem = ({ item, removeItem }: { item: CartItemType, removeItem: (id: string) => void }) => {
+// Sub-Komponente für Swipe-to-Delete/Reduce
+const CartItem = ({ item, removeItem, deleteItem }: { item: CartItemType, removeItem: (id: string) => void, deleteItem: (id: string) => void }) => {
   const [translateX, setTranslateX] = useState(0);
   const [startX, setStartX] = useState(0);
 
@@ -18,21 +18,35 @@ const CartItem = ({ item, removeItem }: { item: CartItemType, removeItem: (id: s
     const currentX = e.touches[0].clientX;
     const diff = currentX - startX;
     if (diff < 0) {
-      setTranslateX(Math.max(-100, diff));
+      setTranslateX(Math.max(-140, diff));
     }
   };
   
   const onTouchEnd = () => {
-    if (translateX < -60) {
-      removeItem(item.id);
+    if (translateX < -70) {
+      setTranslateX(-140);
+    } else {
+      setTranslateX(0); 
     }
-    setTranslateX(0); 
   };
 
   return (
     <div className="relative overflow-hidden border-b border-slate-200">
-      <div className="absolute inset-y-0 right-0 w-24 bg-red-500 flex items-center justify-end pr-6 text-white">
-        <Trash2 className="w-6 h-6" />
+      <div className="absolute inset-y-0 right-0 w-[140px] flex">
+        <button 
+          onClick={() => { removeItem(item.id); setTranslateX(0); }}
+          className="w-[70px] bg-yellow-500 flex items-center justify-center text-white transition-opacity active:opacity-70"
+          aria-label="Menge reduzieren"
+        >
+          <Minus className="w-6 h-6" />
+        </button>
+        <button 
+          onClick={() => { deleteItem(item.id); setTranslateX(0); }}
+          className="w-[70px] bg-red-500 flex items-center justify-center text-white transition-opacity active:opacity-70"
+          aria-label="Position löschen"
+        >
+          <Trash2 className="w-6 h-6" />
+        </button>
       </div>
       <div 
         className="flex justify-between items-center p-3 bg-white relative transition-transform"
@@ -40,6 +54,7 @@ const CartItem = ({ item, removeItem }: { item: CartItemType, removeItem: (id: s
         onTouchStart={onTouchStart}
         onTouchMove={onTouchMove}
         onTouchEnd={onTouchEnd}
+        onClick={() => setTranslateX(0)}
       >
         <div className="w-12 text-center text-lg font-bold text-slate-800">{item.quantity}</div>
         <div className="flex-1 truncate pr-2">
@@ -79,7 +94,7 @@ export const Dashboard = () => {
   const [selectedProductForOptions, setSelectedProductForOptions] = useState<any | null>(null);
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
 
-  const { items, addItem, removeItem, clearCart, total } = useCartStore();
+  const { items, addItem, removeItem, deleteItem, clearCart, total } = useCartStore();
 
   useEffect(() => {
     const fetchProducts = async () => {
@@ -229,7 +244,7 @@ export const Dashboard = () => {
         ) : (
           <div className="divide-y divide-slate-200">
             {items.map(item => (
-              <CartItem key={item.id} item={item} removeItem={removeItem} />
+              <CartItem key={item.id} item={item} removeItem={removeItem} deleteItem={deleteItem} />
             ))}
           </div>
         )}
