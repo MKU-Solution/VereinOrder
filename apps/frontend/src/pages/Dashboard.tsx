@@ -202,30 +202,6 @@ export const Dashboard = () => {
 
   return (
     <div className="fixed inset-0 top-[64px] bg-white flex flex-col z-50 overflow-hidden">
-      {/* Top Bar (Orange) */}
-      <div className="bg-orange-500 text-white p-3 flex justify-between items-center shadow-md shrink-0 h-16">
-        <button onClick={clearCart} className="p-2 hover:bg-orange-600 rounded-full transition-colors" aria-label="Warenkorb leeren">
-          <ArrowLeft className="w-6 h-6" />
-        </button>
-        
-        <div className="flex-1 flex justify-center items-center gap-2 sm:gap-4 text-lg font-bold cursor-pointer hover:bg-orange-600 p-2 rounded-lg transition-colors" onClick={handleTableClick}>
-          <span>{tableName ? tableName : 'Tisch?'}</span>
-          <span className="opacity-60">|</span>
-          <span>{formatPrice(total)}</span>
-          <span className="opacity-60">|</span>
-          <span>{totalItems}</span>
-        </div>
-
-        <button 
-          onClick={() => setIsCheckoutOpen(true)} 
-          disabled={items.length === 0 || isSubmitting}
-          className="flex items-center gap-1 font-bold tracking-wide hover:bg-orange-600 p-2 rounded-lg transition-colors disabled:opacity-50"
-        >
-          {isSubmitting ? '...' : successMsg ? 'OK' : 'FERTIG'}
-          {!isSubmitting && !successMsg && <Check className="w-5 h-5" />}
-        </button>
-      </div>
-
       {/* Cart List (White background) */}
       <div className="flex-1 overflow-y-auto bg-white pb-2 touch-pan-y">
         {items.length === 0 ? (
@@ -261,7 +237,7 @@ export const Dashboard = () => {
       </div>
 
       {/* Product Grid (Kacheln) */}
-      <div className="h-[45vh] bg-slate-800 overflow-y-auto shrink-0 overscroll-contain">
+      <div className="h-[40vh] bg-slate-800 overflow-y-auto shrink-0 overscroll-contain">
         <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-1 p-1">
           {filteredProducts.map(p => (
             <button
@@ -276,6 +252,28 @@ export const Dashboard = () => {
             </button>
           ))}
         </div>
+      </div>
+
+      {/* Bottom Action Bar (Orange) */}
+      <div className="bg-orange-500 text-white p-3 flex justify-between items-center shadow-[0_-4px_10px_rgba(0,0,0,0.2)] shrink-0 h-[72px] pb-safe">
+        <button onClick={clearCart} className="p-3 hover:bg-orange-600 rounded-full transition-colors" aria-label="Warenkorb leeren">
+          <Trash2 className="w-6 h-6" />
+        </button>
+        
+        <div className="flex-1 flex justify-center items-center gap-2 sm:gap-4 text-lg font-bold cursor-pointer hover:bg-orange-600 p-2 rounded-lg transition-colors mx-2" onClick={handleTableClick}>
+          <span>{tableName ? tableName : 'Tisch?'}</span>
+          <span className="opacity-60">|</span>
+          <span>{formatPrice(total)}</span>
+        </div>
+
+        <button 
+          onClick={() => setIsCheckoutOpen(true)} 
+          disabled={items.length === 0 || isSubmitting}
+          className="flex items-center gap-2 font-bold tracking-wide bg-white text-orange-600 hover:bg-orange-100 px-5 py-3 rounded-xl transition-colors disabled:opacity-50 disabled:bg-white/50"
+        >
+          {isSubmitting ? '...' : successMsg ? 'OK' : 'Zahlen'}
+          {!isSubmitting && !successMsg && <Check className="w-5 h-5" />}
+        </button>
       </div>
 
       <CheckoutModal
