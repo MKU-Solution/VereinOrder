@@ -12,7 +12,7 @@ export class ReportsService {
       _sum: { totalAmount: true },
       _count: { id: true },
       where: {
-        status: { not: 'CANCELLED' }
+        lifecycleStatus: { not: 'CANCELLED' }
       }
     });
 
@@ -26,7 +26,7 @@ export class ReportsService {
     const items = await this.prisma.orderItem.findMany({
       where: {
         status: { not: 'CANCELLED' },
-        order: { status: { not: 'CANCELLED' } }
+        order: { lifecycleStatus: { not: 'CANCELLED' } }
       },
       include: { product: true }
     });
@@ -53,7 +53,7 @@ export class ReportsService {
 
   async getUsersSummary() {
     const orders = await this.prisma.order.findMany({
-      where: { status: { not: 'CANCELLED' } },
+      where: { lifecycleStatus: { not: 'CANCELLED' } },
       include: { user: true }
     });
 

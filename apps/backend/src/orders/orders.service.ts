@@ -1,5 +1,5 @@
-import { Injectable, Inject, BadRequestException } from '@nestjs/common';
-import { PrismaClient } from '@vereinorder/database';
+import { Injectable, Inject, BadRequestException, NotFoundException } from '@nestjs/common';
+import { PrismaClient, Prisma } from '@vereinorder/database';
 import { PRISMA_CLIENT } from '../prisma/prisma.module';
 
 interface CreateOrderDto {
@@ -83,13 +83,15 @@ export class OrdersService {
     });
 
     const totalPaid = dto.payments?.reduce((sum, p) => sum + p.amount, 0) || 0;
-    const initialStatus = totalPaid >= totalAmount ? 'PAID' : 'PENDING';
+    const initialPaymentStatus = totalPaid >= totalAmount ? 'PAID' : (totalPaid > 0 ? 'PARTIALLY_PAID' : 'OPEN');
 
     return await this.prisma.$transaction(async (prisma) => {
       const order = await prisma.order.create({
         data: {
           totalAmount,
-          status: initialStatus,
+          lifecycleStatus: 'SUBMITTED',
+          paymentStatus: initialPaymentStatus,
+          fulfillmentStatus: 'PENDING',
           userId,
           eventId: dto.eventId,
           idempotencyKey: dto.idempotencyKey,
@@ -128,7 +130,9 @@ export class OrdersService {
               items: order.items.map(item => ({
                 productName: item.product.name,
                 quantity: item.quantity,
-                price: item.priceAtTime
+                price: item.priceAtTime,
+                variantName: item.variantName,
+                extras: item.extras
               }))
             }
           }
@@ -143,7 +147,8 @@ export class OrdersService {
     return this.prisma.order.findMany({
       where: {
         eventId,
-        status: 'PENDING'
+        paymentStatus: { in: ['OPEN', 'PARTIALLY_PAID'] },
+        lifecycleStatus: { not: 'CANCELLED' }
       },
       include: {
         items: {
@@ -169,7 +174,8 @@ export class OrdersService {
       });
 
       if (!order) throw new BadRequestException('Order not found');
-      if (order.status === 'PAID') throw new BadRequestException('Order is already fully paid');
+      if (order.paymentStatus === 'PAID') throw new BadRequestException('Order is already fully paid');
+      if (order.lifecycleStatus === 'CANCELLED') throw new BadRequestException('Order is cancelled');
 
       // Add new payments
       await prisma.payment.createMany({
@@ -186,12 +192,17 @@ export class OrdersService {
       const newPaymentsTotal = payments.reduce((sum, p) => sum + p.amount, 0);
       const totalPaid = existingPaymentsTotal + newPaymentsTotal;
 
+      let newPaymentStatus: any = order.paymentStatus;
       if (totalPaid >= order.totalAmount) {
-        await prisma.order.update({
-          where: { id: order.id },
-          data: { status: 'PAID' }
-        });
+        newPaymentStatus = 'PAID';
+      } else if (totalPaid > 0) {
+        newPaymentStatus = 'PARTIALLY_PAID';
       }
+
+      await prisma.order.update({
+        where: { id: order.id },
+        data: { paymentStatus: newPaymentStatus as any }
+      });
 
       return prisma.order.findUnique({
         where: { id: orderId },
@@ -200,6 +211,137 @@ export class OrdersService {
           payments: true
         }
       });
+    });
+  }
+
+  async cancelOrder(orderId: string, userId: string, reason?: string) {
+    return await this.prisma.$transaction(async (prisma) => {
+      const order = await prisma.order.findUnique({
+        where: { id: orderId },
+        include: { items: true, payments: true }
+      });
+
+      if (!order) throw new NotFoundException('Order not found');
+      if (order.lifecycleStatus === 'CANCELLED') throw new BadRequestException('Order is already cancelled');
+
+      // Set non-delivered items to CANCELLED
+      await prisma.orderItem.updateMany({
+        where: { 
+          orderId, 
+          status: { notIn: ['DELIVERED', 'CANCELLED'] } 
+        },
+        data: { status: 'CANCELLED' }
+      });
+
+      // Issue refund if there were payments
+      const totalPaid = order.payments.reduce((sum, p) => sum + p.amount, 0);
+      if (totalPaid > 0) {
+        // Create a negative payment representing the refund
+        await prisma.payment.create({
+          data: {
+            orderId: order.id,
+            amount: -totalPaid,
+            method: 'REFUND',
+            status: 'COMPLETED'
+          }
+        });
+      }
+
+      const updatedOrder = await prisma.order.update({
+        where: { id: orderId },
+        data: {
+          lifecycleStatus: 'CANCELLED',
+          paymentStatus: totalPaid > 0 ? 'REFUNDED' : 'OPEN',
+          fulfillmentStatus: 'PENDING'
+        },
+        include: { items: { include: { product: true } }, payments: true }
+      });
+
+      await prisma.auditLog.create({
+        data: {
+          action: 'ORDER_CANCELLED',
+          entityId: orderId,
+          entityType: 'Order',
+          userId,
+          details: { reason, refundedAmount: totalPaid }
+        }
+      });
+
+      return updatedOrder;
+    });
+  }
+
+  async cancelOrderItem(orderItemId: string, userId: string, reason?: string) {
+    return await this.prisma.$transaction(async (prisma) => {
+      const item = await prisma.orderItem.findUnique({
+        where: { id: orderItemId },
+        include: { order: { include: { payments: true, items: true } } }
+      });
+
+      if (!item) throw new NotFoundException('Order item not found');
+      if (item.status === 'CANCELLED') throw new BadRequestException('Item is already cancelled');
+      if (item.order.lifecycleStatus === 'CANCELLED') throw new BadRequestException('Order is fully cancelled');
+
+      const itemTotalCost = item.priceAtTime * item.quantity;
+      const order = item.order;
+
+      // Mark item as CANCELLED
+      await prisma.orderItem.update({
+        where: { id: orderItemId },
+        data: { status: 'CANCELLED' }
+      });
+
+      // Recalculate order total amount
+      const newTotalAmount = order.totalAmount - itemTotalCost;
+      
+      const totalPaid = order.payments.reduce((sum, p) => sum + p.amount, 0);
+      
+      let newPaymentStatus = order.paymentStatus;
+      if (totalPaid > newTotalAmount) {
+        // Refund the difference
+        const refundAmount = totalPaid - newTotalAmount;
+        await prisma.payment.create({
+          data: {
+            orderId: order.id,
+            amount: -refundAmount,
+            method: 'REFUND',
+            status: 'COMPLETED'
+          }
+        });
+        newPaymentStatus = 'PAID';
+      } else if (totalPaid === newTotalAmount) {
+        newPaymentStatus = 'PAID';
+      } else if (totalPaid > 0 && totalPaid < newTotalAmount) {
+        newPaymentStatus = 'PARTIALLY_PAID';
+      } else if (totalPaid === 0 && newTotalAmount === 0) {
+        newPaymentStatus = 'OPEN'; // Or paid, but no money changed hands
+      }
+
+      // Check if all items are cancelled
+      const allItemsCancelled = order.items.every(i => i.id === orderItemId || i.status === 'CANCELLED');
+      const newLifecycleStatus = allItemsCancelled ? 'CANCELLED' : 'PARTIALLY_CANCELLED';
+
+      const updatedOrder = await prisma.order.update({
+        where: { id: order.id },
+        data: {
+          totalAmount: newTotalAmount,
+          paymentStatus: newPaymentStatus as any,
+          lifecycleStatus: newLifecycleStatus as any
+        },
+        include: { items: { include: { product: true } }, payments: true }
+      });
+
+      await prisma.auditLog.create({
+        data: {
+          action: 'ITEM_CANCELLED',
+          entityId: orderItemId,
+          entityType: 'OrderItem',
+          userId,
+          details: { reason, refundedAmount: totalPaid > newTotalAmount ? totalPaid - newTotalAmount : 0, originalOrderTotal: order.totalAmount, newOrderTotal: newTotalAmount }
+        }
+      });
+
+      return updatedOrder;
     });
   }
 }

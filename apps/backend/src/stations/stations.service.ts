@@ -49,14 +49,45 @@ export class StationsService {
   }
 
   async updateItemStatus(itemId: string, status: string) {
-    // Basic validation
     if (!['PENDING', 'PREPARING', 'READY', 'DELIVERED', 'CANCELLED'].includes(status)) {
       throw new NotFoundException('Invalid status');
     }
     
-    return this.prisma.orderItem.update({
-      where: { id: itemId },
-      data: { status: status as any }
+    return await this.prisma.$transaction(async (prisma) => {
+      const updatedItem = await prisma.orderItem.update({
+        where: { id: itemId },
+        data: { status: status as any },
+        include: { order: { include: { items: true } } }
+      });
+
+      const order = updatedItem.order;
+      const activeItems = order.items.filter(i => i.status !== 'CANCELLED');
+      
+      if (activeItems.length > 0) {
+        const allDelivered = activeItems.every(i => i.status === 'DELIVERED');
+        const allPending = activeItems.every(i => i.status === 'PENDING');
+        const anyDelivered = activeItems.some(i => i.status === 'DELIVERED');
+        const allReady = activeItems.every(i => i.status === 'READY');
+        const anyReady = activeItems.some(i => i.status === 'READY');
+        const anyPreparing = activeItems.some(i => i.status === 'PREPARING');
+        
+        let newFulfillmentStatus = order.fulfillmentStatus;
+        if (allDelivered) newFulfillmentStatus = 'DELIVERED';
+        else if (anyDelivered) newFulfillmentStatus = 'PARTIALLY_DELIVERED';
+        else if (allReady) newFulfillmentStatus = 'READY';
+        else if (anyReady) newFulfillmentStatus = 'PARTIALLY_READY';
+        else if (anyPreparing) newFulfillmentStatus = 'PREPARING';
+        else if (allPending) newFulfillmentStatus = 'PENDING';
+        
+        if (newFulfillmentStatus !== order.fulfillmentStatus) {
+          await prisma.order.update({
+            where: { id: order.id },
+            data: { fulfillmentStatus: newFulfillmentStatus as any }
+          });
+        }
+      }
+      
+      return updatedItem;
     });
   }
 }
