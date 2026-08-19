@@ -50,6 +50,11 @@ model Event {
   timezone   String      @default("Europe/Vienna")
   status     EventStatus @default(DRAFT)
   testMode   Boolean     @default(false)
+  
+  rksvConfirmedAt       DateTime?
+  rksvConfirmedByUserId String?
+  rksvDisclaimerVersion String?     @default("1.0")
+
   createdAt  DateTime    @default(now())
   updatedAt  DateTime    @updatedAt
 
