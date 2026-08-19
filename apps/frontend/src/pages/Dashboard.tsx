@@ -4,6 +4,7 @@ import { useCartStore, CartItem as CartItemType } from '../store/useCartStore';
 import { Trash2, Check, LayoutGrid, List, Minus } from 'lucide-react';
 import { CheckoutModal } from '../components/CheckoutModal';
 import { ProductOptionsModal } from '../components/ProductOptionsModal';
+import { TableSelectionModal } from '../components/TableSelectionModal';
 
 const formatPrice = (cents: number) => `€ ${(cents / 100).toFixed(2)}`;
 
@@ -87,6 +88,7 @@ export const Dashboard = () => {
   const [products, setProducts] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isCheckoutOpen, setIsCheckoutOpen] = useState(false);
+  const [isTableModalOpen, setIsTableModalOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [successMsg, setSuccessMsg] = useState('');
   const [tableName, setTableName] = useState('');
@@ -216,10 +218,7 @@ export const Dashboard = () => {
   };
 
   const handleTableClick = () => {
-    const input = prompt("Tisch / Bereich eingeben:", tableName);
-    if (input !== null) {
-      setTableName(input);
-    }
+    setIsTableModalOpen(true);
   };
 
   const getProductColor = (p: any) => {
@@ -352,6 +351,13 @@ export const Dashboard = () => {
         isOpen={!!selectedProductForOptions}
         onClose={() => setSelectedProductForOptions(null)}
         onAdd={addItem}
+      />
+
+      <TableSelectionModal
+        isOpen={isTableModalOpen}
+        onClose={() => setIsTableModalOpen(false)}
+        onSelect={(table) => setTableName(table)}
+        eventId={products.length > 0 ? products[0].eventId : null}
       />
     </div>
   );
