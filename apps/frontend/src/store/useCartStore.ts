@@ -13,6 +13,7 @@ interface CartState {
   items: CartItem[];
   addItem: (product: any, variant?: any, extras?: any[]) => void;
   removeItem: (cartItemId: string) => void;
+  deleteItem: (cartItemId: string) => void;
   clearCart: () => void;
   total: number;
 }
@@ -62,6 +63,12 @@ export const useCartStore = create<CartState>((set) => ({
     } else {
       newItems = state.items.filter(i => i.id !== cartItemId);
     }
+    const newTotal = newItems.reduce((acc, item) => acc + (item.finalPrice * item.quantity), 0);
+    return { items: newItems, total: newTotal };
+  }),
+  
+  deleteItem: (cartItemId) => set((state) => {
+    const newItems = state.items.filter(i => i.id !== cartItemId);
     const newTotal = newItems.reduce((acc, item) => acc + (item.finalPrice * item.quantity), 0);
     return { items: newItems, total: newTotal };
   }),
