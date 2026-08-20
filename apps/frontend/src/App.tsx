@@ -7,6 +7,7 @@ import { RevisionDashboard } from './pages/RevisionDashboard';
 import { UnpaidOrders } from './pages/UnpaidOrders';
 import { AdminDashboard } from './pages/AdminDashboard';
 import { CashierDashboard } from './pages/CashierDashboard';
+import { RunnerDashboard } from './pages/RunnerDashboard';
 import { AuthGuard } from './components/layout/AuthGuard';
 import { AppLayout } from './components/layout/AppLayout';
 import { RoleGuard } from './components/layout/RoleGuard';
@@ -33,6 +34,7 @@ function App() {
             <Route element={<RoleGuard route={routeAccess.revision} />}><Route path="/revision" element={<RevisionDashboard />} /></Route>
             <Route element={<RoleGuard route={routeAccess.admin} />}><Route path="/admin" element={<AdminDashboard />} /></Route>
             <Route element={<RoleGuard route={routeAccess.cashier} />}><Route path="/cashier" element={<CashierDashboard />} /></Route>
+            <Route element={<RoleGuard route={routeAccess.runner} />}><Route path="/runner" element={<RunnerDashboard />} /></Route>
           </Route>
         </Route>
 

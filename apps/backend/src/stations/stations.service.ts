@@ -1,6 +1,7 @@
 import { Injectable, Inject, NotFoundException } from '@nestjs/common';
 import { PrismaClient } from '@vereinorder/database';
 import { PRISMA_CLIENT } from '../prisma/prisma.module';
+import { deriveFulfillmentStatus } from '../orders/fulfillment-status';
 
 @Injectable()
 export class StationsService {
@@ -52,11 +53,24 @@ export class StationsService {
   }
 
   async updateItemStatus(itemId: string, status: string) {
-    if (!['PENDING', 'PREPARING', 'READY', 'DELIVERED', 'CANCELLED'].includes(status)) {
+    if (!['PENDING', 'PREPARING', 'READY', 'CANCELLED'].includes(status)) {
       throw new NotFoundException('Invalid status');
     }
     
     return await this.prisma.$transaction(async (prisma) => {
+      const currentItem = await prisma.orderItem.findUnique({
+        where: { id: itemId },
+        select: { orderId: true }
+      });
+      if (!currentItem) throw new NotFoundException('Order item not found');
+
+      // Runner-Claims sperren ebenfalls zuerst den Auftrag und danach Positionen.
+      // Die einheitliche Reihenfolge verhindert Deadlocks bei parallelem Bereitstellen/Übernehmen.
+      await prisma.order.update({
+        where: { id: currentItem.orderId },
+        data: { updatedAt: new Date() }
+      });
+
       const updatedItem = await prisma.orderItem.update({
         where: { id: itemId },
         data: { status: status as any },
@@ -64,30 +78,13 @@ export class StationsService {
       });
 
       const order = updatedItem.order;
-      const activeItems = order.items.filter(i => i.status !== 'CANCELLED');
-      
-      if (activeItems.length > 0) {
-        const allDelivered = activeItems.every(i => i.status === 'DELIVERED');
-        const allPending = activeItems.every(i => i.status === 'PENDING');
-        const anyDelivered = activeItems.some(i => i.status === 'DELIVERED');
-        const allReady = activeItems.every(i => i.status === 'READY');
-        const anyReady = activeItems.some(i => i.status === 'READY');
-        const anyPreparing = activeItems.some(i => i.status === 'PREPARING');
-        
-        let newFulfillmentStatus = order.fulfillmentStatus;
-        if (allDelivered) newFulfillmentStatus = 'DELIVERED';
-        else if (anyDelivered) newFulfillmentStatus = 'PARTIALLY_DELIVERED';
-        else if (allReady) newFulfillmentStatus = 'READY';
-        else if (anyReady) newFulfillmentStatus = 'PARTIALLY_READY';
-        else if (anyPreparing) newFulfillmentStatus = 'PREPARING';
-        else if (allPending) newFulfillmentStatus = 'PENDING';
-        
-        if (newFulfillmentStatus !== order.fulfillmentStatus) {
-          await prisma.order.update({
-            where: { id: order.id },
-            data: { fulfillmentStatus: newFulfillmentStatus as any }
-          });
-        }
+      const newFulfillmentStatus = deriveFulfillmentStatus(order.items);
+
+      if (newFulfillmentStatus !== order.fulfillmentStatus) {
+        await prisma.order.update({
+          where: { id: order.id },
+          data: { fulfillmentStatus: newFulfillmentStatus }
+        });
       }
       
       return updatedItem;

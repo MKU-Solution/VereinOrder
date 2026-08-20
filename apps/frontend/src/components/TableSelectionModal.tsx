@@ -5,7 +5,7 @@ import { api } from '../lib/api';
 interface TableSelectionModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSelect: (tableName: string) => void;
+  onSelect: (tableName: string, areaId?: string) => void;
   eventId: string | null;
 }
 
@@ -13,10 +13,12 @@ export const TableSelectionModal = ({ isOpen, onClose, onSelect, eventId }: Tabl
   const [inputValue, setInputValue] = useState('');
   const [areas, setAreas] = useState<any[]>([]);
   const [recentTables, setRecentTables] = useState<string[]>([]);
+  const [selectedAreaId, setSelectedAreaId] = useState<string | undefined>();
 
   useEffect(() => {
     if (isOpen) {
       setInputValue('');
+      setSelectedAreaId(undefined);
       loadAreas();
       loadRecentTables();
     }
@@ -62,15 +64,16 @@ export const TableSelectionModal = ({ isOpen, onClose, onSelect, eventId }: Tabl
     setInputValue(prev => prev.slice(0, -1));
   };
 
-  const handleAreaSelect = (areaName: string) => {
+  const handleAreaSelect = (areaId: string, areaName: string) => {
     setInputValue(areaName + ' ');
+    setSelectedAreaId(areaId);
   };
 
-  const handleSubmit = (tableToSubmit: string = inputValue) => {
+  const handleSubmit = (tableToSubmit: string = inputValue, areaId: string | null | undefined = selectedAreaId) => {
     const finalTable = tableToSubmit.trim();
     if (finalTable) {
       saveRecentTable(finalTable);
-      onSelect(finalTable);
+      onSelect(finalTable, areaId || undefined);
       onClose();
     }
   };
@@ -102,13 +105,16 @@ export const TableSelectionModal = ({ isOpen, onClose, onSelect, eventId }: Tabl
           <input
             type="text"
             value={inputValue}
-            onChange={(e) => setInputValue(e.target.value)}
+            onChange={(e) => {
+              setInputValue(e.target.value);
+              setSelectedAreaId(undefined);
+            }}
             className="bg-transparent text-3xl font-bold text-white w-full focus:outline-none"
             placeholder="z.B. 12 oder Bar"
             autoFocus
           />
           {inputValue && (
-            <button onClick={() => setInputValue('')} className="p-2 text-slate-400 hover:text-white">
+            <button onClick={() => { setInputValue(''); setSelectedAreaId(undefined); }} className="p-2 text-slate-400 hover:text-white" aria-label="Eingabe löschen">
               <X className="w-6 h-6" />
             </button>
           )}
@@ -122,8 +128,9 @@ export const TableSelectionModal = ({ isOpen, onClose, onSelect, eventId }: Tabl
               {areas.map(a => (
                 <button
                   key={a.id}
-                  onClick={() => handleAreaSelect(a.name)}
-                  className="shrink-0 bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 px-5 py-3 rounded-xl font-bold whitespace-nowrap active:bg-indigo-500/40 transition-colors"
+                  onClick={() => handleAreaSelect(a.id, a.name)}
+                  aria-pressed={selectedAreaId === a.id}
+                  className={`shrink-0 border px-5 py-3 rounded-xl font-bold whitespace-nowrap active:bg-indigo-500/40 transition-colors ${selectedAreaId === a.id ? 'bg-indigo-500 text-white border-indigo-400' : 'bg-indigo-500/20 text-indigo-300 border-indigo-500/30'}`}
                 >
                   {a.name}
                 </button>
@@ -142,7 +149,7 @@ export const TableSelectionModal = ({ isOpen, onClose, onSelect, eventId }: Tabl
               {recentTables.map(t => (
                 <button
                   key={t}
-                  onClick={() => handleSubmit(t)}
+                  onClick={() => handleSubmit(t, null)}
                   className="bg-slate-800 text-slate-300 border border-slate-700 px-4 py-2 rounded-lg font-medium active:bg-slate-700 transition-colors"
                 >
                   {t}

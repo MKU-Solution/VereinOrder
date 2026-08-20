@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 
-export const knownRoles = ['ADMINISTRATOR', 'WAITER', 'CASHIER', 'STATION', 'EVENT_MANAGER', 'REVISION'] as const;
+export const knownRoles = ['ADMINISTRATOR', 'WAITER', 'CASHIER', 'STATION', 'RUNNER', 'EVENT_MANAGER', 'REVISION'] as const;
 export type UserRole = (typeof knownRoles)[number];
 
 export interface AuthUser {
