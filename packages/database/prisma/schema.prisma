@@ -50,6 +50,13 @@ enum EventStatus {
   ARCHIVED
 }
 
+// Once operational data has been recorded, its origin must never be inferred
+// from an event's later state.  This makes test-data cleanup provably scoped.
+enum OperationalDataMode {
+  TEST
+  LIVE
+}
+
 model Event {
   id        String      @id @default(uuid())
   name      String
@@ -219,8 +226,9 @@ model Order {
   claimedBy       User?     @relation("OrderRunner", fields: [claimedByUserId], references: [id], onDelete: SetNull)
   claimedAt       DateTime?
 
-  eventId String
-  event   Event  @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  eventId  String
+  event    Event               @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  dataMode OperationalDataMode
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -233,6 +241,7 @@ model Order {
   cashierSession   CashierSession? @relation(fields: [cashierSessionId], references: [id])
 
   @@index([eventId, fulfillmentStatus, areaId])
+  @@index([eventId, dataMode])
   @@index([claimedByUserId])
 }
 
@@ -369,7 +378,7 @@ model PrintJob {
   jobType      PrintJobType   @default(STATION_TICKET)
   content      Json // The data payload for the printed ticket
   status       PrintJobStatus @default(PENDING)
-  orderId      String? // Optional reference to the order
+  orderId      String? // Optional reference to the order; historic jobs may outlive the order.
   errorMessage String?
   createdAt    DateTime       @default(now())
   updatedAt    DateTime       @updatedAt
@@ -399,12 +408,27 @@ model CashierSession {
   startTime       DateTime      @default(now())
   endTime         DateTime?
 
-  userId  String
-  user    User   @relation(fields: [userId], references: [id])
-  eventId String
-  event   Event  @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  userId   String
+  user     User                @relation(fields: [userId], references: [id])
+  eventId  String
+  event    Event               @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  dataMode OperationalDataMode
 
   orders   Order[]
   payments Payment[]
   vouchers ProductVoucher[]
+
+  @@index([eventId, dataMode])
+}
+
+model ConfigOperation {
+  id             String   @id @default(uuid())
+  scopeId        String
+  action         String
+  idempotencyKey String
+  payloadHash    String
+  response       Json
+  createdAt      DateTime @default(now())
+
+  @@unique([scopeId, action, idempotencyKey])
 }

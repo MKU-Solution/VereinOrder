@@ -2,6 +2,7 @@ import {
   Injectable,
   Inject,
   BadRequestException,
+  ConflictException,
   NotFoundException,
 } from "@nestjs/common";
 import { PrismaClient, Prisma } from "@vereinorder/database";
@@ -204,11 +205,19 @@ export class OrdersService {
         };
       }
 
-      const event = await prisma.event.findFirst({
-        where: { id: dto.eventId, status: { in: ["ACTIVE", "TEST_MODE"] } },
-        select: { id: true },
-      });
-      if (!event)
+      const eventRows = await prisma.$queryRaw<
+        { id: string; status: string; testMode: boolean }[]
+      >(Prisma.sql`
+        SELECT "id", "status", "testMode" FROM "Event" WHERE "id" = ${dto.eventId} FOR UPDATE
+      `);
+      const event = eventRows[0];
+      const dataMode =
+        event?.status === "ACTIVE" && !event.testMode
+          ? "LIVE"
+          : event?.status === "TEST_MODE" && event.testMode
+            ? "TEST"
+            : null;
+      if (!dataMode)
         throw new BadRequestException("Event is not active for sales");
 
       const activePrinter = await prisma.printer.findFirst({
@@ -222,9 +231,9 @@ export class OrdersService {
       }
 
       const activeSessions = await prisma.$queryRaw<
-        { id: string }[]
+        { id: string; dataMode: "TEST" | "LIVE" }[]
       >(Prisma.sql`
-        SELECT "id"
+        SELECT "id", "dataMode"
         FROM "CashierSession"
         WHERE "userId" = ${userId}
           AND "eventId" = ${dto.eventId}
@@ -239,6 +248,10 @@ export class OrdersService {
           "Für diesen Verkauf ist eine aktive Kassensitzung erforderlich.",
         );
       }
+      if (activeSessions[0].dataMode !== dataMode)
+        throw new ConflictException(
+          "Die aktive Kassensitzung gehört zu einem anderen Betriebsmodus.",
+        );
 
       const productIds = [...new Set(dto.items.map((item) => item.productId))];
       const products = await prisma.product.findMany({
@@ -335,6 +348,7 @@ export class OrdersService {
           fulfillmentStatus: "PENDING",
           userId,
           eventId: dto.eventId,
+          dataMode,
           idempotencyKey: dto.idempotencyKey,
           tableName: null,
           areaId: null,
@@ -581,7 +595,7 @@ export class OrdersService {
 
     const productIds = dto.items.map((i) => i.productId);
     const products = await this.prisma.product.findMany({
-      where: { id: { in: productIds } },
+      where: { id: { in: productIds }, eventId: dto.eventId },
       include: { variants: true, extras: true },
     });
 
@@ -639,16 +653,6 @@ export class OrdersService {
           ? "PARTIALLY_PAID"
           : "OPEN";
 
-    const user = userId
-      ? await this.prisma.user.findUnique({ where: { id: userId } })
-      : null;
-    const activeSession = userId
-      ? await this.prisma.cashierSession.findFirst({
-          where: { userId, eventId: dto.eventId, status: "ACTIVE" },
-        })
-      : null;
-    const cashierSessionId = activeSession?.id || null;
-
     if (dto.areaId) {
       const area = await this.prisma.area.findFirst({
         where: { id: dto.areaId, eventId: dto.eventId },
@@ -661,6 +665,36 @@ export class OrdersService {
     }
 
     return await this.prisma.$transaction(async (prisma) => {
+      const eventRows = await prisma.$queryRaw<
+        { status: string; testMode: boolean }[]
+      >(
+        Prisma.sql`SELECT "status", "testMode" FROM "Event" WHERE "id" = ${dto.eventId} FOR UPDATE`,
+      );
+      const event = eventRows[0];
+      const orderDataMode =
+        event?.status === "ACTIVE" && !event.testMode
+          ? "LIVE"
+          : event?.status === "TEST_MODE" && event.testMode
+            ? "TEST"
+            : null;
+      if (!orderDataMode)
+        throw new BadRequestException("Event is not active for orders");
+      const activeSession = userId
+        ? await prisma.cashierSession.findFirst({
+            where: { userId, eventId: dto.eventId, status: "ACTIVE" },
+          })
+        : null;
+      if (activeSession && activeSession.dataMode !== orderDataMode)
+        throw new ConflictException(
+          "Die aktive Kassensitzung gehört zu einem anderen Betriebsmodus.",
+        );
+      const cashierSessionId = activeSession?.id || null;
+      const user = userId
+        ? await prisma.user.findUnique({ where: { id: userId } })
+        : null;
+      if (!user?.isActive) {
+        throw new BadRequestException("User is not active");
+      }
       const order = await prisma.order.create({
         data: {
           totalAmount,
@@ -669,6 +703,7 @@ export class OrdersService {
           fulfillmentStatus: "PENDING",
           userId,
           eventId: dto.eventId,
+          dataMode: orderDataMode,
           idempotencyKey: dto.idempotencyKey,
           tableName: dto.tableName,
           areaId: dto.areaId,

@@ -63,7 +63,7 @@ export class AuthService {
       await this.prisma.authThrottle.deleteMany({
         where: { key: throttleKey },
       });
-      const { pinHash, ...result } = user;
+      const { pinHash: _pinHash, ...result } = user;
       return result;
     }
 
