@@ -1,11 +1,18 @@
-import { useState, useEffect } from 'react';
-import { useAuthStore } from '../store/useAuthStore';
-import { api } from '../lib/api';
-import { Wallet, Banknote, CreditCard, Activity, Play, CheckCircle2 } from 'lucide-react';
+import { useState, useEffect } from "react";
+import { useAuthStore } from "../store/useAuthStore";
+import { api } from "../lib/api";
+import {
+  Wallet,
+  Banknote,
+  CreditCard,
+  Activity,
+  Play,
+  CheckCircle2,
+} from "lucide-react";
 
 interface SessionSummary {
   id: string;
-  status: 'ACTIVE' | 'CLOSED';
+  status: "ACTIVE" | "CLOSED";
   startingBalance: number;
   cashSales: number;
   cardSales: number;
@@ -16,16 +23,35 @@ interface SessionSummary {
   closingBalance?: number;
 }
 
+interface SessionEvent {
+  id: string;
+  name: string;
+  status: "ACTIVE" | "TEST_MODE";
+  testMode: boolean;
+}
+
+const parseEuroToCents = (value: string) => {
+  const match = /^(\d{1,7})(?:[,.](\d{0,2}))?$/.exec(value.trim());
+  if (!match) return null;
+  const cents =
+    Number(match[1]) * 100 + Number((match[2] || "").padEnd(2, "0"));
+  return Number.isSafeInteger(cents) && cents <= 2_147_483_647 ? cents : null;
+};
+
 export const CashierDashboard = () => {
   const { user } = useAuthStore();
-  const [eventId, setEventId] = useState<string>('');
-  const [activeSession, setActiveSession] = useState<{ id: string, startingBalance: number } | null>(null);
+  const [eventId, setEventId] = useState<string>("");
+  const [events, setEvents] = useState<SessionEvent[]>([]);
+  const [activeSession, setActiveSession] = useState<{
+    id: string;
+    startingBalance: number;
+  } | null>(null);
   const [summary, setSummary] = useState<SessionSummary | null>(null);
   const [loading, setLoading] = useState(true);
 
   // Forms
-  const [startingBalanceInput, setStartingBalanceInput] = useState('');
-  const [closingBalanceInput, setClosingBalanceInput] = useState('');
+  const [startingBalanceInput, setStartingBalanceInput] = useState("");
+  const [closingBalanceInput, setClosingBalanceInput] = useState("");
   const [showCloseModal, setShowCloseModal] = useState(false);
 
   const fetchSession = async () => {
@@ -34,7 +60,10 @@ export const CashierDashboard = () => {
       setLoading(true);
       const res = await api.get(`/sessions/active?eventId=${eventId}`);
       if (res.data) {
-        setActiveSession({ id: res.data.id, startingBalance: res.data.startingBalance });
+        setActiveSession({
+          id: res.data.id,
+          startingBalance: res.data.startingBalance,
+        });
         const summaryRes = await api.get(`/sessions/${res.data.id}/summary`);
         setSummary(summaryRes.data);
       } else {
@@ -42,7 +71,7 @@ export const CashierDashboard = () => {
         setSummary(null);
       }
     } catch (err) {
-      console.error('Error fetching session', err);
+      console.error("Error fetching session", err);
     } finally {
       setLoading(false);
     }
@@ -51,12 +80,13 @@ export const CashierDashboard = () => {
   useEffect(() => {
     const fetchEvent = async () => {
       try {
-        const res = await api.get('/events');
+        const res = await api.get("/sessions/context");
+        setEvents(res.data);
         if (res.data && res.data.length > 0) {
           setEventId(res.data[0].id);
         }
       } catch (err) {
-        console.error('Failed to load initial event', err);
+        console.error("Failed to load initial event", err);
       }
     };
     fetchEvent();
@@ -69,16 +99,16 @@ export const CashierDashboard = () => {
   const handleStartSession = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!eventId) return;
-    
-    const amount = Math.round(parseFloat(startingBalanceInput.replace(',', '.')) * 100);
-    if (isNaN(amount) || amount < 0) return alert('Ungültiger Betrag');
+
+    const amount = parseEuroToCents(startingBalanceInput);
+    if (amount === null) return alert("Ungültiger Betrag");
 
     try {
-      await api.post('/sessions', { eventId, startingBalance: amount });
-      setStartingBalanceInput('');
+      await api.post("/sessions", { eventId, startingBalance: amount });
+      setStartingBalanceInput("");
       await fetchSession();
     } catch (err: any) {
-      alert('Fehler beim Starten der Sitzung: ' + err.message);
+      alert("Fehler beim Starten der Sitzung: " + err.message);
     }
   };
 
@@ -86,25 +116,34 @@ export const CashierDashboard = () => {
     e.preventDefault();
     if (!activeSession) return;
 
-    const amount = Math.round(parseFloat(closingBalanceInput.replace(',', '.')) * 100);
-    if (isNaN(amount) || amount < 0) return alert('Ungültiger Betrag');
+    const amount = parseEuroToCents(closingBalanceInput);
+    if (amount === null) return alert("Ungültiger Betrag");
 
     try {
-      await api.patch(`/sessions/${activeSession.id}/close`, { closingBalance: amount });
+      await api.patch(`/sessions/${activeSession.id}/close`, {
+        closingBalance: amount,
+      });
       setShowCloseModal(false);
-      setClosingBalanceInput('');
+      setClosingBalanceInput("");
       await fetchSession();
     } catch (err: any) {
-      alert('Fehler beim Abschließen: ' + err.message);
+      alert("Fehler beim Abschließen: " + err.message);
     }
   };
 
   const formatCurrency = (cents: number) => {
-    return (cents / 100).toLocaleString('de-AT', { style: 'currency', currency: 'EUR' });
+    return (cents / 100).toLocaleString("de-AT", {
+      style: "currency",
+      currency: "EUR",
+    });
   };
 
   if (loading) {
-    return <div className="p-8 text-center text-slate-400">Lade Kassensitzung...</div>;
+    return (
+      <div className="p-8 text-center text-slate-400">
+        Lade Kassensitzung...
+      </div>
+    );
   }
 
   return (
@@ -117,14 +156,33 @@ export const CashierDashboard = () => {
           <h1 className="text-2xl font-bold text-slate-100">Meine Kassa</h1>
           <p className="text-slate-400">Abrechnung für {user?.username}</p>
         </div>
+        {events.length > 1 && (
+          <label className="ml-auto text-xs font-bold uppercase tracking-wider text-slate-400">
+            Veranstaltung
+            <select
+              value={eventId}
+              onChange={(event) => setEventId(event.target.value)}
+              className="mt-1 block min-h-11 rounded-xl border border-slate-700 bg-slate-900 px-3 text-sm font-bold normal-case tracking-normal text-white"
+            >
+              {events.map((event) => (
+                <option key={event.id} value={event.id}>
+                  {event.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
       </div>
 
       {!activeSession && (
         <div className="bg-slate-900 rounded-2xl p-8 border border-slate-800 text-center">
           <Activity className="w-12 h-12 text-slate-500 mx-auto mb-4" />
-          <h2 className="text-xl font-medium text-slate-200 mb-2">Keine aktive Kassensitzung</h2>
+          <h2 className="text-xl font-medium text-slate-200 mb-2">
+            Keine aktive Kassensitzung
+          </h2>
           <p className="text-slate-400 mb-6 max-w-md mx-auto">
-            Bevor du bar abkassieren kannst, solltest du eine Kassensitzung eröffnen und dein Wechselgeld eintragen.
+            Bevor du bar abkassieren kannst, solltest du eine Kassensitzung
+            eröffnen und dein Wechselgeld eintragen.
           </p>
 
           <form onSubmit={handleStartSession} className="max-w-xs mx-auto">
@@ -160,7 +218,9 @@ export const CashierDashboard = () => {
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6">
               <div className="flex items-center gap-3 mb-2">
                 <Banknote className="w-5 h-5 text-emerald-400" />
-                <h3 className="text-slate-400 font-medium">Erwarteter Kassenstand (Bar)</h3>
+                <h3 className="text-slate-400 font-medium">
+                  Erwarteter Kassenstand (Bar)
+                </h3>
               </div>
               <div className="text-4xl font-bold text-slate-100">
                 {formatCurrency(summary.expectedCash)}
@@ -171,7 +231,9 @@ export const CashierDashboard = () => {
               </div>
               <div className="text-sm text-slate-500 flex justify-between mt-1">
                 <span>Bar-Umsätze</span>
-                <span className="text-emerald-400">+{formatCurrency(summary.cashSales)}</span>
+                <span className="text-emerald-400">
+                  +{formatCurrency(summary.cashSales)}
+                </span>
               </div>
             </div>
 
@@ -186,7 +248,9 @@ export const CashierDashboard = () => {
               {summary.otherSales > 0 && (
                 <div className="mt-4 text-sm text-slate-500 flex justify-between">
                   <span>Gutscheine / Sonstiges</span>
-                  <span className="text-purple-400">+{formatCurrency(summary.otherSales)}</span>
+                  <span className="text-purple-400">
+                    +{formatCurrency(summary.otherSales)}
+                  </span>
                 </div>
               )}
             </div>
@@ -194,8 +258,12 @@ export const CashierDashboard = () => {
 
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 flex flex-col sm:flex-row items-center justify-between gap-4">
             <div>
-              <h3 className="text-lg font-medium text-slate-200">Schicht beenden</h3>
-              <p className="text-slate-400 text-sm">Geld zählen und Sitzung abschließen</p>
+              <h3 className="text-lg font-medium text-slate-200">
+                Schicht beenden
+              </h3>
+              <p className="text-slate-400 text-sm">
+                Geld zählen und Sitzung abschließen
+              </p>
             </div>
             <button
               onClick={() => setShowCloseModal(true)}
@@ -212,15 +280,21 @@ export const CashierDashboard = () => {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
           <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-md overflow-hidden">
             <div className="p-6 border-b border-slate-800">
-              <h2 className="text-xl font-bold text-slate-100">Kassenabschluss</h2>
+              <h2 className="text-xl font-bold text-slate-100">
+                Kassenabschluss
+              </h2>
               <p className="text-slate-400 mt-1">Bitte zähle dein Bargeld.</p>
             </div>
-            
+
             <form onSubmit={handleCloseSession} className="p-6">
               <div className="mb-6">
                 <div className="flex justify-between text-sm mb-1">
-                  <span className="text-slate-400">Erwarteter Kassenstand:</span>
-                  <span className="text-slate-200 font-medium">{formatCurrency(summary.expectedCash)}</span>
+                  <span className="text-slate-400">
+                    Erwarteter Kassenstand:
+                  </span>
+                  <span className="text-slate-200 font-medium">
+                    {formatCurrency(summary.expectedCash)}
+                  </span>
                 </div>
               </div>
 
@@ -242,16 +316,31 @@ export const CashierDashboard = () => {
               </div>
 
               {closingBalanceInput && (
-                <div className={`p-4 rounded-xl mb-6 ${
-                  (Math.round(parseFloat(closingBalanceInput.replace(',', '.')) * 100) - summary.expectedCash) > 0 
-                    ? 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-400' 
-                    : (Math.round(parseFloat(closingBalanceInput.replace(',', '.')) * 100) - summary.expectedCash) < 0
-                    ? 'bg-red-500/10 border border-red-500/20 text-red-400'
-                    : 'bg-slate-800 text-slate-300'
-                }`}>
+                <div
+                  className={`p-4 rounded-xl mb-6 ${
+                    Math.round(
+                      parseFloat(closingBalanceInput.replace(",", ".")) * 100,
+                    ) -
+                      summary.expectedCash >
+                    0
+                      ? "bg-emerald-500/10 border border-emerald-500/20 text-emerald-400"
+                      : Math.round(
+                            parseFloat(closingBalanceInput.replace(",", ".")) *
+                              100,
+                          ) -
+                            summary.expectedCash <
+                          0
+                        ? "bg-red-500/10 border border-red-500/20 text-red-400"
+                        : "bg-slate-800 text-slate-300"
+                  }`}
+                >
                   <div className="text-sm">Differenz (Trinkgeld / Manko):</div>
                   <div className="text-xl font-bold">
-                    {formatCurrency(Math.round(parseFloat(closingBalanceInput.replace(',', '.')) * 100) - summary.expectedCash)}
+                    {formatCurrency(
+                      Math.round(
+                        parseFloat(closingBalanceInput.replace(",", ".")) * 100,
+                      ) - summary.expectedCash,
+                    )}
                   </div>
                 </div>
               )}

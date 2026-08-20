@@ -1,11 +1,12 @@
-import axios from 'axios';
+import axios from "axios";
 
-const BACKEND_URL = process.env.BACKEND_URL || 'http://127.0.0.1:3000';
+const BACKEND_URL = process.env.BACKEND_URL || "http://127.0.0.1:3000";
+const PRINT_WORKER_TOKEN = process.env.PRINT_WORKER_TOKEN;
 const POLL_INTERVAL_MS = 2500;
 
 interface PrintJob {
   id: string;
-  jobType: 'STATION_TICKET' | 'PRODUCT_VOUCHER' | 'RECEIPT' | 'CASHIER_CLOSING';
+  jobType: "STATION_TICKET" | "PRODUCT_VOUCHER" | "RECEIPT" | "CASHIER_CLOSING";
   printer: {
     id: string;
     name: string;
@@ -22,13 +23,13 @@ class FormattedTicketPrinter {
 
   formatDate(isoStr: string) {
     const d = new Date(isoStr);
-    return d.toLocaleString('de-AT', {
-      day: '2-digit',
-      month: '2-digit',
-      year: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit'
+    return d.toLocaleString("de-AT", {
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
     });
   }
 
@@ -40,13 +41,19 @@ class FormattedTicketPrinter {
     console.log(`======================================================`);
 
     switch (jobType) {
-      case 'STATION_TICKET':
-        console.log(`📋 ${content.title || 'ABHOL-/KÜCHENBON'}: ${content.stationName}`);
+      case "STATION_TICKET":
+        console.log(
+          `📋 ${content.title || "ABHOL-/KÜCHENBON"}: ${content.stationName}`,
+        );
         console.log(`------------------------------------------------------`);
-        console.log(`Bestellung:      #${content.orderNumber || content.orderId}${content.isPriority ? '  ⭐ [PRIORITÄT / EILT!]' : ''}`);
+        console.log(
+          `Bestellung:      #${content.orderNumber || content.orderId}${content.isPriority ? "  ⭐ [PRIORITÄT / EILT!]" : ""}`,
+        );
         console.log(`Tisch / Bereich: ${content.tableName}`);
         console.log(`Bedienung:       ${content.waiterName}`);
-        console.log(`Zeitpunkt:       ${this.formatDate(content.createdAt || job.createdAt)}`);
+        console.log(
+          `Zeitpunkt:       ${this.formatDate(content.createdAt || job.createdAt)}`,
+        );
         console.log(`------------------------------------------------------`);
         console.log(`POSITIONEN:`);
         for (const item of content.items || []) {
@@ -62,49 +69,82 @@ class FormattedTicketPrinter {
         }
         break;
 
-      case 'RECEIPT':
-        console.log(`🧾 ${content.title || 'KASSENBELEG'} - ${content.eventName || 'Vereinsfest'}`);
+      case "RECEIPT":
+        console.log(
+          `🧾 ${content.title || "KASSENBELEG"} - ${content.eventName || "Vereinsfest"}`,
+        );
         console.log(`------------------------------------------------------`);
-        console.log(`Bestellung:      #${content.orderNumber || content.orderId}`);
+        console.log(
+          `Bestellung:      #${content.orderNumber || content.orderId}`,
+        );
         console.log(`Tisch / Bereich: ${content.tableName}`);
         console.log(`Bedienung:       ${content.waiterName}`);
-        console.log(`Datum / Uhrzeit: ${this.formatDate(content.createdAt || job.createdAt)}`);
+        console.log(
+          `Datum / Uhrzeit: ${this.formatDate(content.createdAt || job.createdAt)}`,
+        );
         console.log(`------------------------------------------------------`);
         for (const item of content.items || []) {
           const itemLine = `  ${item.quantity}x ${item.productName}`;
-          const priceLine = `${this.formatCurrency(item.totalPrice || (item.price * item.quantity))}`;
-          const dots = '.'.repeat(Math.max(2, 45 - itemLine.length - priceLine.length));
+          const priceLine = `${this.formatCurrency(item.totalPrice || item.price * item.quantity)}`;
+          const dots = ".".repeat(
+            Math.max(2, 45 - itemLine.length - priceLine.length),
+          );
           console.log(`${itemLine} ${dots} ${priceLine}`);
           if (item.variantName) {
             console.log(`     • ${item.variantName}`);
           }
         }
         console.log(`------------------------------------------------------`);
-        console.log(`GESAMTBETRAG:    ${this.formatCurrency(content.totalAmount)}`);
-        
+        console.log(
+          `GESAMTBETRAG:    ${this.formatCurrency(content.totalAmount)}`,
+        );
+
         if (content.payments && content.payments.length > 0) {
           for (const p of content.payments) {
-            const methodLabel = p.method === 'CASH' ? 'Bar' : p.method === 'CARD' ? 'Karte' : 'Gutschein';
-            console.log(`Zahlung (${methodLabel}): ${this.formatCurrency(p.amount)}`);
+            const methodLabel =
+              p.method === "CASH"
+                ? "Bar"
+                : p.method === "CARD"
+                  ? "Karte"
+                  : "Gutschein";
+            console.log(
+              `Zahlung (${methodLabel}): ${this.formatCurrency(p.amount)}`,
+            );
           }
         }
         if (content.changeAmount && content.changeAmount > 0) {
-          console.log(`RÜCKGELD:        ${this.formatCurrency(content.changeAmount)}`);
+          if (content.tenderedAmount) {
+            console.log(
+              `GEGEBEN:         ${this.formatCurrency(content.tenderedAmount)}`,
+            );
+          }
+          console.log(
+            `RÜCKGELD:        ${this.formatCurrency(content.changeAmount)}`,
+          );
         }
         console.log(`------------------------------------------------------`);
-        console.log(`Hinweis: ${content.rksvDisclaimer || 'VereinOrder ist keine RKSV-Registrierkasse.'}`);
+        console.log(
+          `Hinweis: ${content.rksvDisclaimer || "VereinOrder ist keine RKSV-Registrierkasse."}`,
+        );
         console.log(`Vielen Dank für Ihre Unterstützung!`);
         break;
 
-      case 'PRODUCT_VOUCHER':
-        console.log(`🎟️ ${content.title || 'PRODUKTBON'}`);
+      case "PRODUCT_VOUCHER":
+        console.log(`🎟️ ${content.title || "PRODUKTBON"}`);
         console.log(`------------------------------------------------------`);
-        console.log(`Bestellung: #${content.orderNumber}  |  Tisch: ${content.tableName}`);
+        console.log(`Veranstaltung: ${content.eventName || "Vereinsfest"}`);
+        console.log(`Bestellung:    #${content.orderNumber}`);
+        console.log(
+          `Bon-Code:      ${content.voucherCode || "NICHT VERFÜGBAR"}`,
+        );
         console.log(`------------------------------------------------------`);
         console.log(`  ▶  ${content.quantity}x ${content.productName}`);
         if (content.variantName) console.log(`     • ${content.variantName}`);
         console.log(`------------------------------------------------------`);
-        console.log(`Ausgabe an: ${content.stationName || 'Zentral'}`);
+        console.log(`Ausgabe an: ${content.stationName || "Zentral"}`);
+        console.log(
+          `Hinweis: ${content.rksvDisclaimer || "VereinOrder ist keine RKSV-Registrierkasse."}`,
+        );
         break;
 
       default:
@@ -115,58 +155,86 @@ class FormattedTicketPrinter {
     console.log(`======================================================\n`);
 
     // Simulate thermal printing time
-    await new Promise(resolve => setTimeout(resolve, 800));
+    await new Promise((resolve) => setTimeout(resolve, 800));
   }
 }
 
-async function fetchPendingJobs(): Promise<PrintJob[]> {
+const workerHeaders = () => {
+  if (!PRINT_WORKER_TOKEN || PRINT_WORKER_TOKEN.length < 32) {
+    throw new Error(
+      "PRINT_WORKER_TOKEN muss gesetzt sein und mindestens 32 Zeichen enthalten.",
+    );
+  }
+  return { "x-print-worker-token": PRINT_WORKER_TOKEN };
+};
+
+async function claimNextJob(): Promise<PrintJob | null> {
   try {
-    const res = await axios.get(`${BACKEND_URL}/print-jobs`);
+    const res = await axios.post(
+      `${BACKEND_URL}/print-jobs/claim`,
+      {},
+      { headers: workerHeaders() },
+    );
     return res.data;
   } catch (err: any) {
-    console.error(`[Worker] Fehler beim Abrufen der Print-Jobs: ${err.message}`);
-    return [];
+    console.error(
+      `[Worker] Fehler beim Abrufen der Print-Jobs: ${err.message}`,
+    );
+    return null;
   }
 }
 
 async function markJobAsPrinted(id: string) {
   try {
-    await axios.patch(`${BACKEND_URL}/print-jobs/${id}/status`, { status: 'PRINTED' });
-    console.log(`[Worker] Job ${id} erfolgreich gedruckt & als PRINTED markiert.`);
+    await axios.patch(
+      `${BACKEND_URL}/print-jobs/${id}/status`,
+      { status: "PRINTED" },
+      { headers: workerHeaders() },
+    );
+    console.log(
+      `[Worker] Job ${id} erfolgreich gedruckt & als PRINTED markiert.`,
+    );
   } catch (err: any) {
-    console.error(`[Worker] Fehler beim Aktualisieren des Status für Job ${id}: ${err.message}`);
+    console.error(
+      `[Worker] Fehler beim Aktualisieren des Status für Job ${id}: ${err.message}`,
+    );
   }
 }
 
 async function main() {
+  workerHeaders();
   console.log(`[Worker] VereinOrder Print-Worker gestartet.`);
-  console.log(`[Worker] Abfrage-Intervall: ${POLL_INTERVAL_MS}ms auf ${BACKEND_URL}`);
-  
+  console.log(
+    `[Worker] Abfrage-Intervall: ${POLL_INTERVAL_MS}ms auf ${BACKEND_URL}`,
+  );
+
   const printer = new FormattedTicketPrinter();
 
-  setInterval(async () => {
-    const jobs = await fetchPendingJobs();
-    if (jobs.length > 0) {
-      console.log(`[Worker] ${jobs.length} neue(n) Druckauftrag/aufträge gefunden.`);
-    }
-
-    for (const job of jobs) {
+  while (true) {
+    const job = await claimNextJob();
+    if (job) {
       try {
         await printer.print(job);
         await markJobAsPrinted(job.id);
       } catch (err: any) {
-        console.error(`[Worker] Fehler beim Verarbeiten von Job ${job.id}:`, err);
+        console.error(
+          `[Worker] Fehler beim Verarbeiten von Job ${job.id}:`,
+          err,
+        );
         try {
-          await axios.patch(`${BACKEND_URL}/print-jobs/${job.id}/status`, { 
-            status: 'FAILED', 
-            errorMessage: err.message 
-          });
+          await axios.patch(
+            `${BACKEND_URL}/print-jobs/${job.id}/status`,
+            { status: "FAILED", errorMessage: err.message },
+            { headers: workerHeaders() },
+          );
         } catch (e) {
           // ignore
         }
       }
+      continue;
     }
-  }, POLL_INTERVAL_MS);
+    await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+  }
 }
 
 main().catch(console.error);

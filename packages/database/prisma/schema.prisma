@@ -30,6 +30,7 @@ model User {
   deliveryOrders  Order[]          @relation("OrderRunner")
   auditLogs       AuditLog[]
   cashierSessions CashierSession[]
+  issuedVouchers  ProductVoucher[] @relation("VoucherIssuer")
 }
 
 model AuthThrottle {
@@ -73,6 +74,7 @@ model Event {
   orders          Order[]
   areas           Area[]
   cashierSessions CashierSession[]
+  productVouchers ProductVoucher[]
 }
 
 model Area {
@@ -102,7 +104,8 @@ model Station {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  products Product[]
+  products         Product[]
+  redeemedVouchers ProductVoucher[] @relation("VoucherRedemptionStation")
 }
 
 model ProductCategory {
@@ -151,6 +154,7 @@ model Product {
   variants   ProductVariant[]
   extras     ProductExtra[]
   orderItems OrderItem[]
+  vouchers   ProductVoucher[]
 }
 
 model ProductVariant {
@@ -223,6 +227,7 @@ model Order {
 
   items    OrderItem[]
   payments Payment[]
+  vouchers ProductVoucher[]
 
   cashierSessionId String?
   cashierSession   CashierSession? @relation(fields: [cashierSessionId], references: [id])
@@ -244,10 +249,12 @@ enum PaymentStatus {
 }
 
 model Payment {
-  id     String        @id @default(uuid())
-  amount Int // in cents
-  method PaymentMethod
-  status PaymentStatus @default(COMPLETED)
+  id             String        @id @default(uuid())
+  amount         Int // charged amount in cents
+  tenderedAmount Int? // cash handed over in cents
+  changeAmount   Int           @default(0) // returned cash in cents
+  method         PaymentMethod
+  status         PaymentStatus @default(COMPLETED)
 
   orderId String
   order   Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
@@ -257,6 +264,45 @@ model Payment {
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+enum ProductVoucherStatus {
+  ISSUED
+  REDEEMED
+  CANCELLED
+}
+
+model ProductVoucher {
+  id     String               @id @default(uuid())
+  code   String               @unique
+  status ProductVoucherStatus @default(ISSUED)
+
+  eventId String
+  event   Event  @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  productId String
+  product   Product @relation(fields: [productId], references: [id])
+
+  orderId String
+  order   Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  orderItemId String
+  orderItem   OrderItem @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
+
+  issuedByUserId String?
+  issuedBy       User?   @relation("VoucherIssuer", fields: [issuedByUserId], references: [id], onDelete: SetNull)
+
+  cashierSessionId String?
+  cashierSession   CashierSession? @relation(fields: [cashierSessionId], references: [id], onDelete: SetNull)
+
+  issuedAt DateTime @default(now())
+
+  redeemedAt          DateTime?
+  redeemedAtStationId String?
+  redeemedAtStation   Station?  @relation("VoucherRedemptionStation", fields: [redeemedAtStationId], references: [id], onDelete: SetNull)
+
+  @@index([eventId, status])
+  @@index([orderId])
 }
 
 enum OrderItemStatus {
@@ -282,7 +328,8 @@ model OrderItem {
   order   Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
 
   productId String
-  product   Product @relation(fields: [productId], references: [id])
+  product   Product          @relation(fields: [productId], references: [id])
+  vouchers  ProductVoucher[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -290,6 +337,7 @@ model OrderItem {
 
 enum PrintJobStatus {
   PENDING
+  PROCESSING
   PRINTED
   FAILED
 }
@@ -358,4 +406,5 @@ model CashierSession {
 
   orders   Order[]
   payments Payment[]
+  vouchers ProductVoucher[]
 }

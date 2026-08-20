@@ -27,6 +27,7 @@ services:
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-vereinorder}?schema=public
       JWT_SECRET: ${JWT_SECRET:-vereinorder_super_secret_production_key_festbetrieb_2026}
+      PRINT_WORKER_TOKEN: ${PRINT_WORKER_TOKEN:?PRINT_WORKER_TOKEN muss gesetzt sein}
       BACKUP_DIR: /app/backups
       PORT: 3000
     volumes:
@@ -56,6 +57,7 @@ services:
     restart: always
     environment:
       BACKEND_URL: http://backend:3000
+      PRINT_WORKER_TOKEN: ${PRINT_WORKER_TOKEN:?PRINT_WORKER_TOKEN muss gesetzt sein}
     depends_on:
       - backend
 
