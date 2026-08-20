@@ -1,0 +1,993 @@
+{
+  "version": "0.1.0",
+  "timestamp": "2026-08-20T04:24:10.888Z",
+  "database": "postgresql",
+  "createdBy": "d2728167-9d45-411d-af80-9335b4068c2d",
+  "counts": {
+    "events": 3,
+    "areas": 2,
+    "stations": 5,
+    "categories": 4,
+    "products": 8,
+    "variants": 4,
+    "extras": 10,
+    "users": 1,
+    "orders": 6,
+    "orderItems": 6,
+    "payments": 2,
+    "sessions": 0,
+    "printers": 2,
+    "printJobs": 11,
+    "auditLogs": 8
+  },
+  "data": {
+    "events": [
+      {
+        "id": "79f693fc-dc76-432c-9acb-6a5395c0ebe5",
+        "name": "Sommerfest 2026",
+        "organizer": "Musikverein Test",
+        "location": null,
+        "startTime": null,
+        "endTime": null,
+        "timezone": "Europe/Vienna",
+        "status": "PAUSED",
+        "testMode": true,
+        "rksvConfirmedAt": null,
+        "rksvConfirmedByUserId": null,
+        "rksvDisclaimerVersion": "1.0",
+        "createdAt": "2026-08-18T17:51:42.366Z",
+        "updatedAt": "2026-08-19T14:57:34.512Z"
+      },
+      {
+        "id": "ea2f2a86-4322-4030-8926-4ee3154dcf39",
+        "name": "Fruehschoppen 2026",
+        "organizer": "Musikverein",
+        "location": "Festplatz",
+        "startTime": null,
+        "endTime": null,
+        "timezone": "Europe/Vienna",
+        "status": "PAUSED",
+        "testMode": false,
+        "rksvConfirmedAt": "2026-08-19T14:46:19.176Z",
+        "rksvConfirmedByUserId": "d2728167-9d45-411d-af80-9335b4068c2d",
+        "rksvDisclaimerVersion": "1.0",
+        "createdAt": "2026-08-19T14:45:31.155Z",
+        "updatedAt": "2026-08-19T15:20:36.412Z"
+      },
+      {
+        "id": "58a155da-c2ea-4db8-9084-8921ac7ff1ca",
+        "name": "Sommerfest 2026",
+        "organizer": "Musikverein Test",
+        "location": null,
+        "startTime": null,
+        "endTime": null,
+        "timezone": "Europe/Vienna",
+        "status": "TEST_MODE",
+        "testMode": true,
+        "rksvConfirmedAt": null,
+        "rksvConfirmedByUserId": null,
+        "rksvDisclaimerVersion": "1.0",
+        "createdAt": "2026-08-19T04:28:55.915Z",
+        "updatedAt": "2026-08-19T15:21:28.093Z"
+      }
+    ],
+    "areas": [
+      {
+        "id": "540d0278-142e-49cc-a8c2-e89045edaa3f",
+        "name": "Festzelt",
+        "sortOrder": 3,
+        "eventId": "58a155da-c2ea-4db8-9084-8921ac7ff1ca",
+        "createdAt": "2026-08-19T09:59:40.238Z",
+        "updatedAt": "2026-08-19T10:03:13.458Z"
+      },
+      {
+        "id": "553bca33-5033-4d31-9ff0-637354f83fd4",
+        "name": "Halle",
+        "sortOrder": 0,
+        "eventId": "58a155da-c2ea-4db8-9084-8921ac7ff1ca",
+        "createdAt": "2026-08-19T10:02:51.121Z",
+        "updatedAt": "2026-08-19T10:03:45.713Z"
+      }
+    ],
+    "stations": [
+      {
+        "id": "5e996784-20c4-4eb6-91ca-c662840b48c3",
+        "name": "Schank",
+        "shortName": "SCH",
+        "color": null,
+        "sortOrder": 0,
+        "isActive": true,
+        "eventId": "79f693fc-dc76-432c-9acb-6a5395c0ebe5",
+        "printerId": null,
+        "createdAt": "2026-08-18T17:51:42.371Z",
+        "updatedAt": "2026-08-18T17:51:42.371Z"
+      },
+      {
+        "id": "a2492c9b-1ae1-49a8-aae3-d8b16be3b1ed",
+        "name": "Küche",
+        "shortName": "KUE",
+        "color": null,
+        "sortOrder": 0,
+        "isActive": true,
+        "eventId": "79f693fc-dc76-432c-9acb-6a5395c0ebe5",
+        "printerId": null,
+        "createdAt": "2026-08-18T17:51:42.376Z",
+        "updatedAt": "2026-08-18T17:51:42.376Z"
+      },
+      {
+        "id": "7155bb7b-0a96-45b1-a01c-9a33b8f48317",
+        "name": "Schank",
+        "shortName": "SCH",
+        "color": null,
+        "sortOrder": 0,
+        "isActive": true,
+        "eventId": "58a155da-c2ea-4db8-9084-8921ac7ff1ca",
+        "printerId": null,
+        "createdAt": "2026-08-19T04:28:55.920Z",
+        "updatedAt": "2026-08-19T04:28:55.920Z"
+      },
+      {
+        "id": "0df7ebcf-fb4c-42c1-b190-56faa034ff7b",
+        "name": "Küche",
+        "shortName": "KUE",
+        "color": null,
+        "sortOrder": 0,
+        "isActive": true,
+        "eventId": "58a155da-c2ea-4db8-9084-8921ac7ff1ca",
+        "printerId": null,
+        "createdAt": "2026-08-19T04:28:55.928Z",
+        "updatedAt": "2026-08-19T04:28:55.928Z"
+      },
+      {
+        "id": "964e8cdd-17f4-4df6-ba0e-f56df5512e74",
+        "name": "Schank",
+        "shortName": null,
+        "color": null,
+        "sortOrder": 0,
+        "isActive": true,
+        "eventId": "ea2f2a86-4322-4030-8926-4ee3154dcf39",
+        "printerId": null,
+        "createdAt": "2026-08-19T15:26:40.025Z",
+        "updatedAt": "2026-08-19T15:26:40.025Z"
+      }
+    ],
+    "categories": [
+      {
+        "id": "6b4c62dc-bc09-4ef2-9de3-625270676b68",
+        "name": "Getränke",
+        "sortOrder": 1,
+        "eventId": "79f693fc-dc76-432c-9acb-6a5395c0ebe5",
+        "createdAt": "2026-08-18T17:51:42.379Z",
+        "updatedAt": "2026-08-18T17:51:42.379Z"
+      },
+      {
+        "id": "763fc482-00ed-4789-a73a-166d6639a642",
+        "name": "Speisen",
+        "sortOrder": 2,
+        "eventId": "79f693fc-dc76-432c-9acb-6a5395c0ebe5",
+        "createdAt": "2026-08-18T17:51:42.383Z",
+        "updatedAt": "2026-08-18T17:51:42.383Z"
+      },
+      {
+        "id": "c8f05992-40c8-449f-8371-b71f09d01142",
+        "name": "Getränke",
+        "sortOrder": 1,
+        "eventId": "58a155da-c2ea-4db8-9084-8921ac7ff1ca",
+        "createdAt": "2026-08-19T04:28:55.931Z",
+        "updatedAt": "2026-08-19T04:28:55.931Z"
+      },
+      {
+        "id": "784bfb1b-3477-4850-8126-36d25a2b1834",
+        "name": "Speisen",
+        "sortOrder": 2,
+        "eventId": "58a155da-c2ea-4db8-9084-8921ac7ff1ca",
+        "createdAt": "2026-08-19T04:28:55.936Z",
+        "updatedAt": "2026-08-19T04:28:55.936Z"
+      }
+    ],
+    "products": [
+      {
+        "id": "a84d3315-2548-4bb9-b2c4-03df811d7186",
+        "name": "Cola",
+        "shortName": null,
+        "description": null,
+        "price": 350,
+        "taxRate": 2000,
+        "color": null,
+        "sortOrder": 2,
+        "imageUrl": null,
+        "availability": "AVAILABLE",
+        "categoryId": "6b4c62dc-bc09-4ef2-9de3-625270676b68",
+        "targetStationId": "5e996784-20c4-4eb6-91ca-c662840b48c3",
+        "eventId": "79f693fc-dc76-432c-9acb-6a5395c0ebe5",
+        "createdAt": "2026-08-18T17:51:42.397Z",
+        "updatedAt": "2026-08-18T17:51:42.397Z"
+      },
+      {
+        "id": "fb902d11-3ec5-4c6f-a676-453a0c44157f",
+        "name": "Wienerschnitzel mit Pommes",
+        "shortName": "Schnitzel",
+        "description": null,
+        "price": 1200,
+        "taxRate": 2000,
+        "color": null,
+        "sortOrder": 1,
+        "imageUrl": null,
+        "availability": "AVAILABLE",
+        "categoryId": "763fc482-00ed-4789-a73a-166d6639a642",
+        "targetStationId": "a2492c9b-1ae1-49a8-aae3-d8b16be3b1ed",
+        "eventId": "79f693fc-dc76-432c-9acb-6a5395c0ebe5",
+        "createdAt": "2026-08-18T17:51:42.400Z",
+        "updatedAt": "2026-08-18T17:51:42.400Z"
+      },
+      {
+        "id": "10739e0d-5767-4e6f-836b-fcc2ac244260",
+        "name": "Pommes Frites",
+        "shortName": "Pommes",
+        "description": null,
+        "price": 450,
+        "taxRate": 2000,
+        "color": null,
+        "sortOrder": 2,
+        "imageUrl": null,
+        "availability": "AVAILABLE",
+        "categoryId": "763fc482-00ed-4789-a73a-166d6639a642",
+        "targetStationId": "a2492c9b-1ae1-49a8-aae3-d8b16be3b1ed",
+        "eventId": "79f693fc-dc76-432c-9acb-6a5395c0ebe5",
+        "createdAt": "2026-08-18T17:51:42.406Z",
+        "updatedAt": "2026-08-18T17:51:42.406Z"
+      },
+      {
+        "id": "aab75f15-6187-4246-8f4d-41dcab31d453",
+        "name": "Bier vom Fass",
+        "shortName": "Bier",
+        "description": null,
+        "price": 450,
+        "taxRate": 2000,
+        "color": null,
+        "sortOrder": 1,
+        "imageUrl": null,
+        "availability": "AVAILABLE",
+        "categoryId": "c8f05992-40c8-449f-8371-b71f09d01142",
+        "targetStationId": "7155bb7b-0a96-45b1-a01c-9a33b8f48317",
+        "eventId": "58a155da-c2ea-4db8-9084-8921ac7ff1ca",
+        "createdAt": "2026-08-19T04:28:55.940Z",
+        "updatedAt": "2026-08-19T04:28:55.940Z"
+      },
+      {
+        "id": "a9ad260c-38e3-47c5-a411-a0303db605f4",
+        "name": "Cola",
+        "shortName": null,
+        "description": null,
+        "price": 350,
+        "taxRate": 2000,
+        "color": null,
+        "sortOrder": 2,
+        "imageUrl": null,
+        "availability": "AVAILABLE",
+        "categoryId": "c8f05992-40c8-449f-8371-b71f09d01142",
+        "targetStationId": "7155bb7b-0a96-45b1-a01c-9a33b8f48317",
+        "eventId": "58a155da-c2ea-4db8-9084-8921ac7ff1ca",
+        "createdAt": "2026-08-19T04:28:55.963Z",
+        "updatedAt": "2026-08-19T04:28:55.963Z"
+      },
+      {
+        "id": "6dd12c0c-88a6-441b-9c4b-2f562fc8db14",
+        "name": "Wienerschnitzel mit Pommes",
+        "shortName": "Schnitzel",
+        "description": null,
+        "price": 1200,
+        "taxRate": 2000,
+        "color": null,
+        "sortOrder": 1,
+        "imageUrl": null,
+        "availability": "AVAILABLE",
+        "categoryId": "784bfb1b-3477-4850-8126-36d25a2b1834",
+        "targetStationId": "0df7ebcf-fb4c-42c1-b190-56faa034ff7b",
+        "eventId": "58a155da-c2ea-4db8-9084-8921ac7ff1ca",
+        "createdAt": "2026-08-19T04:28:55.968Z",
+        "updatedAt": "2026-08-19T04:28:55.968Z"
+      },
+      {
+        "id": "a9149258-ebf0-4f55-99da-c000c0aab519",
+        "name": "Pommes Frites",
+        "shortName": "Pommes",
+        "description": null,
+        "price": 450,
+        "taxRate": 2000,
+        "color": null,
+        "sortOrder": 2,
+        "imageUrl": null,
+        "availability": "AVAILABLE",
+        "categoryId": "784bfb1b-3477-4850-8126-36d25a2b1834",
+        "targetStationId": "0df7ebcf-fb4c-42c1-b190-56faa034ff7b",
+        "eventId": "58a155da-c2ea-4db8-9084-8921ac7ff1ca",
+        "createdAt": "2026-08-19T04:28:55.975Z",
+        "updatedAt": "2026-08-19T04:28:55.975Z"
+      },
+      {
+        "id": "a60b2bad-a5e9-4e7c-b2ec-61c8e2e4b5b3",
+        "name": "Bier vom Fass",
+        "shortName": "Bier",
+        "description": null,
+        "price": 450,
+        "taxRate": 2000,
+        "color": null,
+        "sortOrder": 1,
+        "imageUrl": null,
+        "availability": "OUT_OF_STOCK",
+        "categoryId": "6b4c62dc-bc09-4ef2-9de3-625270676b68",
+        "targetStationId": "5e996784-20c4-4eb6-91ca-c662840b48c3",
+        "eventId": "79f693fc-dc76-432c-9acb-6a5395c0ebe5",
+        "createdAt": "2026-08-18T17:51:42.387Z",
+        "updatedAt": "2026-08-19T14:52:26.335Z"
+      }
+    ],
+    "variants": [
+      {
+        "id": "68e6df3a-e0ed-457c-b9b2-f8abcc65f308",
+        "name": "0,3l",
+        "price": 350,
+        "sortOrder": 1,
+        "productId": "a60b2bad-a5e9-4e7c-b2ec-61c8e2e4b5b3"
+      },
+      {
+        "id": "559c9b68-d6e8-4e56-a1e5-cea78e739e32",
+        "name": "0,5l",
+        "price": 450,
+        "sortOrder": 2,
+        "productId": "a60b2bad-a5e9-4e7c-b2ec-61c8e2e4b5b3"
+      },
+      {
+        "id": "da135bed-6634-4bf2-8472-1ec1e3440777",
+        "name": "0,3l",
+        "price": 350,
+        "sortOrder": 1,
+        "productId": "aab75f15-6187-4246-8f4d-41dcab31d453"
+      },
+      {
+        "id": "a8e0b3e6-bd83-426e-b816-fd78d1fb0ec7",
+        "name": "0,5l",
+        "price": 450,
+        "sortOrder": 2,
+        "productId": "aab75f15-6187-4246-8f4d-41dcab31d453"
+      }
+    ],
+    "extras": [
+      {
+        "id": "1f213388-5c43-4175-bedb-a3e9e0c0b303",
+        "name": "ohne Beilage",
+        "price": -200,
+        "sortOrder": 1,
+        "productId": "fb902d11-3ec5-4c6f-a676-453a0c44157f"
+      },
+      {
+        "id": "dfeef5b6-b102-41eb-a52a-6838ddc3c8e9",
+        "name": "Ketchup",
+        "price": 50,
+        "sortOrder": 2,
+        "productId": "fb902d11-3ec5-4c6f-a676-453a0c44157f"
+      },
+      {
+        "id": "d0d7080b-fa90-4c52-a2de-ff260798b9d3",
+        "name": "Zitrone extra",
+        "price": 0,
+        "sortOrder": 3,
+        "productId": "fb902d11-3ec5-4c6f-a676-453a0c44157f"
+      },
+      {
+        "id": "8d725a5a-d1e8-415e-86d7-33cc7a74e7c0",
+        "name": "Ketchup",
+        "price": 50,
+        "sortOrder": 1,
+        "productId": "10739e0d-5767-4e6f-836b-fcc2ac244260"
+      },
+      {
+        "id": "8efa1c08-d5f3-4e95-a779-fefce98bb440",
+        "name": "Mayo",
+        "price": 50,
+        "sortOrder": 2,
+        "productId": "10739e0d-5767-4e6f-836b-fcc2ac244260"
+      },
+      {
+        "id": "746c55fc-7bb9-4aa5-8323-a30e6e6ea8e5",
+        "name": "ohne Beilage",
+        "price": -200,
+        "sortOrder": 1,
+        "productId": "6dd12c0c-88a6-441b-9c4b-2f562fc8db14"
+      },
+      {
+        "id": "233b3a29-d674-4e17-a231-7196e4a1bc46",
+        "name": "Ketchup",
+        "price": 50,
+        "sortOrder": 2,
+        "productId": "6dd12c0c-88a6-441b-9c4b-2f562fc8db14"
+      },
+      {
+        "id": "87e1e781-dc1a-4971-922e-411c0ad012ee",
+        "name": "Zitrone extra",
+        "price": 0,
+        "sortOrder": 3,
+        "productId": "6dd12c0c-88a6-441b-9c4b-2f562fc8db14"
+      },
+      {
+        "id": "4e01b089-05c7-49d1-9c5b-cb6685ab2935",
+        "name": "Ketchup",
+        "price": 50,
+        "sortOrder": 1,
+        "productId": "a9149258-ebf0-4f55-99da-c000c0aab519"
+      },
+      {
+        "id": "a0072d7f-d8c7-43e6-b80c-2ab2a1af0905",
+        "name": "Mayo",
+        "price": 50,
+        "sortOrder": 2,
+        "productId": "a9149258-ebf0-4f55-99da-c000c0aab519"
+      }
+    ],
+    "users": [
+      {
+        "id": "d2728167-9d45-411d-af80-9335b4068c2d",
+        "username": "admin",
+        "pinHash": "$2a$10$YGPvkElsHxjnCiz1R78FguuAT8pyLg.8WwVmPL09ilW2e6qN39WBW",
+        "role": "ADMINISTRATOR",
+        "isActive": true,
+        "createdAt": "2026-08-18T17:51:42.339Z",
+        "updatedAt": "2026-08-18T17:51:42.339Z"
+      }
+    ],
+    "orders": [
+      {
+        "id": "8905cdc3-8680-4bfa-bb50-ab7946bc78a5",
+        "orderNumber": 9,
+        "totalAmount": 450,
+        "lifecycleStatus": "CANCELLED",
+        "paymentStatus": "OPEN",
+        "fulfillmentStatus": "PENDING",
+        "isPriority": false,
+        "idempotencyKey": "7f9a22dd-d304-433f-82ca-5a1ea9055f4f",
+        "tableName": "Tisch 1",
+        "userId": "d2728167-9d45-411d-af80-9335b4068c2d",
+        "eventId": "79f693fc-dc76-432c-9acb-6a5395c0ebe5",
+        "createdAt": "2026-08-19T04:30:49.192Z",
+        "updatedAt": "2026-08-19T04:36:16.330Z",
+        "cashierSessionId": null
+      },
+      {
+        "id": "1c7f88e6-2842-45a0-b6d6-bb48f29b1deb",
+        "orderNumber": 8,
+        "totalAmount": 450,
+        "lifecycleStatus": "SUBMITTED",
+        "paymentStatus": "OPEN",
+        "fulfillmentStatus": "READY",
+        "isPriority": false,
+        "idempotencyKey": "9b1c8b53-6dcb-49c9-b867-9674bc88b5e3",
+        "tableName": "Tisch 1",
+        "userId": "d2728167-9d45-411d-af80-9335b4068c2d",
+        "eventId": "79f693fc-dc76-432c-9acb-6a5395c0ebe5",
+        "createdAt": "2026-08-19T04:30:14.941Z",
+        "updatedAt": "2026-08-19T06:54:20.828Z",
+        "cashierSessionId": null
+      },
+      {
+        "id": "f8e61a47-02b4-4a37-b142-f22986841c3e",
+        "orderNumber": 10,
+        "totalAmount": 350,
+        "lifecycleStatus": "SUBMITTED",
+        "paymentStatus": "PAID",
+        "fulfillmentStatus": "PREPARING",
+        "isPriority": false,
+        "idempotencyKey": "d3ea83d5-8db8-43cb-9182-a047e3754fbf",
+        "tableName": "Tisch 5",
+        "userId": "d2728167-9d45-411d-af80-9335b4068c2d",
+        "eventId": "58a155da-c2ea-4db8-9084-8921ac7ff1ca",
+        "createdAt": "2026-08-19T07:46:20.990Z",
+        "updatedAt": "2026-08-19T07:48:15.379Z",
+        "cashierSessionId": null
+      },
+      {
+        "id": "61275052-761f-4180-98d3-0ba9a6b6a982",
+        "orderNumber": 11,
+        "totalAmount": 1200,
+        "lifecycleStatus": "SUBMITTED",
+        "paymentStatus": "OPEN",
+        "fulfillmentStatus": "PREPARING",
+        "isPriority": false,
+        "idempotencyKey": "2689813a-7107-4c12-864f-cfb52cb33057",
+        "tableName": "5",
+        "userId": "d2728167-9d45-411d-af80-9335b4068c2d",
+        "eventId": "79f693fc-dc76-432c-9acb-6a5395c0ebe5",
+        "createdAt": "2026-08-19T07:49:29.945Z",
+        "updatedAt": "2026-08-19T07:49:59.985Z",
+        "cashierSessionId": null
+      },
+      {
+        "id": "0c9e5d18-260f-4dbc-82fd-387d78ab1b95",
+        "orderNumber": 12,
+        "totalAmount": 350,
+        "lifecycleStatus": "SUBMITTED",
+        "paymentStatus": "OPEN",
+        "fulfillmentStatus": "READY",
+        "isPriority": false,
+        "idempotencyKey": "60ad8358-824b-4fad-9130-b114f98623b2",
+        "tableName": "3",
+        "userId": "d2728167-9d45-411d-af80-9335b4068c2d",
+        "eventId": "58a155da-c2ea-4db8-9084-8921ac7ff1ca",
+        "createdAt": "2026-08-19T07:53:54.466Z",
+        "updatedAt": "2026-08-19T07:55:46.260Z",
+        "cashierSessionId": null
+      },
+      {
+        "id": "8f33dc9b-1026-4397-8c7f-1d93ae322e86",
+        "orderNumber": 13,
+        "totalAmount": 350,
+        "lifecycleStatus": "SUBMITTED",
+        "paymentStatus": "PAID",
+        "fulfillmentStatus": "PENDING",
+        "isPriority": false,
+        "idempotencyKey": "9196f28f-7f52-4732-92cb-de9c4a4d992f",
+        "tableName": "Unbekannt",
+        "userId": "d2728167-9d45-411d-af80-9335b4068c2d",
+        "eventId": "58a155da-c2ea-4db8-9084-8921ac7ff1ca",
+        "createdAt": "2026-08-19T14:54:32.102Z",
+        "updatedAt": "2026-08-19T14:54:32.102Z",
+        "cashierSessionId": null
+      }
+    ],
+    "orderItems": [
+      {
+        "id": "8193b270-8b66-49f3-86df-9bb9ae7dfcc1",
+        "quantity": 1,
+        "priceAtTime": 450,
+        "status": "CANCELLED",
+        "variantId": null,
+        "variantName": null,
+        "extras": null,
+        "orderId": "8905cdc3-8680-4bfa-bb50-ab7946bc78a5",
+        "productId": "a60b2bad-a5e9-4e7c-b2ec-61c8e2e4b5b3",
+        "createdAt": "2026-08-19T04:30:49.192Z",
+        "updatedAt": "2026-08-19T04:36:16.327Z"
+      },
+      {
+        "id": "6d50fb51-c23c-49f2-91b6-26e8ad55964a",
+        "quantity": 1,
+        "priceAtTime": 450,
+        "status": "READY",
+        "variantId": null,
+        "variantName": null,
+        "extras": null,
+        "orderId": "1c7f88e6-2842-45a0-b6d6-bb48f29b1deb",
+        "productId": "a60b2bad-a5e9-4e7c-b2ec-61c8e2e4b5b3",
+        "createdAt": "2026-08-19T04:30:14.941Z",
+        "updatedAt": "2026-08-19T06:54:20.821Z"
+      },
+      {
+        "id": "0ff0e693-58b1-4783-ab74-ae3877f57303",
+        "quantity": 1,
+        "priceAtTime": 350,
+        "status": "PREPARING",
+        "variantId": null,
+        "variantName": null,
+        "extras": null,
+        "orderId": "f8e61a47-02b4-4a37-b142-f22986841c3e",
+        "productId": "a9ad260c-38e3-47c5-a411-a0303db605f4",
+        "createdAt": "2026-08-19T07:46:20.990Z",
+        "updatedAt": "2026-08-19T07:48:15.374Z"
+      },
+      {
+        "id": "e4032d07-ffa0-41f9-b09a-fbc742486b77",
+        "quantity": 1,
+        "priceAtTime": 1200,
+        "status": "PREPARING",
+        "variantId": null,
+        "variantName": null,
+        "extras": [],
+        "orderId": "61275052-761f-4180-98d3-0ba9a6b6a982",
+        "productId": "fb902d11-3ec5-4c6f-a676-453a0c44157f",
+        "createdAt": "2026-08-19T07:49:29.945Z",
+        "updatedAt": "2026-08-19T07:49:59.980Z"
+      },
+      {
+        "id": "dae89f2e-3db2-4a90-b3d8-31cd6c71b154",
+        "quantity": 1,
+        "priceAtTime": 350,
+        "status": "READY",
+        "variantId": null,
+        "variantName": null,
+        "extras": null,
+        "orderId": "0c9e5d18-260f-4dbc-82fd-387d78ab1b95",
+        "productId": "a9ad260c-38e3-47c5-a411-a0303db605f4",
+        "createdAt": "2026-08-19T07:53:54.466Z",
+        "updatedAt": "2026-08-19T07:55:46.258Z"
+      },
+      {
+        "id": "d112d10c-90a2-4da1-9318-52e72611f118",
+        "quantity": 1,
+        "priceAtTime": 350,
+        "status": "PENDING",
+        "variantId": null,
+        "variantName": null,
+        "extras": null,
+        "orderId": "8f33dc9b-1026-4397-8c7f-1d93ae322e86",
+        "productId": "a9ad260c-38e3-47c5-a411-a0303db605f4",
+        "createdAt": "2026-08-19T14:54:32.102Z",
+        "updatedAt": "2026-08-19T14:54:32.102Z"
+      }
+    ],
+    "payments": [
+      {
+        "id": "968106f1-643a-4d5c-8dde-cbe6eea8cf92",
+        "amount": 350,
+        "method": "CASH",
+        "status": "COMPLETED",
+        "orderId": "f8e61a47-02b4-4a37-b142-f22986841c3e",
+        "cashierSessionId": null,
+        "createdAt": "2026-08-19T07:46:20.990Z",
+        "updatedAt": "2026-08-19T07:46:20.990Z"
+      },
+      {
+        "id": "9041fc38-3289-4ba2-b9cf-122ef83c4dfd",
+        "amount": 350,
+        "method": "CASH",
+        "status": "COMPLETED",
+        "orderId": "8f33dc9b-1026-4397-8c7f-1d93ae322e86",
+        "cashierSessionId": null,
+        "createdAt": "2026-08-19T14:54:32.102Z",
+        "updatedAt": "2026-08-19T14:54:32.102Z"
+      }
+    ],
+    "sessions": [],
+    "printers": [
+      {
+        "id": "a9fac21a-d5f8-4fac-86d6-1236282df14c",
+        "name": "Hauptkasse Drucker",
+        "type": "CONSOLE",
+        "ipAddress": null,
+        "port": null,
+        "isActive": true,
+        "createdAt": "2026-08-18T17:51:42.361Z",
+        "updatedAt": "2026-08-18T17:51:42.361Z"
+      },
+      {
+        "id": "f6ff9ac9-1d19-4945-b9df-9cbf4722b195",
+        "name": "Hauptkasse Drucker",
+        "type": "CONSOLE",
+        "ipAddress": null,
+        "port": null,
+        "isActive": true,
+        "createdAt": "2026-08-19T04:28:55.901Z",
+        "updatedAt": "2026-08-19T04:28:55.901Z"
+      }
+    ],
+    "printJobs": [
+      {
+        "id": "1c3fc7b6-354d-4399-8753-76db337a747e",
+        "printerId": "a9fac21a-d5f8-4fac-86d6-1236282df14c",
+        "jobType": "STATION_TICKET",
+        "content": {
+          "items": [
+            {
+              "price": 450,
+              "extras": null,
+              "quantity": 1,
+              "productName": "Bier vom Fass",
+              "variantName": null
+            }
+          ],
+          "orderNumber": "1c7f88e6-2842-45a0-b6d6-bb48f29b1deb",
+          "totalAmount": 450
+        },
+        "status": "PRINTED",
+        "orderId": "1c7f88e6-2842-45a0-b6d6-bb48f29b1deb",
+        "errorMessage": null,
+        "createdAt": "2026-08-19T04:30:14.956Z",
+        "updatedAt": "2026-08-19T04:30:16.268Z"
+      },
+      {
+        "id": "e6fa4278-f7ea-4a60-a52e-8bc28b1a5e8a",
+        "printerId": "a9fac21a-d5f8-4fac-86d6-1236282df14c",
+        "jobType": "STATION_TICKET",
+        "content": {
+          "items": [
+            {
+              "price": 450,
+              "extras": null,
+              "quantity": 1,
+              "productName": "Bier vom Fass",
+              "variantName": null
+            }
+          ],
+          "orderNumber": "8905cdc3-8680-4bfa-bb50-ab7946bc78a5",
+          "totalAmount": 450
+        },
+        "status": "PRINTED",
+        "orderId": "8905cdc3-8680-4bfa-bb50-ab7946bc78a5",
+        "errorMessage": null,
+        "createdAt": "2026-08-19T04:30:49.197Z",
+        "updatedAt": "2026-08-19T04:30:52.267Z"
+      },
+      {
+        "id": "2da1d481-c16f-47d4-a45e-11c197c7a1d8",
+        "printerId": "a9fac21a-d5f8-4fac-86d6-1236282df14c",
+        "jobType": "STATION_TICKET",
+        "content": {
+          "items": [
+            {
+              "price": 350,
+              "extras": null,
+              "quantity": 1,
+              "productName": "Cola",
+              "variantName": null
+            }
+          ],
+          "orderNumber": "f8e61a47-02b4-4a37-b142-f22986841c3e",
+          "totalAmount": 350
+        },
+        "status": "PRINTED",
+        "orderId": "f8e61a47-02b4-4a37-b142-f22986841c3e",
+        "errorMessage": null,
+        "createdAt": "2026-08-19T07:46:21.104Z",
+        "updatedAt": "2026-08-19T07:46:22.582Z"
+      },
+      {
+        "id": "266d2a31-ddfe-461d-aceb-0554d6f633d2",
+        "printerId": "a9fac21a-d5f8-4fac-86d6-1236282df14c",
+        "jobType": "STATION_TICKET",
+        "content": {
+          "items": [
+            {
+              "price": 1200,
+              "extras": [],
+              "quantity": 1,
+              "productName": "Wienerschnitzel mit Pommes",
+              "variantName": null
+            }
+          ],
+          "orderNumber": "61275052-761f-4180-98d3-0ba9a6b6a982",
+          "totalAmount": 1200
+        },
+        "status": "PRINTED",
+        "orderId": "61275052-761f-4180-98d3-0ba9a6b6a982",
+        "errorMessage": null,
+        "createdAt": "2026-08-19T07:49:29.962Z",
+        "updatedAt": "2026-08-19T07:49:31.634Z"
+      },
+      {
+        "id": "814f9628-974c-422d-b959-89d72cb129d8",
+        "printerId": "a9fac21a-d5f8-4fac-86d6-1236282df14c",
+        "jobType": "STATION_TICKET",
+        "content": {
+          "items": [
+            {
+              "price": 350,
+              "extras": null,
+              "quantity": 1,
+              "productName": "Cola",
+              "variantName": null
+            }
+          ],
+          "orderNumber": "0c9e5d18-260f-4dbc-82fd-387d78ab1b95",
+          "totalAmount": 350
+        },
+        "status": "PRINTED",
+        "orderId": "0c9e5d18-260f-4dbc-82fd-387d78ab1b95",
+        "errorMessage": null,
+        "createdAt": "2026-08-19T07:53:54.478Z",
+        "updatedAt": "2026-08-19T07:53:55.711Z"
+      },
+      {
+        "id": "9ed89fd9-4fb6-488d-9b4d-0fd8c84c5c76",
+        "printerId": "a9fac21a-d5f8-4fac-86d6-1236282df14c",
+        "jobType": "STATION_TICKET",
+        "content": {
+          "items": [
+            {
+              "price": 350,
+              "extras": null,
+              "quantity": 1,
+              "productName": "Cola",
+              "variantName": null
+            }
+          ],
+          "orderNumber": "8f33dc9b-1026-4397-8c7f-1d93ae322e86",
+          "totalAmount": 350
+        },
+        "status": "PRINTED",
+        "orderId": "8f33dc9b-1026-4397-8c7f-1d93ae322e86",
+        "errorMessage": null,
+        "createdAt": "2026-08-19T14:54:32.117Z",
+        "updatedAt": "2026-08-19T14:54:35.827Z"
+      },
+      {
+        "id": "0148172b-fda7-47b9-beff-8c317b342041",
+        "printerId": "a9fac21a-d5f8-4fac-86d6-1236282df14c",
+        "jobType": "RECEIPT",
+        "content": {
+          "title": "TEST-DRUCK",
+          "message": "Druckerschnittstelle erfolgreich verbunden!",
+          "timestamp": "2026-08-19T15:19:44.752Z",
+          "printerName": "Hauptkasse Drucker",
+          "printerType": "CONSOLE"
+        },
+        "status": "PRINTED",
+        "orderId": null,
+        "errorMessage": null,
+        "createdAt": "2026-08-19T15:19:44.753Z",
+        "updatedAt": "2026-08-19T15:19:47.206Z"
+      },
+      {
+        "id": "6c38d20c-45ad-439e-bd35-4fd9cf0f3ee2",
+        "printerId": "a9fac21a-d5f8-4fac-86d6-1236282df14c",
+        "jobType": "RECEIPT",
+        "content": {
+          "title": "TEST-DRUCK",
+          "message": "Druckerschnittstelle erfolgreich verbunden!",
+          "timestamp": "2026-08-19T15:20:07.751Z",
+          "printerName": "Hauptkasse Drucker",
+          "printerType": "CONSOLE"
+        },
+        "status": "PRINTED",
+        "orderId": null,
+        "errorMessage": null,
+        "createdAt": "2026-08-19T15:20:07.753Z",
+        "updatedAt": "2026-08-19T15:20:09.682Z"
+      },
+      {
+        "id": "aca9cc91-89d6-4649-a62e-68d31a42c091",
+        "printerId": "a9fac21a-d5f8-4fac-86d6-1236282df14c",
+        "jobType": "RECEIPT",
+        "content": {
+          "title": "TEST-DRUCK",
+          "message": "Druckerschnittstelle erfolgreich verbunden!",
+          "timestamp": "2026-08-20T04:14:48.831Z",
+          "printerName": "Hauptkasse Drucker",
+          "printerType": "CONSOLE"
+        },
+        "status": "PRINTED",
+        "orderId": null,
+        "errorMessage": null,
+        "createdAt": "2026-08-20T04:14:48.833Z",
+        "updatedAt": "2026-08-20T04:14:51.247Z"
+      },
+      {
+        "id": "9da6893c-cea6-44a7-b4fb-8b6f62e1fb9a",
+        "printerId": "a9fac21a-d5f8-4fac-86d6-1236282df14c",
+        "jobType": "RECEIPT",
+        "content": {
+          "title": "TEST-DRUCK",
+          "message": "Druckerschnittstelle erfolgreich verbunden!",
+          "timestamp": "2026-08-20T04:15:33.794Z",
+          "printerName": "Hauptkasse Drucker",
+          "printerType": "CONSOLE"
+        },
+        "status": "PRINTED",
+        "orderId": null,
+        "errorMessage": null,
+        "createdAt": "2026-08-20T04:15:33.796Z",
+        "updatedAt": "2026-08-20T04:15:36.264Z"
+      },
+      {
+        "id": "068584a9-95ac-406f-9bf8-ef22a844dd19",
+        "printerId": "f6ff9ac9-1d19-4945-b9df-9cbf4722b195",
+        "jobType": "RECEIPT",
+        "content": {
+          "title": "TEST-DRUCK",
+          "message": "Druckerschnittstelle erfolgreich verbunden!",
+          "timestamp": "2026-08-20T04:15:45.700Z",
+          "printerName": "Hauptkasse Drucker",
+          "printerType": "CONSOLE"
+        },
+        "status": "PRINTED",
+        "orderId": null,
+        "errorMessage": null,
+        "createdAt": "2026-08-20T04:15:45.714Z",
+        "updatedAt": "2026-08-20T04:15:48.785Z"
+      }
+    ],
+    "auditLogs": [
+      {
+        "id": "77c87745-1190-49a7-a741-eb92d559aed5",
+        "action": "ORDER_CANCELLED",
+        "entityId": "8905cdc3-8680-4bfa-bb50-ab7946bc78a5",
+        "entityType": "Order",
+        "userId": "d2728167-9d45-411d-af80-9335b4068c2d",
+        "details": {
+          "reason": "Test cancel",
+          "refundedAmount": 0
+        },
+        "createdAt": "2026-08-19T04:36:16.335Z"
+      },
+      {
+        "id": "f4b7771b-00e8-4182-bbb6-480ea62cf476",
+        "action": "EVENT_CREATED",
+        "entityId": "ea2f2a86-4322-4030-8926-4ee3154dcf39",
+        "entityType": "Event",
+        "userId": "d2728167-9d45-411d-af80-9335b4068c2d",
+        "details": {
+          "name": "Fruehschoppen 2026",
+          "status": "DRAFT"
+        },
+        "createdAt": "2026-08-19T14:45:31.164Z"
+      },
+      {
+        "id": "72262780-1ba2-46d8-9de7-e3659276c36c",
+        "action": "RKSV_DISCLAIMER_CONFIRMED",
+        "entityId": "ea2f2a86-4322-4030-8926-4ee3154dcf39",
+        "entityType": "Event",
+        "userId": "d2728167-9d45-411d-af80-9335b4068c2d",
+        "details": {
+          "version": "1.0",
+          "appVersion": "0.1.0",
+          "activatedAt": "2026-08-19T14:46:19.176Z",
+          "disclaimerText": "VereinOrder ist keine RKSV-Registrierkasse. Der Veranstalter ist selbst dafür verantwortlich zu prüfen, ob für diese Veranstaltung Einzelaufzeichnungs-, Belegerteilungs- oder Registrierkassenpflichten bestehen."
+        },
+        "createdAt": "2026-08-19T14:46:19.188Z"
+      },
+      {
+        "id": "7cc4ea25-e6e6-4d21-9ba4-01d6a9cdf7a2",
+        "action": "PRODUCT_AVAILABILITY_CHANGED",
+        "entityId": "a60b2bad-a5e9-4e7c-b2ec-61c8e2e4b5b3",
+        "entityType": "Product",
+        "userId": "d2728167-9d45-411d-af80-9335b4068c2d",
+        "details": {
+          "productName": "Bier vom Fass",
+          "newAvailability": "OUT_OF_STOCK",
+          "previousAvailability": "AVAILABLE"
+        },
+        "createdAt": "2026-08-19T14:52:26.346Z"
+      },
+      {
+        "id": "587de87a-a9b3-41fe-997b-8356a72b631f",
+        "action": "EVENT_STATUS_CHANGED",
+        "entityId": "58a155da-c2ea-4db8-9084-8921ac7ff1ca",
+        "entityType": "Event",
+        "userId": "d2728167-9d45-411d-af80-9335b4068c2d",
+        "details": {
+          "testMode": true,
+          "newStatus": "PAUSED",
+          "previousStatus": "ACTIVE"
+        },
+        "createdAt": "2026-08-19T14:57:26.599Z"
+      },
+      {
+        "id": "c47d00c2-ccbc-40bc-8e5c-14cc0485f3ec",
+        "action": "EVENT_STATUS_CHANGED",
+        "entityId": "79f693fc-dc76-432c-9acb-6a5395c0ebe5",
+        "entityType": "Event",
+        "userId": "d2728167-9d45-411d-af80-9335b4068c2d",
+        "details": {
+          "testMode": true,
+          "newStatus": "PAUSED",
+          "previousStatus": "ACTIVE"
+        },
+        "createdAt": "2026-08-19T14:57:34.520Z"
+      },
+      {
+        "id": "248d0249-0d30-4cf5-be04-f37f88061208",
+        "action": "EVENT_STATUS_CHANGED",
+        "entityId": "ea2f2a86-4322-4030-8926-4ee3154dcf39",
+        "entityType": "Event",
+        "userId": "d2728167-9d45-411d-af80-9335b4068c2d",
+        "details": {
+          "testMode": false,
+          "newStatus": "PAUSED",
+          "previousStatus": "ACTIVE"
+        },
+        "createdAt": "2026-08-19T15:20:36.415Z"
+      },
+      {
+        "id": "f478cf48-a0d1-405c-bee8-8ca301705a4b",
+        "action": "EVENT_STATUS_CHANGED",
+        "entityId": "58a155da-c2ea-4db8-9084-8921ac7ff1ca",
+        "entityType": "Event",
+        "userId": "d2728167-9d45-411d-af80-9335b4068c2d",
+        "details": {
+          "testMode": true,
+          "newStatus": "TEST_MODE",
+          "previousStatus": "PAUSED"
+        },
+        "createdAt": "2026-08-19T15:21:28.098Z"
+      }
+    ]
+  }
+}

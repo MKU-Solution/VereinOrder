@@ -1,0 +1,66 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: vereinorder_postgres
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-vereinorder}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - backup_data:/backups
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: .
+      dockerfile: apps/backend/Dockerfile
+    container_name: vereinorder_backend
+    restart: always
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-vereinorder}?schema=public
+      JWT_SECRET: ${JWT_SECRET:-vereinorder_super_secret_production_key_festbetrieb_2026}
+      BACKUP_DIR: /app/backups
+      PORT: 3000
+    volumes:
+      - backup_data:/app/backups
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: .
+      dockerfile: apps/frontend/Dockerfile
+    container_name: vereinorder_frontend
+    restart: always
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+
+  print-worker:
+    build:
+      context: .
+      dockerfile: apps/print-worker/Dockerfile
+    container_name: vereinorder_print_worker
+    restart: always
+    environment:
+      BACKEND_URL: http://backend:3000
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:
+    name: vereinorder_postgres_data
+  backup_data:
+    name: vereinorder_backup_data

@@ -18,10 +18,14 @@ import {
   Eraser, 
   Sparkles,
   AlertTriangle,
-  Printer
+  Printer,
+  HardDrive,
+  Download,
+  RotateCcw,
+  ShieldCheck
 } from 'lucide-react';
 
-type Tab = 'events' | 'stations' | 'categories' | 'products' | 'users' | 'areas' | 'printers';
+type Tab = 'events' | 'stations' | 'categories' | 'products' | 'users' | 'areas' | 'printers' | 'backups';
 
 interface EventItem {
   id: string;
@@ -44,11 +48,21 @@ interface EventItem {
   };
 }
 
+interface BackupItem {
+  filename: string;
+  sizeBytes: number;
+  createdAt: string;
+  checksumSha256: string;
+  version: string;
+  counts: Record<string, number>;
+}
+
 export const AdminDashboard = () => {
   const [activeTab, setActiveTab] = useState<Tab>('events');
   const [data, setData] = useState<any[]>([]);
   const [printersList, setPrintersList] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [isBackingUp, setIsBackingUp] = useState(false);
   const [eventId, setEventId] = useState<string>('');
   
   // Generic Modal State (for Areas / Simple Items)
@@ -117,6 +131,7 @@ export const AdminDashboard = () => {
       if (activeTab === 'users') endpoint = '/users';
       if (activeTab === 'areas') endpoint = `/areas?eventId=${eventId}`;
       if (activeTab === 'printers') endpoint = '/print-jobs/printers';
+      if (activeTab === 'backups') endpoint = '/backup/list';
 
       const res = await api.get(endpoint);
       setData(res.data);
@@ -132,7 +147,7 @@ export const AdminDashboard = () => {
   }, [activeTab, eventId]);
 
   useEffect(() => {
-    if (activeTab === 'events' || activeTab === 'printers' || eventId) {
+    if (activeTab === 'events' || activeTab === 'printers' || activeTab === 'backups' || eventId) {
       fetchData();
     }
   }, [activeTab, eventId, fetchData]);
@@ -142,6 +157,7 @@ export const AdminDashboard = () => {
     { id: 'areas', label: 'Bereiche', icon: Map },
     { id: 'stations', label: 'Stationen', icon: Store },
     { id: 'printers', label: 'Drucker & Bon-Routing', icon: Printer },
+    { id: 'backups', label: 'Backups & Datensicherung', icon: HardDrive },
     { id: 'categories', label: 'Kategorien', icon: Tag },
     { id: 'products', label: 'Produkte', icon: Package },
     { id: 'users', label: 'Mitarbeiter', icon: Users },
@@ -266,6 +282,53 @@ export const AdminDashboard = () => {
     } catch (err) {
       console.error('Failed to test print', err);
       alert('Fehler beim Senden des Testdrucks');
+    }
+  };
+
+  // --- BACKUP ACTIONS ---
+  const handleCreateBackup = async () => {
+    setIsBackingUp(true);
+    try {
+      await api.post('/backup/create');
+      alert('Datensicherung erfolgreich erstellt!');
+      fetchData();
+    } catch (err) {
+      console.error('Failed to create backup', err);
+      alert('Fehler bei der Erstellung des Backups');
+    } finally {
+      setIsBackingUp(false);
+    }
+  };
+
+  const handleDownloadBackup = async (filename: string) => {
+    try {
+      const response = await api.get(`/backup/download/${filename}`, {
+        responseType: 'blob'
+      });
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', filename);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+    } catch (err) {
+      console.error('Failed to download backup', err);
+      alert('Fehler beim Herunterladen des Backups');
+    }
+  };
+
+  const handleRestoreBackup = async (filename: string) => {
+    if (!confirm(`⚠️ ACHTUNG: Möchtest du wirklich den Zustand aus "${filename}" wiederherstellen?\n\nEs wird vorab automatisch ein Sicherheits-Backup des aktuellen Zustands angelegt.`)) {
+      return;
+    }
+    try {
+      const res = await api.post(`/backup/restore/${filename}`);
+      alert(`Wiederherstellung erfolgreich!\n\n${res.data.message || ''}`);
+      fetchData();
+    } catch (err) {
+      console.error('Failed to restore backup', err);
+      alert('Fehler bei der Wiederherstellung des Backups');
     }
   };
 
@@ -405,15 +468,17 @@ export const AdminDashboard = () => {
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
           <h1 className="text-3xl font-bold">Administration & Stammdaten</h1>
-          <p className="text-slate-400 text-sm mt-1">Veranstaltungssteuerung, Druck-Routing und Sortimentspflege</p>
+          <p className="text-slate-400 text-sm mt-1">Veranstaltungssteuerung, Druck-Routing, Backups und Sortimentspflege</p>
         </div>
-        <button 
-          onClick={() => handleOpenModal()} 
-          className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2.5 px-5 rounded-2xl flex items-center gap-2 shadow-lg shadow-indigo-600/30 transition-all active:scale-95 shrink-0"
-        >
-          <Plus className="w-5 h-5" />
-          Neu anlegen
-        </button>
+        {activeTab !== 'backups' && (
+          <button 
+            onClick={() => handleOpenModal()} 
+            className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2.5 px-5 rounded-2xl flex items-center gap-2 shadow-lg shadow-indigo-600/30 transition-all active:scale-95 shrink-0"
+          >
+            <Plus className="w-5 h-5" />
+            Neu anlegen
+          </button>
+        )}
       </div>
 
       {/* Tabs */}
@@ -600,6 +665,99 @@ export const AdminDashboard = () => {
                   Keine Drucker konfiguriert.
                 </div>
               )}
+            </div>
+          </div>
+        ) : activeTab === 'backups' ? (
+          /* Backups & Data Protection */
+          <div className="space-y-6">
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-slate-900/80 border border-slate-800 p-5 rounded-2xl">
+              <div className="flex items-center gap-3">
+                <div className="p-3 bg-emerald-500/20 text-emerald-400 rounded-2xl border border-emerald-500/30">
+                  <ShieldCheck className="w-6 h-6" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-bold text-white">Automatische & Manuelle Datensicherung</h3>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    Stündliche automatische Sicherung während aktiver Feste. JSON-Snapshots mit SHA256-Integritätsprüfung.
+                  </p>
+                </div>
+              </div>
+
+              <button
+                disabled={isBackingUp}
+                onClick={handleCreateBackup}
+                className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-bold text-sm rounded-xl shadow-lg shadow-emerald-600/30 transition flex items-center gap-2 shrink-0"
+              >
+                <HardDrive className="w-4 h-4" />
+                {isBackingUp ? 'Sicherung läuft...' : 'Jetzt sichern (Manuelles Backup)'}
+              </button>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-left">
+                <thead>
+                  <tr className="text-slate-400 border-b border-slate-700/50 text-xs uppercase font-semibold">
+                    <th className="pb-3">Backup-Datei</th>
+                    <th className="pb-3">Erstellt am</th>
+                    <th className="pb-3">Größe</th>
+                    <th className="pb-3">Umfang</th>
+                    <th className="pb-3">Integrität (SHA256)</th>
+                    <th className="pb-3 text-right">Aktionen</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-700/50 text-sm">
+                  {data.map((b: BackupItem) => (
+                    <tr key={b.filename} className="hover:bg-slate-800/30 transition-colors">
+                      <td className="py-4 font-mono font-medium text-indigo-300">
+                        {b.filename}
+                      </td>
+                      <td className="py-4 text-slate-300">
+                        {new Date(b.createdAt).toLocaleString('de-AT')}
+                      </td>
+                      <td className="py-4 text-slate-400">
+                        {(b.sizeBytes / 1024).toFixed(1)} kB
+                      </td>
+                      <td className="py-4 text-xs text-slate-400">
+                        {b.counts ? (
+                          <span>
+                            {b.counts.orders || 0} Bestellungen, {b.counts.products || 0} Artikel
+                          </span>
+                        ) : '-'}
+                      </td>
+                      <td className="py-4 font-mono text-xs text-slate-500" title={b.checksumSha256}>
+                        {b.checksumSha256 ? `${b.checksumSha256.slice(0, 12)}...` : 'Geprüft'}
+                      </td>
+                      <td className="py-4 text-right">
+                        <div className="flex justify-end gap-2">
+                          <button
+                            onClick={() => handleDownloadBackup(b.filename)}
+                            className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 rounded-lg text-slate-300 transition text-xs font-bold flex items-center gap-1.5 border border-slate-700"
+                            title="Auf USB-Stick / PC herunterladen"
+                          >
+                            <Download className="w-3.5 h-3.5" />
+                            Download
+                          </button>
+                          <button
+                            onClick={() => handleRestoreBackup(b.filename)}
+                            className="px-3 py-1.5 bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 rounded-lg transition text-xs font-bold flex items-center gap-1.5 border border-rose-500/30"
+                            title="Datenbank auf diesen Stand zurücksetzen"
+                          >
+                            <RotateCcw className="w-3.5 h-3.5" />
+                            Wiederherstellen
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                  {data.length === 0 && (
+                    <tr>
+                      <td colSpan={6} className="text-center py-12 text-slate-500">
+                        Noch keine Datensicherungen vorhanden. Erstelle jetzt ein manuelles Backup.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
             </div>
           </div>
         ) : (

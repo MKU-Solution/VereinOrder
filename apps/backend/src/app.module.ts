@@ -11,8 +11,9 @@ import { UsersModule } from './users/users.module';
 import { AreasModule } from './areas/areas.module';
 import { SessionsModule } from './sessions/sessions.module';
 import { RealtimeModule } from './realtime/realtime.module';
+import { BackupModule } from './backup/backup.module';
 
 @Module({
-  imports: [PrismaModule, AuthModule, ProductsModule, OrdersModule, StationsModule, ReportsModule, PrintJobsModule, EventsModule, UsersModule, AreasModule, SessionsModule, RealtimeModule],
+  imports: [PrismaModule, AuthModule, ProductsModule, OrdersModule, StationsModule, ReportsModule, PrintJobsModule, EventsModule, UsersModule, AreasModule, SessionsModule, RealtimeModule, BackupModule],
 })
 export class AppModule {}
