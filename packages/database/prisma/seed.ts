@@ -19,6 +19,17 @@ async function main() {
   });
   console.log(`Initialer Admin-User erstellt: ${admin.username} / PIN: ${rawPin}`);
 
+  const waiter = await prisma.user.upsert({
+    where: { username: 'kellner1' },
+    update: {},
+    create: {
+      username: 'kellner1',
+      pinHash: pinHash,
+      role: 'WAITER',
+    },
+  });
+  console.log(`Initialer Kellner-User erstellt: ${waiter.username} / PIN: ${rawPin}`);
+
   const printer = await prisma.printer.create({
     data: {
       name: 'Hauptkasse Drucker',
