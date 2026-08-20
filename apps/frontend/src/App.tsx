@@ -9,6 +9,14 @@ import { AdminDashboard } from './pages/AdminDashboard';
 import { CashierDashboard } from './pages/CashierDashboard';
 import { AuthGuard } from './components/layout/AuthGuard';
 import { AppLayout } from './components/layout/AppLayout';
+import { RoleGuard } from './components/layout/RoleGuard';
+import { defaultRouteForRole, routeAccess } from './components/layout/routeAccess';
+import { useAuthStore } from './store/useAuthStore';
+
+const DefaultRoute = () => {
+  const user = useAuthStore((state) => state.user);
+  return <Navigate to={user ? defaultRouteForRole(user.role) : '/login'} replace />;
+};
 
 function App() {
   return (
@@ -18,18 +26,17 @@ function App() {
         
         <Route element={<AuthGuard />}>
           <Route element={<AppLayout />}>
-            <Route path="/" element={<Dashboard />} />
-            <Route path="/unpaid" element={<UnpaidOrders />} />
-            <Route path="/stations" element={<StationSelection />} />
-            <Route path="/stations/:id" element={<StationView />} />
-            <Route path="/revision" element={<RevisionDashboard />} />
-            <Route path="/admin" element={<AdminDashboard />} />
-            <Route path="/cashier" element={<CashierDashboard />} />
-            {/* Future routes: /order, /admin, etc. */}
+            <Route element={<RoleGuard route={routeAccess.dashboard} />}><Route path="/" element={<Dashboard />} /></Route>
+            <Route element={<RoleGuard route={routeAccess.unpaid} />}><Route path="/unpaid" element={<UnpaidOrders />} /></Route>
+            <Route element={<RoleGuard route={routeAccess.stations} />}><Route path="/stations" element={<StationSelection />} /></Route>
+            <Route element={<RoleGuard route={routeAccess.station} />}><Route path="/stations/:id" element={<StationView />} /></Route>
+            <Route element={<RoleGuard route={routeAccess.revision} />}><Route path="/revision" element={<RevisionDashboard />} /></Route>
+            <Route element={<RoleGuard route={routeAccess.admin} />}><Route path="/admin" element={<AdminDashboard />} /></Route>
+            <Route element={<RoleGuard route={routeAccess.cashier} />}><Route path="/cashier" element={<CashierDashboard />} /></Route>
           </Route>
         </Route>
 
-        <Route path="*" element={<Navigate to="/" replace />} />
+        <Route path="*" element={<DefaultRoute />} />
       </Routes>
     </BrowserRouter>
   );
