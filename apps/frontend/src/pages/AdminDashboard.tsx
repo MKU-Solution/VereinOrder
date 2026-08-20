@@ -24,10 +24,16 @@ import {
   RotateCcw,
   ShieldCheck,
   Search,
-  FileSpreadsheet
+  FileSpreadsheet,
+  Activity,
+  Cpu,
+  Database,
+  RefreshCw,
+  AlertOctagon,
+  ArrowRight
 } from 'lucide-react';
 
-type Tab = 'events' | 'stations' | 'categories' | 'products' | 'users' | 'areas' | 'printers' | 'backups' | 'audit';
+type Tab = 'events' | 'stations' | 'categories' | 'products' | 'users' | 'areas' | 'printers' | 'backups' | 'audit' | 'diagnostics';
 
 interface EventItem {
   id: string;
@@ -67,7 +73,6 @@ interface AuditLogItem {
   userId?: string;
   user?: {
     id: string;
-    name: string;
     username: string;
     role: string;
   };
@@ -78,9 +83,11 @@ interface AuditLogItem {
 export const AdminDashboard = () => {
   const [activeTab, setActiveTab] = useState<Tab>('events');
   const [data, setData] = useState<any[]>([]);
+  const [diagnosticsData, setDiagnosticsData] = useState<any>(null);
   const [printersList, setPrintersList] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isBackingUp, setIsBackingUp] = useState(false);
+  const [isRetryingJobs, setIsRetryingJobs] = useState(false);
   const [eventId, setEventId] = useState<string>('');
 
   // Audit state
@@ -155,6 +162,7 @@ export const AdminDashboard = () => {
       if (activeTab === 'areas') endpoint = `/areas?eventId=${eventId}`;
       if (activeTab === 'printers') endpoint = '/print-jobs/printers';
       if (activeTab === 'backups') endpoint = '/backup/list';
+      if (activeTab === 'diagnostics') endpoint = '/diagnostics/status';
       if (activeTab === 'audit') {
         const queryParams = new URLSearchParams();
         if (auditFilterAction) queryParams.set('action', auditFilterAction);
@@ -168,6 +176,8 @@ export const AdminDashboard = () => {
       const res = await api.get(endpoint);
       if (activeTab === 'audit') {
         setData(res.data.logs || []);
+      } else if (activeTab === 'diagnostics') {
+        setDiagnosticsData(res.data);
       } else {
         setData(res.data);
       }
@@ -183,13 +193,23 @@ export const AdminDashboard = () => {
   }, [activeTab, eventId, auditFilterAction, auditSearch]);
 
   useEffect(() => {
-    if (activeTab === 'events' || activeTab === 'printers' || activeTab === 'backups' || activeTab === 'audit' || eventId) {
+    if (activeTab === 'events' || activeTab === 'printers' || activeTab === 'backups' || activeTab === 'audit' || activeTab === 'diagnostics' || eventId) {
       fetchData();
     }
   }, [activeTab, eventId, fetchData]);
 
+  // Periodic poll for diagnostics tab
+  useEffect(() => {
+    if (activeTab !== 'diagnostics') return;
+    const interval = setInterval(() => {
+      fetchData();
+    }, 10000);
+    return () => clearInterval(interval);
+  }, [activeTab, fetchData]);
+
   const tabs = [
     { id: 'events', label: 'Veranstaltungen & Lifecycle', icon: Calendar },
+    { id: 'diagnostics', label: 'System-Status & Diagnose', icon: Activity },
     { id: 'areas', label: 'Bereiche', icon: Map },
     { id: 'stations', label: 'Stationen', icon: Store },
     { id: 'printers', label: 'Drucker & Bon-Routing', icon: Printer },
@@ -386,6 +406,21 @@ export const AdminDashboard = () => {
     }
   };
 
+  // --- DIAGNOSTICS ACTIONS ---
+  const handleRetryFailedJobs = async () => {
+    setIsRetryingJobs(true);
+    try {
+      const res = await api.post('/diagnostics/retry-failed-print-jobs');
+      alert(res.data.message);
+      fetchData();
+    } catch (err) {
+      console.error('Failed to retry print jobs', err);
+      alert('Fehler beim Wiederholen der Druckaufträge');
+    } finally {
+      setIsRetryingJobs(false);
+    }
+  };
+
   const handleDelete = async (id: string) => {
     if (!confirm('Diesen Eintrag wirklich unwiderruflich löschen?')) return;
     try {
@@ -470,6 +505,20 @@ export const AdminDashboard = () => {
     }
   };
 
+  const formatUptime = (seconds: number) => {
+    const d = Math.floor(seconds / (3600 * 24));
+    const h = Math.floor((seconds % (3600 * 24)) / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = Math.floor(seconds % 60);
+
+    const parts = [];
+    if (d > 0) parts.push(`${d}d`);
+    if (h > 0 || d > 0) parts.push(`${h}h`);
+    parts.push(`${m}m`);
+    parts.push(`${s}s`);
+    return parts.join(' ');
+  };
+
   const getStatusBadge = (status: string, rksvConfirmedAt?: string) => {
     switch (status) {
       case 'ACTIVE':
@@ -548,9 +597,9 @@ export const AdminDashboard = () => {
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
           <h1 className="text-3xl font-bold">Administration & Stammdaten</h1>
-          <p className="text-slate-400 text-sm mt-1">Veranstaltungssteuerung, Druck-Routing, Backups, Sicherheit & Audit-Log</p>
+          <p className="text-slate-400 text-sm mt-1">Veranstaltungssteuerung, Systemstatus, Druck-Routing, Backups & Audit-Log</p>
         </div>
-        {activeTab !== 'backups' && activeTab !== 'audit' && (
+        {activeTab !== 'backups' && activeTab !== 'audit' && activeTab !== 'diagnostics' && (
           <button 
             onClick={() => handleOpenModal()} 
             className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2.5 px-5 rounded-2xl flex items-center gap-2 shadow-lg shadow-indigo-600/30 transition-all active:scale-95 shrink-0"
@@ -587,6 +636,270 @@ export const AdminDashboard = () => {
       <div className="glass p-6 rounded-3xl">
         {isLoading ? (
           <div className="text-center py-12 text-slate-400 animate-pulse">Lade Daten...</div>
+        ) : activeTab === 'diagnostics' ? (
+          /* DIAGNOSTICS & SYSTEM STATUS */
+          <div className="space-y-6">
+            {/* Top Bar: Overall Health & Actions */}
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-slate-900/80 border border-slate-800 p-5 rounded-2xl">
+              <div className="flex items-center gap-3">
+                <div className={`p-3 rounded-2xl border ${
+                  diagnosticsData?.overallHealth === 'GREEN'
+                    ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30'
+                    : diagnosticsData?.overallHealth === 'YELLOW'
+                    ? 'bg-amber-500/20 text-amber-400 border-amber-500/30'
+                    : 'bg-rose-500/20 text-rose-400 border-rose-500/30'
+                }`}>
+                  <Activity className="w-7 h-7" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-xl font-bold text-white">Systemgesundheit:</h3>
+                    <span className={`px-3 py-1 rounded-full text-xs font-extrabold uppercase tracking-wide border ${
+                      diagnosticsData?.overallHealth === 'GREEN'
+                        ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30'
+                        : diagnosticsData?.overallHealth === 'YELLOW'
+                        ? 'bg-amber-500/20 text-amber-300 border-amber-500/30'
+                        : 'bg-rose-500/20 text-rose-300 border-rose-500/30'
+                    }`}>
+                      {diagnosticsData?.overallHealth === 'GREEN' ? '● Bereit für Festbetrieb' : diagnosticsData?.overallHealth === 'YELLOW' ? '▲ Handlung empfohlen' : '✖ Systemstörung'}
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-400 mt-1">
+                    Serverzeit: {new Date(diagnosticsData?.serverTime || Date.now()).toLocaleString('de-AT')} • Automatische Prüfung alle 10s
+                  </p>
+                </div>
+              </div>
+
+              <button
+                onClick={() => fetchData()}
+                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs rounded-xl transition flex items-center gap-2 border border-slate-700 self-stretch sm:self-auto justify-center"
+              >
+                <RefreshCw className="w-4 h-4" />
+                Jetzt aktualisieren
+              </button>
+            </div>
+
+            {/* Smart Health Recommendations */}
+            {diagnosticsData?.recommendations && diagnosticsData.recommendations.length > 0 && (
+              <div className="space-y-2">
+                <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Handlungsempfehlungen & Hinweise</h4>
+                <div className="grid grid-cols-1 gap-2.5">
+                  {diagnosticsData.recommendations.map((rec: any, idx: number) => (
+                    <div 
+                      key={idx}
+                      className={`p-4 rounded-2xl border flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 ${
+                        rec.level === 'SUCCESS'
+                          ? 'bg-emerald-950/30 border-emerald-800/40 text-emerald-300'
+                          : rec.level === 'WARNING'
+                          ? 'bg-amber-950/30 border-amber-800/40 text-amber-300'
+                          : rec.level === 'ERROR'
+                          ? 'bg-rose-950/30 border-rose-800/40 text-rose-300'
+                          : 'bg-indigo-950/30 border-indigo-800/40 text-indigo-300'
+                      }`}
+                    >
+                      <div className="flex items-start gap-3">
+                        {rec.level === 'SUCCESS' ? (
+                          <CheckCircle2 className="w-5 h-5 mt-0.5 shrink-0 text-emerald-400" />
+                        ) : rec.level === 'ERROR' ? (
+                          <AlertOctagon className="w-5 h-5 mt-0.5 shrink-0 text-rose-400" />
+                        ) : (
+                          <AlertTriangle className="w-5 h-5 mt-0.5 shrink-0 text-amber-400" />
+                        )}
+                        <div>
+                          <div className="font-bold text-sm text-slate-100">{rec.title}</div>
+                          <div className="text-xs text-slate-300/90 mt-0.5">{rec.message}</div>
+                        </div>
+                      </div>
+
+                      {rec.actionTab && (
+                        <button
+                          onClick={() => setActiveTab(rec.actionTab as Tab)}
+                          className="px-3.5 py-1.5 rounded-xl bg-slate-900/80 hover:bg-slate-900 text-white text-xs font-bold transition flex items-center gap-1.5 border border-slate-700/80 shrink-0"
+                        >
+                          Öffnen <ArrowRight className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* 4 Detail Grid Tiles */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* 1. Backend & Host */}
+              <div className="bg-slate-900/70 border border-slate-800 p-5 rounded-2xl space-y-4">
+                <div className="flex items-center gap-3">
+                  <div className="p-2.5 bg-blue-500/20 text-blue-400 rounded-xl">
+                    <Cpu className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h4 className="font-bold text-slate-100">Backend & Host-System</h4>
+                    <span className="text-xs text-slate-400">Node.js Runtime & Speicherauslastung</span>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2 text-xs">
+                  <div className="bg-slate-800/50 p-3 rounded-xl">
+                    <span className="text-slate-400 block mb-1">Betriebsbereit seit (Uptime)</span>
+                    <span className="text-slate-200 font-bold font-mono">
+                      {diagnosticsData ? formatUptime(diagnosticsData.backend.uptimeSeconds) : '-'}
+                    </span>
+                  </div>
+                  <div className="bg-slate-800/50 p-3 rounded-xl">
+                    <span className="text-slate-400 block mb-1">Node & App Version</span>
+                    <span className="text-slate-200 font-bold font-mono">
+                      {diagnosticsData?.backend.nodeVersion} (v{diagnosticsData?.backend.appVersion})
+                    </span>
+                  </div>
+                  <div className="bg-slate-800/50 p-3 rounded-xl">
+                    <span className="text-slate-400 block mb-1">RAM Belegung (RSS)</span>
+                    <span className="text-slate-200 font-bold font-mono">
+                      {diagnosticsData?.backend.memory.rssMb} MB
+                    </span>
+                  </div>
+                  <div className="bg-slate-800/50 p-3 rounded-xl">
+                    <span className="text-slate-400 block mb-1">Node.js Heap</span>
+                    <span className="text-slate-200 font-bold font-mono">
+                      {diagnosticsData?.backend.memory.heapUsedMb} MB / {diagnosticsData?.backend.memory.heapTotalMb} MB
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* 2. Database (PostgreSQL) */}
+              <div className="bg-slate-900/70 border border-slate-800 p-5 rounded-2xl space-y-4">
+                <div className="flex items-center gap-3">
+                  <div className="p-2.5 bg-emerald-500/20 text-emerald-400 rounded-xl">
+                    <Database className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h4 className="font-bold text-slate-100">PostgreSQL Datenbank</h4>
+                    <span className="text-xs text-slate-400">Verbindungsstatus & Tabellenumfang</span>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2 text-xs">
+                  <div className="bg-slate-800/50 p-3 rounded-xl">
+                    <span className="text-slate-400 block mb-1">Status & Ping-Latenz</span>
+                    <span className="text-emerald-400 font-bold font-mono flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+                      ONLINE ({diagnosticsData?.database.latencyMs} ms)
+                    </span>
+                  </div>
+                  <div className="bg-slate-800/50 p-3 rounded-xl">
+                    <span className="text-slate-400 block mb-1">Bestellungen erfasst</span>
+                    <span className="text-slate-200 font-bold font-mono">
+                      {diagnosticsData?.database.counts.orders || 0}
+                    </span>
+                  </div>
+                  <div className="bg-slate-800/50 p-3 rounded-xl">
+                    <span className="text-slate-400 block mb-1">Produkte / Artikel</span>
+                    <span className="text-slate-200 font-bold font-mono">
+                      {diagnosticsData?.database.counts.products || 0}
+                    </span>
+                  </div>
+                  <div className="bg-slate-800/50 p-3 rounded-xl">
+                    <span className="text-slate-400 block mb-1">Mitarbeiter & Benutzer</span>
+                    <span className="text-slate-200 font-bold font-mono">
+                      {diagnosticsData?.database.counts.users || 0}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* 3. Printers & Queue */}
+              <div className="bg-slate-900/70 border border-slate-800 p-5 rounded-2xl space-y-4">
+                <div className="flex justify-between items-start">
+                  <div className="flex items-center gap-3">
+                    <div className="p-2.5 bg-indigo-500/20 text-indigo-400 rounded-xl">
+                      <Printer className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h4 className="font-bold text-slate-100">Drucker & Warteschlange</h4>
+                      <span className="text-xs text-slate-400">
+                        {diagnosticsData?.printers.active || 0} von {diagnosticsData?.printers.total || 0} Druckern aktiv
+                      </span>
+                    </div>
+                  </div>
+
+                  {diagnosticsData?.printers.queue.failed > 0 && (
+                    <button
+                      disabled={isRetryingJobs}
+                      onClick={handleRetryFailedJobs}
+                      className="px-3 py-1.5 bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold rounded-xl transition flex items-center gap-1.5"
+                    >
+                      <RotateCcw className="w-3.5 h-3.5" />
+                      {isRetryingJobs ? 'Wiederhole...' : 'Fehlgeschlagene wiederholen'}
+                    </button>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-3 gap-2 text-xs">
+                  <div className="bg-slate-800/50 p-3 rounded-xl">
+                    <span className="text-slate-400 block mb-1">Wartend (Pending)</span>
+                    <span className="text-amber-300 font-bold font-mono">
+                      {diagnosticsData?.printers.queue.pending || 0}
+                    </span>
+                  </div>
+                  <div className="bg-slate-800/50 p-3 rounded-xl">
+                    <span className="text-slate-400 block mb-1">Gedruckt</span>
+                    <span className="text-emerald-400 font-bold font-mono">
+                      {diagnosticsData?.printers.queue.printed || 0}
+                    </span>
+                  </div>
+                  <div className="bg-slate-800/50 p-3 rounded-xl">
+                    <span className="text-slate-400 block mb-1">Fehlgeschlagen</span>
+                    <span className={`font-bold font-mono ${diagnosticsData?.printers.queue.failed > 0 ? 'text-rose-400 font-extrabold' : 'text-slate-500'}`}>
+                      {diagnosticsData?.printers.queue.failed || 0}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* 4. Backup & Storage */}
+              <div className="bg-slate-900/70 border border-slate-800 p-5 rounded-2xl space-y-4">
+                <div className="flex justify-between items-start">
+                  <div className="flex items-center gap-3">
+                    <div className="p-2.5 bg-emerald-500/20 text-emerald-400 rounded-xl">
+                      <HardDrive className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h4 className="font-bold text-slate-100">Datensicherung & Snapshots</h4>
+                      <span className="text-xs text-slate-400">
+                        {diagnosticsData?.backup.totalBackups || 0} Sicherungen vorhanden
+                      </span>
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={() => setActiveTab('backups')}
+                    className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold rounded-xl transition flex items-center gap-1"
+                  >
+                    Backups <ArrowRight className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+
+                <div className="bg-slate-800/50 p-3 rounded-xl text-xs space-y-1">
+                  {diagnosticsData?.backup.latestBackup ? (
+                    <>
+                      <div className="text-slate-400">Letztes Backup:</div>
+                      <div className="text-slate-200 font-bold">
+                        {new Date(diagnosticsData.backup.latestBackup.createdAt).toLocaleString('de-AT')}
+                      </div>
+                      <div className="font-mono text-slate-500 text-[11px]">
+                        {diagnosticsData.backup.latestBackup.filename} ({(diagnosticsData.backup.latestBackup.sizeBytes / 1024).toFixed(1)} kB)
+                      </div>
+                    </>
+                  ) : (
+                    <div className="text-amber-400 font-medium py-1">
+                      Noch kein Backup vorhanden.
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
         ) : activeTab === 'events' ? (
           /* Events Lifecycle Cards */
           <div className="space-y-4">
