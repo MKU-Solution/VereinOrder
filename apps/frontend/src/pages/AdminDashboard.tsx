@@ -2,7 +2,6 @@ import { useState, useEffect, useCallback } from 'react';
 import { api } from '../lib/api';
 import { 
   Users, 
-  LayoutDashboard, 
   Calendar, 
   Store, 
   Tag, 
@@ -19,10 +18,10 @@ import {
   Eraser, 
   Sparkles,
   AlertTriangle,
-  Info
+  Printer
 } from 'lucide-react';
 
-type Tab = 'events' | 'stations' | 'categories' | 'products' | 'users' | 'areas';
+type Tab = 'events' | 'stations' | 'categories' | 'products' | 'users' | 'areas' | 'printers';
 
 interface EventItem {
   id: string;
@@ -48,13 +47,24 @@ interface EventItem {
 export const AdminDashboard = () => {
   const [activeTab, setActiveTab] = useState<Tab>('events');
   const [data, setData] = useState<any[]>([]);
+  const [printersList, setPrintersList] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [eventId, setEventId] = useState<string>('');
   
   // Generic Modal State (for Areas / Simple Items)
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingItem, setEditingItem] = useState<any>(null);
-  const [formData, setFormData] = useState<{name: string, sortOrder: number}>({ name: '', sortOrder: 0 });
+  const [formData, setFormData] = useState<{name: string, sortOrder: number, printerId?: string}>({ name: '', sortOrder: 0 });
+
+  // Printer Modal State
+  const [isPrinterModalOpen, setIsPrinterModalOpen] = useState(false);
+  const [editingPrinter, setEditingPrinter] = useState<any>(null);
+  const [printerFormData, setPrinterFormData] = useState({
+    name: '',
+    type: 'CONSOLE',
+    ipAddress: '',
+    port: 9100
+  });
 
   // Event Modal State
   const [isEventModalOpen, setIsEventModalOpen] = useState(false);
@@ -75,19 +85,25 @@ export const AdminDashboard = () => {
   const [rksvConfirmed, setRksvConfirmed] = useState(false);
   const [isActivating, setIsActivating] = useState(false);
 
-  // Fetch a valid eventId on mount
+  // Fetch a valid eventId and printers list on mount
   useEffect(() => {
-    const fetchEvent = async () => {
+    const fetchInitialData = async () => {
       try {
-        const res = await api.get('/events');
-        if (res.data && res.data.length > 0) {
-          setEventId(res.data[0].id);
+        const [eventsRes, printersRes] = await Promise.all([
+          api.get('/events'),
+          api.get('/print-jobs/printers')
+        ]);
+        if (eventsRes.data && eventsRes.data.length > 0) {
+          setEventId(eventsRes.data[0].id);
+        }
+        if (printersRes.data) {
+          setPrintersList(printersRes.data);
         }
       } catch (err) {
-        console.error('Failed to load initial event', err);
+        console.error('Failed to load initial data', err);
       }
     };
-    fetchEvent();
+    fetchInitialData();
   }, []);
 
   const fetchData = useCallback(async () => {
@@ -100,9 +116,14 @@ export const AdminDashboard = () => {
       if (activeTab === 'products') endpoint = `/products/admin?eventId=${eventId}`;
       if (activeTab === 'users') endpoint = '/users';
       if (activeTab === 'areas') endpoint = `/areas?eventId=${eventId}`;
+      if (activeTab === 'printers') endpoint = '/print-jobs/printers';
 
       const res = await api.get(endpoint);
       setData(res.data);
+
+      if (activeTab === 'printers') {
+        setPrintersList(res.data);
+      }
     } catch (err) {
       console.error(`Failed to load ${activeTab}`, err);
     } finally {
@@ -111,7 +132,7 @@ export const AdminDashboard = () => {
   }, [activeTab, eventId]);
 
   useEffect(() => {
-    if (activeTab === 'events' || eventId) {
+    if (activeTab === 'events' || activeTab === 'printers' || eventId) {
       fetchData();
     }
   }, [activeTab, eventId, fetchData]);
@@ -120,6 +141,7 @@ export const AdminDashboard = () => {
     { id: 'events', label: 'Veranstaltungen & Lifecycle', icon: Calendar },
     { id: 'areas', label: 'Bereiche', icon: Map },
     { id: 'stations', label: 'Stationen', icon: Store },
+    { id: 'printers', label: 'Drucker & Bon-Routing', icon: Printer },
     { id: 'categories', label: 'Kategorien', icon: Tag },
     { id: 'products', label: 'Produkte', icon: Package },
     { id: 'users', label: 'Mitarbeiter', icon: Users },
@@ -151,200 +173,263 @@ export const AdminDashboard = () => {
         });
       }
       setIsEventModalOpen(true);
-      return;
-    }
-
-    if (item) {
-      setEditingItem(item);
-      setFormData({ name: item.name || '', sortOrder: item.sortOrder || 0 });
+    } else if (activeTab === 'printers') {
+      if (item) {
+        setEditingPrinter(item);
+        setPrinterFormData({
+          name: item.name || '',
+          type: item.type || 'CONSOLE',
+          ipAddress: item.ipAddress || '',
+          port: item.port || 9100
+        });
+      } else {
+        setEditingPrinter(null);
+        setPrinterFormData({
+          name: '',
+          type: 'CONSOLE',
+          ipAddress: '',
+          port: 9100
+        });
+      }
+      setIsPrinterModalOpen(true);
     } else {
-      setEditingItem(null);
-      setFormData({ name: '', sortOrder: 0 });
-    }
-    setIsModalOpen(true);
-  };
-
-  const handleSaveEvent = async () => {
-    if (!eventFormData.name.trim()) {
-      alert('Bitte einen Veranstaltungsnamen angeben.');
-      return;
-    }
-
-    try {
-      if (editingEvent) {
-        await api.patch(`/events/${editingEvent.id}`, eventFormData);
+      if (item) {
+        setEditingItem(item);
+        setFormData({ 
+          name: item.name || item.username || '', 
+          sortOrder: item.sortOrder || 0,
+          printerId: item.printerId || ''
+        });
       } else {
-        const res = await api.post('/events', eventFormData);
-        if (!eventId) setEventId(res.data.id);
+        setEditingItem(null);
+        setFormData({ name: '', sortOrder: 0, printerId: '' });
       }
-      setIsEventModalOpen(false);
-      fetchData();
-    } catch (err: any) {
-      console.error('Failed to save event', err);
-      alert('Fehler beim Speichern der Veranstaltung: ' + (err.response?.data?.message || err.message));
+      setIsModalOpen(true);
     }
   };
 
-  const handleSave = async () => {
-    if (activeTab !== 'areas') {
-      alert("Speichern ist aktuell nur für Veranstaltungen und Bereiche (Areas) implementiert!");
-      return;
-    }
-
+  const handleSaveModal = async (e: React.FormEvent) => {
+    e.preventDefault();
     try {
-      if (editingItem) {
-        await api.patch(`/areas/${editingItem.id}`, formData);
+      if (activeTab === 'printers') {
+        if (editingPrinter) {
+          await api.patch(`/print-jobs/printers/${editingPrinter.id}`, printerFormData);
+        } else {
+          await api.post('/print-jobs/printers', printerFormData);
+        }
+        setIsPrinterModalOpen(false);
+      } else if (activeTab === 'events') {
+        const payload = {
+          ...eventFormData,
+          startTime: eventFormData.startTime ? new Date(eventFormData.startTime).toISOString() : undefined,
+          endTime: eventFormData.endTime ? new Date(eventFormData.endTime).toISOString() : undefined,
+        };
+
+        if (editingEvent) {
+          await api.patch(`/events/${editingEvent.id}`, payload);
+        } else {
+          const res = await api.post('/events', payload);
+          if (!eventId) setEventId(res.data.id);
+        }
+        setIsEventModalOpen(false);
       } else {
-        await api.post('/areas', { ...formData, eventId });
+        let endpoint = '';
+        if (activeTab === 'areas') endpoint = '/areas';
+        if (activeTab === 'stations') endpoint = '/stations';
+        if (activeTab === 'categories') endpoint = '/categories';
+        if (activeTab === 'products') endpoint = '/products';
+        if (activeTab === 'users') endpoint = '/users';
+
+        const payload = {
+          ...formData,
+          eventId: (activeTab !== 'users') ? eventId : undefined,
+        };
+
+        if (editingItem) {
+          await api.patch(`${endpoint}/${editingItem.id}`, payload);
+        } else {
+          await api.post(endpoint, payload);
+        }
+        setIsModalOpen(false);
       }
-      setIsModalOpen(false);
       fetchData();
     } catch (err) {
-      console.error("Failed to save", err);
-      alert("Fehler beim Speichern");
+      console.error('Failed to save item', err);
+      alert('Fehler beim Speichern');
+    }
+  };
+
+  const handleTestPrint = async (printerId: string) => {
+    try {
+      await api.post(`/print-jobs/printers/${printerId}/test`);
+      alert('Test-Druckauftrag erfolgreich an die Druckerwarteschlange gesendet!');
+    } catch (err) {
+      console.error('Failed to test print', err);
+      alert('Fehler beim Senden des Testdrucks');
     }
   };
 
   const handleDelete = async (id: string) => {
-    if (activeTab === 'events') {
-      if (!confirm("Veranstaltung wirklich löschen? Alle zugehörigen Daten gehen verloren!")) return;
-      try {
-        await api.delete(`/events/${id}`);
-        fetchData();
-      } catch (err: any) {
-        alert('Fehler beim Löschen: ' + (err.response?.data?.message || err.message));
-      }
-      return;
-    }
-
-    if (activeTab !== 'areas') {
-      alert("Löschen ist aktuell nur für Veranstaltungen und Bereiche (Areas) implementiert!");
-      return;
-    }
-    if (!confirm("Wirklich löschen?")) return;
-
+    if (!confirm('Diesen Eintrag wirklich unwiderruflich löschen?')) return;
     try {
-      await api.delete(`/areas/${id}`);
+      let endpoint = '';
+      if (activeTab === 'events') endpoint = `/events/${id}`;
+      if (activeTab === 'areas') endpoint = `/areas/${id}`;
+      if (activeTab === 'stations') endpoint = `/stations/${id}`;
+      if (activeTab === 'categories') endpoint = `/categories/${id}`;
+      if (activeTab === 'products') endpoint = `/products/${id}`;
+      if (activeTab === 'users') endpoint = `/users/${id}`;
+
+      await api.delete(endpoint);
       fetchData();
     } catch (err) {
-      console.error("Failed to delete", err);
-      alert("Fehler beim Löschen");
+      console.error('Failed to delete item', err);
+      alert('Fehler beim Löschen');
     }
   };
 
-  // Event Lifecycle Actions
-  const handleSetTestMode = async (event: EventItem) => {
-    try {
-      await api.patch(`/events/${event.id}/status`, { status: 'TEST_MODE' });
-      fetchData();
-    } catch (err: any) {
-      alert('Fehler: ' + (err.response?.data?.message || err.message));
-    }
-  };
-
-  const handlePauseEvent = async (event: EventItem) => {
-    try {
-      await api.patch(`/events/${event.id}/status`, { status: 'PAUSED' });
-      fetchData();
-    } catch (err: any) {
-      alert('Fehler: ' + (err.response?.data?.message || err.message));
-    }
-  };
-
-  const handleCompleteEvent = async (event: EventItem) => {
-    if (!confirm(`Möchtest du '${event.name}' wirklich als abgeschlossen markieren?`)) return;
-    try {
-      await api.patch(`/events/${event.id}/status`, { status: 'COMPLETED' });
-      fetchData();
-    } catch (err: any) {
-      alert('Fehler: ' + (err.response?.data?.message || err.message));
-    }
-  };
-
-  const handleCleanTestData = async (event: EventItem) => {
-    const ordersCount = event._count?.orders || 0;
-    if (!confirm(`Sollen alle ${ordersCount} Testbestellungen, Zahlungen und Kassensitzungen für '${event.name}' unwiderruflich gelöscht werden?\n\nDie Produkt-, Bereichs- und Stationseinstellungen bleiben erhalten.`)) {
-      return;
-    }
-
-    try {
-      const res = await api.post(`/events/${event.id}/clean-test-data`);
-      alert(res.data.message || 'Testdaten erfolgreich bereinigt.');
-      fetchData();
-    } catch (err: any) {
-      alert('Fehler bei der Bereinigung: ' + (err.response?.data?.message || err.message));
-    }
-  };
-
-  const handleOpenRksvModal = (event: EventItem) => {
-    setRksvTargetEvent(event);
+  // --- EVENT LIFECYCLE HANDLERS ---
+  const handleOpenActivateModal = (evt: EventItem) => {
+    setRksvTargetEvent(evt);
     setRksvConfirmed(false);
     setRksvModalOpen(true);
   };
 
-  const handleConfirmActivate = async () => {
-    if (!rksvTargetEvent) return;
-    if (!rksvConfirmed) {
-      alert('Bitte bestätige den rechtlichen Hinweis durch Anklicken der Checkbox.');
-      return;
-    }
-
+  const handleConfirmActivation = async () => {
+    if (!rksvTargetEvent || !rksvConfirmed) return;
     setIsActivating(true);
     try {
       await api.post(`/events/${rksvTargetEvent.id}/activate`, {
-        confirmed: true,
-        disclaimerVersion: '1.0'
+        confirmRksvExemption: true
       });
       setRksvModalOpen(false);
       fetchData();
-      alert(`Festbetrieb für '${rksvTargetEvent.name}' erfolgreich scharfgeschaltet!`);
-    } catch (err: any) {
-      alert('Aktivierung fehlgeschlagen: ' + (err.response?.data?.message || err.message));
+    } catch (err) {
+      console.error('Activation failed', err);
+      alert('Fehler bei der Aktivierung der Veranstaltung!');
     } finally {
       setIsActivating(false);
     }
   };
 
-  const getStatusBadge = (status: string) => {
+  const handleSetTestMode = async (evt: EventItem) => {
+    try {
+      await api.patch(`/events/${evt.id}/status`, { status: 'TEST_MODE' });
+      fetchData();
+    } catch (err) {
+      console.error('Failed to set test mode', err);
+      alert('Fehler beim Aktivieren des Testmodus');
+    }
+  };
+
+  const handlePauseEvent = async (evt: EventItem) => {
+    try {
+      await api.patch(`/events/${evt.id}/status`, { status: 'PAUSED' });
+      fetchData();
+    } catch (err) {
+      console.error('Failed to pause event', err);
+    }
+  };
+
+  const handleCompleteEvent = async (evt: EventItem) => {
+    if (!confirm(`Möchtest du "${evt.name}" wirklich abschließen? Es können danach keine neuen Bestellungen mehr erfasst werden.`)) return;
+    try {
+      await api.patch(`/events/${evt.id}/status`, { status: 'COMPLETED' });
+      fetchData();
+    } catch (err) {
+      console.error('Failed to complete event', err);
+    }
+  };
+
+  const handleCleanTestData = async (evt: EventItem) => {
+    if (!confirm(`ACHTUNG: Möchtest du wirklich alle Testbestellungen, Zahlungen und Kassenstände für "${evt.name}" löschen? Diese Aktion kann nicht rückgängig gemacht werden.`)) return;
+    try {
+      await api.post(`/events/${evt.id}/clean-test-data`);
+      alert('Testdaten erfolgreich bereinigt! Die Veranstaltung ist bereit für den Feststart.');
+      fetchData();
+    } catch (err) {
+      console.error('Failed to clean test data', err);
+      alert('Fehler beim Bereinigen der Testdaten');
+    }
+  };
+
+  const getStatusBadge = (status: string, rksvConfirmedAt?: string) => {
     switch (status) {
       case 'ACTIVE':
-        return <span className="bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 px-2.5 py-1 rounded-xl text-xs font-bold flex items-center gap-1.5 w-fit"><span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>Echtbetrieb aktiv</span>;
+        return (
+          <div className="flex flex-col items-start gap-1">
+            <span className="bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 px-2.5 py-1 rounded-full text-xs font-bold flex items-center gap-1.5 shadow-sm shadow-emerald-500/20">
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+              Echtbetrieb (Aktiv)
+            </span>
+            {rksvConfirmedAt && (
+              <span className="text-[10px] text-emerald-300/80 font-medium">
+                ✓ RKSV-Ausschluss bestätigt
+              </span>
+            )}
+          </div>
+        );
       case 'TEST_MODE':
-        return <span className="bg-amber-500/20 text-amber-300 border border-amber-500/30 px-2.5 py-1 rounded-xl text-xs font-bold flex items-center gap-1.5 w-fit"><Sparkles className="w-3.5 h-3.5" />Testmodus</span>;
+        return (
+          <span className="bg-amber-500/20 text-amber-300 border border-amber-500/30 px-2.5 py-1 rounded-full text-xs font-bold flex items-center gap-1.5">
+            <Sparkles className="w-3.5 h-3.5" />
+            Testmodus (Schulung)
+          </span>
+        );
       case 'PAUSED':
-        return <span className="bg-blue-500/20 text-blue-300 border border-blue-500/30 px-2.5 py-1 rounded-xl text-xs font-bold flex items-center gap-1.5 w-fit"><Pause className="w-3.5 h-3.5" />Pausiert</span>;
+        return (
+          <span className="bg-slate-700 text-slate-300 px-2.5 py-1 rounded-full text-xs font-bold flex items-center gap-1.5">
+            <Pause className="w-3.5 h-3.5" />
+            Pausiert
+          </span>
+        );
       case 'COMPLETED':
-        return <span className="bg-slate-800 text-slate-400 border border-slate-700 px-2.5 py-1 rounded-xl text-xs font-bold flex items-center gap-1.5 w-fit"><Square className="w-3.5 h-3.5" />Abgeschlossen</span>;
+        return (
+          <span className="bg-indigo-500/20 text-indigo-300 px-2.5 py-1 rounded-full text-xs font-bold flex items-center gap-1.5">
+            <CheckCircle2 className="w-3.5 h-3.5" />
+            Abgeschlossen
+          </span>
+        );
       default:
-        return <span className="bg-slate-800/80 text-slate-300 px-2.5 py-1 rounded-xl text-xs font-semibold w-fit">{status}</span>;
+        return (
+          <span className="bg-slate-800 text-slate-400 px-2.5 py-1 rounded-full text-xs font-medium">
+            Entwurf (DRAFT)
+          </span>
+        );
     }
   };
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center gap-3 mb-6">
-        <div className="w-12 h-12 rounded-2xl bg-indigo-500/20 flex items-center justify-center border border-indigo-500/30">
-          <LayoutDashboard className="w-6 h-6 text-indigo-400" />
-        </div>
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
-          <h1 className="text-3xl font-bold bg-gradient-to-r from-white to-slate-300 bg-clip-text text-transparent">
-            Systemverwaltung & Events
-          </h1>
-          <p className="text-slate-400 text-sm">Festkonfiguration, rechtliche Bestätigungen und Stammdaten</p>
+          <h1 className="text-3xl font-bold">Administration & Stammdaten</h1>
+          <p className="text-slate-400 text-sm mt-1">Veranstaltungssteuerung, Druck-Routing und Sortimentspflege</p>
         </div>
+        <button 
+          onClick={() => handleOpenModal()} 
+          className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2.5 px-5 rounded-2xl flex items-center gap-2 shadow-lg shadow-indigo-600/30 transition-all active:scale-95 shrink-0"
+        >
+          <Plus className="w-5 h-5" />
+          Neu anlegen
+        </button>
       </div>
 
-      <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
-        {tabs.map(tab => {
+      {/* Tabs */}
+      <div className="flex gap-2 overflow-x-auto pb-2 border-b border-slate-800 scrollbar-hide">
+        {tabs.map((tab) => {
           const Icon = tab.icon;
           const isActive = activeTab === tab.id;
           return (
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id as Tab)}
-              className={`flex items-center gap-2 px-5 py-2.5 rounded-2xl font-bold text-sm transition-all whitespace-nowrap
-                ${isActive ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/30' : 'glass hover:bg-slate-800 text-slate-400'}
-              `}
+              className={`flex items-center gap-2.5 px-4 py-2.5 rounded-2xl font-bold text-sm transition-all whitespace-nowrap ${
+                isActive 
+                  ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/30' 
+                  : 'bg-slate-850 text-slate-400 hover:bg-slate-800 hover:text-slate-200'
+              }`}
             >
               <Icon className="w-4 h-4" />
               {tab.label}
@@ -353,133 +438,109 @@ export const AdminDashboard = () => {
         })}
       </div>
 
-      <div className="glass rounded-3xl p-6 min-h-[500px] relative">
-        <div className="flex justify-between items-center mb-6 pb-4 border-b border-slate-700/50">
-          <div>
-            <h2 className="text-xl font-bold capitalize">{tabs.find(t => t.id === activeTab)?.label}</h2>
-            {activeTab === 'events' && (
-              <p className="text-xs text-slate-400 mt-0.5">
-                Verwalte Veranstaltungen, Testdaten und den rechtssicheren Feststart.
-              </p>
-            )}
-          </div>
-          <button 
-            onClick={() => handleOpenModal()}
-            className="flex items-center gap-2 bg-emerald-500 hover:bg-emerald-400 text-white px-4 py-2.5 rounded-xl font-bold transition-colors shadow-lg shadow-emerald-500/20 text-sm"
-          >
-            <Plus className="w-4 h-4" />
-            {activeTab === 'events' ? 'Neue Veranstaltung' : 'Neu anlegen'}
-          </button>
-        </div>
-
+      {/* Content Area */}
+      <div className="glass p-6 rounded-3xl">
         {isLoading ? (
-          <div className="text-center py-20 text-slate-400 animate-pulse">Lade Daten...</div>
+          <div className="text-center py-12 text-slate-400 animate-pulse">Lade Daten...</div>
         ) : activeTab === 'events' ? (
-          /* Events Dedicated Card / List View */
+          /* Events Lifecycle Cards */
           <div className="space-y-4">
             {data.map((evt: EventItem) => (
               <div 
                 key={evt.id} 
-                className={`p-5 rounded-2xl border transition-all ${
-                  evt.status === 'ACTIVE' 
-                    ? 'bg-slate-900/90 border-emerald-500/40 shadow-lg shadow-emerald-500/5' 
-                    : 'bg-slate-900/50 border-slate-800 hover:border-slate-700'
-                }`}
+                className="bg-slate-900/60 border border-slate-800/80 p-5 rounded-2xl flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4 hover:border-slate-700 transition"
               >
-                <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-                  <div className="space-y-1.5">
-                    <div className="flex flex-wrap items-center gap-3">
-                      <h3 className="text-lg font-bold text-white">{evt.name}</h3>
-                      {getStatusBadge(evt.status)}
-                      {evt.rksvConfirmedAt && (
-                        <span className="bg-indigo-500/10 text-indigo-300 border border-indigo-500/20 px-2 py-0.5 rounded-lg text-xs flex items-center gap-1 font-medium">
-                          <CheckCircle2 className="w-3 h-3 text-emerald-400" />
-                          RKSV-Ausschluss bestätigt ({new Date(evt.rksvConfirmedAt).toLocaleDateString('de-AT')})
-                        </span>
-                      )}
-                    </div>
-
-                    <div className="flex flex-wrap items-center gap-4 text-xs text-slate-400">
-                      {evt.organizer && <span>Veranstalter: <strong className="text-slate-300">{evt.organizer}</strong></span>}
-                      {evt.location && <span>Ort: <strong className="text-slate-300">{evt.location}</strong></span>}
-                      {evt.startTime && (
-                        <span>Zeitraum: <strong className="text-slate-300">{new Date(evt.startTime).toLocaleString('de-AT', { dateStyle: 'short', timeStyle: 'short' })}</strong></span>
-                      )}
-                      <span>Bestellungen: <strong className="text-slate-300">{evt._count?.orders || 0}</strong></span>
-                      <span>Artikel: <strong className="text-slate-300">{evt._count?.products || 0}</strong></span>
-                    </div>
+                <div className="space-y-2">
+                  <div className="flex items-center gap-3">
+                    <h3 className="text-xl font-bold text-slate-100">{evt.name}</h3>
+                    {getStatusBadge(evt.status, evt.rksvConfirmedAt)}
                   </div>
-
-                  {/* Lifecycle Actions */}
-                  <div className="flex flex-wrap items-center gap-2">
-                    {evt.status !== 'ACTIVE' && (
-                      <button
-                        onClick={() => handleOpenRksvModal(evt)}
-                        className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition flex items-center gap-1.5 shadow-md shadow-emerald-600/20"
-                        title="Echtbetrieb starten (Rechtliche RKSV-Bestätigung erforderlich)"
-                      >
-                        <Play className="w-3.5 h-3.5" />
-                        Scharf schalten (Echtbetrieb)
-                      </button>
-                    )}
-
-                    {evt.status !== 'TEST_MODE' && evt.status !== 'ACTIVE' && (
-                      <button
-                        onClick={() => handleSetTestMode(evt)}
-                        className="px-3 py-2 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 text-xs font-bold transition flex items-center gap-1.5 border border-amber-500/30"
-                      >
-                        <Sparkles className="w-3.5 h-3.5" />
-                        Testmodus
-                      </button>
-                    )}
-
-                    {evt.status === 'ACTIVE' && (
-                      <button
-                        onClick={() => handlePauseEvent(evt)}
-                        className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold transition flex items-center gap-1.5"
-                      >
-                        <Pause className="w-3.5 h-3.5" />
-                        Pausieren
-                      </button>
-                    )}
-
-                    {evt.status !== 'COMPLETED' && evt.status !== 'ARCHIVED' && (
-                      <button
-                        onClick={() => handleCompleteEvent(evt)}
-                        className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold transition flex items-center gap-1.5"
-                      >
-                        <Square className="w-3.5 h-3.5" />
-                        Abschließen
-                      </button>
-                    )}
-
-                    {(evt.testMode || evt._count?.orders! > 0) && evt.status !== 'ACTIVE' && (
-                      <button
-                        onClick={() => handleCleanTestData(evt)}
-                        className="px-3 py-2 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 text-xs font-bold transition flex items-center gap-1.5 border border-rose-500/30"
-                        title="Alle Testbestellungen und Testkassenstände löschen"
-                      >
-                        <Eraser className="w-3.5 h-3.5" />
-                        Testdaten bereinigen
-                      </button>
-                    )}
-
-                    <button 
-                      onClick={() => handleOpenModal(evt)}
-                      className="p-2 bg-slate-800 hover:bg-slate-700 rounded-xl text-slate-300 transition-colors inline-flex"
-                      title="Bearbeiten"
-                    >
-                      <Edit2 className="w-4 h-4" />
-                    </button>
-
-                    <button 
-                      onClick={() => handleDelete(evt.id)}
-                      className="p-2 bg-rose-500/20 hover:bg-rose-500/40 rounded-xl text-rose-400 transition-colors inline-flex"
-                      title="Löschen"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
+                  <div className="flex flex-wrap gap-4 text-xs text-slate-400">
+                    {evt.organizer && <span>🏛️ {evt.organizer}</span>}
+                    {evt.location && <span>📍 {evt.location}</span>}
+                    {evt.startTime && <span>📅 {new Date(evt.startTime).toLocaleDateString()}</span>}
                   </div>
+                  {evt._count && (
+                    <div className="flex gap-4 text-xs text-slate-500 pt-1">
+                      <span>{evt._count.orders} Bestellungen</span>
+                      <span>•</span>
+                      <span>{evt._count.products} Artikel</span>
+                      <span>•</span>
+                      <span>{evt._count.stations} Stationen</span>
+                      <span>•</span>
+                      <span>{evt._count.areas} Bereiche</span>
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2 pt-2 lg:pt-0 w-full lg:w-auto justify-end">
+                  {/* Status Actions */}
+                  {evt.status !== 'ACTIVE' && (
+                    <button
+                      onClick={() => handleOpenActivateModal(evt)}
+                      className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition flex items-center gap-1.5 shadow-md shadow-emerald-600/30"
+                    >
+                      <Play className="w-3.5 h-3.5" />
+                      Scharf schalten (Echtbetrieb)
+                    </button>
+                  )}
+
+                  {evt.status !== 'TEST_MODE' && evt.status !== 'ACTIVE' && (
+                    <button
+                      onClick={() => handleSetTestMode(evt)}
+                      className="px-3 py-2 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 text-xs font-bold transition flex items-center gap-1.5 border border-amber-500/30"
+                    >
+                      <Sparkles className="w-3.5 h-3.5" />
+                      Testmodus
+                    </button>
+                  )}
+
+                  {evt.status === 'ACTIVE' && (
+                    <button
+                      onClick={() => handlePauseEvent(evt)}
+                      className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold transition flex items-center gap-1.5"
+                    >
+                      <Pause className="w-3.5 h-3.5" />
+                      Pausieren
+                    </button>
+                  )}
+
+                  {evt.status !== 'COMPLETED' && evt.status !== 'ARCHIVED' && (
+                    <button
+                      onClick={() => handleCompleteEvent(evt)}
+                      className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold transition flex items-center gap-1.5"
+                    >
+                      <Square className="w-3.5 h-3.5" />
+                      Abschließen
+                    </button>
+                  )}
+
+                  {(evt.testMode || evt._count?.orders! > 0) && evt.status !== 'ACTIVE' && (
+                    <button
+                      onClick={() => handleCleanTestData(evt)}
+                      className="px-3 py-2 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 text-xs font-bold transition flex items-center gap-1.5 border border-rose-500/30"
+                      title="Alle Testbestellungen und Testkassenstände löschen"
+                    >
+                      <Eraser className="w-3.5 h-3.5" />
+                      Testdaten bereinigen
+                    </button>
+                  )}
+
+                  <button 
+                    onClick={() => handleOpenModal(evt)}
+                    className="p-2 bg-slate-800 hover:bg-slate-700 rounded-xl text-slate-300 transition-colors inline-flex"
+                    title="Bearbeiten"
+                  >
+                    <Edit2 className="w-4 h-4" />
+                  </button>
+
+                  <button 
+                    onClick={() => handleDelete(evt.id)}
+                    className="p-2 bg-rose-500/20 hover:bg-rose-500/40 rounded-xl text-rose-400 transition-colors inline-flex"
+                    title="Löschen"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
                 </div>
               </div>
             ))}
@@ -489,8 +550,60 @@ export const AdminDashboard = () => {
               </div>
             )}
           </div>
+        ) : activeTab === 'printers' ? (
+          /* Printers Table */
+          <div className="space-y-4">
+            <div className="flex justify-between items-center text-sm text-slate-400 pb-2 border-b border-slate-800">
+              <span>Konfigurierte Beleg- und Küchenbondrucker (ESC/POS & Konsole)</span>
+              <span>Aktive Drucker: {data.filter((p: any) => p.isActive).length}</span>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {data.map((printer: any) => (
+                <div key={printer.id} className="bg-slate-900/70 border border-slate-800 p-5 rounded-2xl space-y-3">
+                  <div className="flex justify-between items-start">
+                    <div className="flex items-center gap-3">
+                      <div className="p-2.5 bg-indigo-500/20 text-indigo-400 rounded-xl">
+                        <Printer className="w-6 h-6" />
+                      </div>
+                      <div>
+                        <h4 className="text-lg font-bold text-slate-100">{printer.name}</h4>
+                        <span className="text-xs text-slate-400 font-mono">Typ: {printer.type} {printer.ipAddress ? `(${printer.ipAddress}:${printer.port || 9100})` : ''}</span>
+                      </div>
+                    </div>
+                    <span className={`text-xs px-2.5 py-1 rounded-full font-bold ${printer.isActive ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-slate-800 text-slate-500'}`}>
+                      {printer.isActive ? 'Bereit' : 'Inaktiv'}
+                    </span>
+                  </div>
+
+                  <div className="pt-2 flex justify-between items-center border-t border-slate-800">
+                    <button
+                      onClick={() => handleTestPrint(printer.id)}
+                      className="px-3 py-1.5 rounded-xl bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 text-xs font-bold transition flex items-center gap-1.5 border border-indigo-500/30"
+                    >
+                      <Printer className="w-3.5 h-3.5" />
+                      Testbon drucken
+                    </button>
+                    <div className="flex gap-2">
+                      <button 
+                        onClick={() => handleOpenModal(printer)}
+                        className="p-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-slate-300 transition-colors"
+                        title="Bearbeiten"
+                      >
+                        <Edit2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+              {data.length === 0 && (
+                <div className="col-span-2 text-center py-12 text-slate-500">
+                  Keine Drucker konfiguriert.
+                </div>
+              )}
+            </div>
+          </div>
         ) : (
-          /* Standard Tables (Areas, Stations, etc.) */
+          /* Standard Tables (Areas, Stations, Categories, etc.) */
           <div className="overflow-x-auto">
             <table className="w-full text-left">
               <thead>
@@ -503,7 +616,14 @@ export const AdminDashboard = () => {
               <tbody className="divide-y divide-slate-700/50">
                 {data.map((item: any) => (
                   <tr key={item.id} className="hover:bg-slate-800/30 transition-colors">
-                    <td className="py-4 font-semibold">{item.name || item.username}</td>
+                    <td className="py-4 font-semibold">
+                      <div>{item.name || item.username}</div>
+                      {item.printer && (
+                        <span className="text-xs text-indigo-400 font-normal flex items-center gap-1 mt-0.5">
+                          🖨️ Drucker: {item.printer.name}
+                        </span>
+                      )}
+                    </td>
                     <td className="py-4 text-sm text-slate-400">
                       {item.role && <span className="bg-indigo-500/20 text-indigo-300 px-2 py-1 rounded-md mr-2">{item.role}</span>}
                       {item.status && <span className="bg-slate-800 px-2 py-1 rounded-md">{item.status}</span>}
@@ -533,8 +653,8 @@ export const AdminDashboard = () => {
                 ))}
                 {data.length === 0 && (
                   <tr>
-                    <td colSpan={3} className="text-center py-10 text-slate-500">
-                      Keine Einträge vorhanden
+                    <td colSpan={3} className="text-center py-8 text-slate-500">
+                      Keine Einträge vorhanden.
                     </td>
                   </tr>
                 )}
@@ -544,210 +664,287 @@ export const AdminDashboard = () => {
         )}
       </div>
 
-      {/* RKSV Legal Confirmation Modal */}
+      {/* RKSV DISCLAIMER & ACTIVATION MODAL */}
       {rksvModalOpen && rksvTargetEvent && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-md p-4 animate-fade-in">
-          <div className="bg-slate-900 border border-slate-700 rounded-3xl p-6 md:p-8 w-full max-w-xl shadow-2xl space-y-6">
-            <div className="flex items-center gap-3 text-amber-400">
-              <div className="w-12 h-12 rounded-2xl bg-amber-500/20 flex items-center justify-center border border-amber-500/30">
-                <ShieldAlert className="w-6 h-6" />
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fade-in">
+          <div className="bg-slate-900 border border-slate-700 p-6 sm:p-8 rounded-3xl max-w-xl w-full shadow-2xl space-y-6 animate-scale-up">
+            <div className="flex items-start gap-4">
+              <div className="p-3 bg-amber-500/20 text-amber-400 rounded-2xl border border-amber-500/30 shrink-0">
+                <ShieldAlert className="w-8 h-8" />
               </div>
               <div>
-                <h3 className="text-xl font-bold text-white">Rechtliche Bestätigung vor Feststart</h3>
-                <p className="text-xs text-slate-400">Veranstaltung: <strong className="text-slate-200">{rksvTargetEvent.name}</strong></p>
+                <h3 className="text-xl font-bold text-white">Rechtlicher Hinweis: RKSV-Konformität</h3>
+                <p className="text-sm text-slate-400 mt-1">
+                  Veranstaltung: <span className="text-slate-200 font-semibold">{rksvTargetEvent.name}</span>
+                </p>
               </div>
             </div>
 
-            <div className="bg-amber-500/10 border border-amber-500/30 rounded-2xl p-5 space-y-3">
-              <div className="flex items-start gap-2.5">
-                <AlertTriangle className="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5" />
-                <div className="text-sm text-slate-200 font-semibold leading-relaxed">
-                  „VereinOrder ist keine RKSV-Registrierkasse. Der Veranstalter ist selbst dafür verantwortlich zu prüfen, ob für diese Veranstaltung Einzelaufzeichnungs-, Belegerteilungs- oder Registrierkassenpflichten bestehen.“
-                </div>
+            <div className="bg-slate-950/80 border border-slate-800 p-4 rounded-2xl text-xs sm:text-sm text-slate-300 space-y-3 leading-relaxed">
+              <div className="font-semibold text-amber-300 flex items-center gap-1.5">
+                <AlertTriangle className="w-4 h-4 shrink-0" />
+                <span>Wichtige rechtliche Erklärung vor dem Echtbetrieb:</span>
               </div>
-
-              <div className="text-xs text-slate-400 pt-2 border-t border-amber-500/20 flex items-center justify-between">
-                <span>Dokumentation: BMF & USP Österreich</span>
-                <span className="font-mono">Hinweis-Version: 1.0</span>
-              </div>
-            </div>
-
-            <div className="bg-slate-950 border border-slate-800 rounded-2xl p-4 text-xs text-slate-400 space-y-1.5">
-              <div className="flex items-center gap-2 font-medium text-slate-300">
-                <Info className="w-4 h-4 text-indigo-400" />
-                Revisionssichere Archivierung:
-              </div>
-              <p>
-                Mit deiner Bestätigung wird dieser Vorgang unveränderlich im Audit-Log mit Datum, Uhrzeit, deinem Benutzerkonto und der Anwendungsversion protokolliert.
+              <p className="border-l-2 border-amber-500/50 pl-3 py-1 font-medium text-slate-200">
+                „VereinOrder ist <strong>keine RKSV-Registrierkasse</strong> im Sinne der österreichischen Registrierkassensicherheitsverordnung. Der Veranstalter ist selbst dafür verantwortlich zu prüfen, ob für diese Veranstaltung gesetzliche Einzelaufzeichnungs-, Belegerteilungs- oder Registrierkassenpflichten bestehen.“
               </p>
+              <div className="text-slate-400 text-[11px] pt-1">
+                Dieser Vorgang wird revisionssicher mit Zeitstempel, Benutzer-ID und Versionsnummer im Audit-Log archiviert.
+              </div>
             </div>
 
-            <label className="flex items-start gap-3 cursor-pointer p-3 rounded-xl hover:bg-slate-800/40 transition">
+            <label className="flex items-start gap-3 p-3 bg-slate-800/40 hover:bg-slate-800/70 rounded-2xl border border-slate-700/50 cursor-pointer transition">
               <input
                 type="checkbox"
                 checked={rksvConfirmed}
                 onChange={(e) => setRksvConfirmed(e.target.checked)}
-                className="w-5 h-5 rounded mt-0.5 accent-indigo-600 cursor-pointer"
+                className="w-5 h-5 mt-0.5 rounded border-slate-600 text-indigo-600 focus:ring-indigo-500"
               />
-              <span className="text-xs text-slate-300 font-medium">
-                Ich habe den rechtlichen Hinweis verstanden und bestätige die Aktivierung des Festbetriebs auf eigene Verantwortung des Veranstalters.
+              <span className="text-xs sm:text-sm text-slate-200 font-medium select-none">
+                Ich habe diesen Hinweis zur Kenntnis genommen und bestätige, dass VereinOrder für diese Veranstaltung unter Eigenverantwortung des Veranstalters eingesetzt wird.
               </span>
             </label>
 
-            <div className="flex gap-3 pt-2">
+            <div className="flex gap-3 justify-end pt-2">
               <button
                 type="button"
                 onClick={() => setRksvModalOpen(false)}
-                disabled={isActivating}
-                className="flex-1 px-4 py-3 rounded-xl font-bold bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors text-sm"
+                className="px-5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-sm transition"
               >
                 Abbrechen
               </button>
               <button
                 type="button"
-                onClick={handleConfirmActivate}
                 disabled={!rksvConfirmed || isActivating}
-                className="flex-1 px-4 py-3 rounded-xl font-bold bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white transition-colors text-sm shadow-lg shadow-emerald-600/30 flex items-center justify-center gap-2"
+                onClick={handleConfirmActivation}
+                className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold text-sm shadow-lg shadow-emerald-600/30 transition flex items-center gap-2"
               >
-                <CheckCircle2 className="w-4 h-4" />
-                {isActivating ? 'Aktivieren...' : 'Verbindlich Aktivieren'}
+                {isActivating ? 'Aktivierung läuft...' : 'Bestätigen & Scharf schalten'}
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Event Create / Edit Modal */}
+      {/* PRINTER MODAL */}
+      {isPrinterModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+          <div className="bg-slate-900 border border-slate-800 p-6 rounded-3xl max-w-md w-full shadow-2xl space-y-4">
+            <h3 className="text-xl font-bold text-white">
+              {editingPrinter ? 'Drucker bearbeiten' : 'Neuen Drucker anlegen'}
+            </h3>
+            <form onSubmit={handleSaveModal} className="space-y-4">
+              <div>
+                <label className="text-xs font-bold text-slate-400 block mb-1">Druckername</label>
+                <input
+                  type="text"
+                  required
+                  value={printerFormData.name}
+                  onChange={(e) => setPrinterFormData({ ...printerFormData, name: e.target.value })}
+                  placeholder="z. B. Küchen-Bon-Drucker 1"
+                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 text-white"
+                />
+              </div>
+              <div>
+                <label className="text-xs font-bold text-slate-400 block mb-1">Druckertyp</label>
+                <select
+                  value={printerFormData.type}
+                  onChange={(e) => setPrinterFormData({ ...printerFormData, type: e.target.value })}
+                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 text-white"
+                >
+                  <option value="CONSOLE">Konsole / Virtuell (Test)</option>
+                  <option value="ESC_POS_NETWORK">Netzwerk-Bondrucker (LAN / WLAN)</option>
+                  <option value="ESC_POS_USB">USB-Bondrucker</option>
+                  <option value="WINDOWS_DRIVER">Windows Treiber-Drucker</option>
+                </select>
+              </div>
+              {printerFormData.type === 'ESC_POS_NETWORK' && (
+                <div className="grid grid-cols-3 gap-2">
+                  <div className="col-span-2">
+                    <label className="text-xs font-bold text-slate-400 block mb-1">IP-Adresse</label>
+                    <input
+                      type="text"
+                      value={printerFormData.ipAddress}
+                      onChange={(e) => setPrinterFormData({ ...printerFormData, ipAddress: e.target.value })}
+                      placeholder="192.168.1.100"
+                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 text-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-bold text-slate-400 block mb-1">Port</label>
+                    <input
+                      type="number"
+                      value={printerFormData.port}
+                      onChange={(e) => setPrinterFormData({ ...printerFormData, port: Number(e.target.value) })}
+                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 text-white"
+                    />
+                  </div>
+                </div>
+              )}
+              <div className="flex gap-2 justify-end pt-2">
+                <button
+                  type="button"
+                  onClick={() => setIsPrinterModalOpen(false)}
+                  className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold"
+                >
+                  Abbrechen
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold"
+                >
+                  Speichern
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* EVENT MODAL */}
       {isEventModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-          <div className="bg-slate-900 border border-slate-700 rounded-3xl p-6 w-full max-w-lg shadow-2xl animate-slide-up space-y-4">
-            <h3 className="text-xl font-bold">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+          <div className="bg-slate-900 border border-slate-800 p-6 rounded-3xl max-w-lg w-full shadow-2xl space-y-4">
+            <h3 className="text-xl font-bold text-white">
               {editingEvent ? 'Veranstaltung bearbeiten' : 'Neue Veranstaltung anlegen'}
             </h3>
-
-            <div className="space-y-3 text-sm">
+            <form onSubmit={handleSaveModal} className="space-y-4">
               <div>
-                <label className="block font-medium text-slate-400 mb-1">Veranstaltungsname *</label>
+                <label className="text-xs font-bold text-slate-400 block mb-1">Name der Veranstaltung</label>
                 <input
                   type="text"
                   required
                   value={eventFormData.name}
                   onChange={(e) => setEventFormData({ ...eventFormData, name: e.target.value })}
-                  placeholder="z.B. Feuerwehrfest 2026"
-                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 focus:outline-none focus:border-indigo-500 text-slate-200"
+                  placeholder="z. B. Feuerwehrfest 2026"
+                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 text-white"
                 />
               </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block font-medium text-slate-400 mb-1">Veranstalter</label>
+                  <label className="text-xs font-bold text-slate-400 block mb-1">Veranstalter</label>
                   <input
                     type="text"
                     value={eventFormData.organizer}
                     onChange={(e) => setEventFormData({ ...eventFormData, organizer: e.target.value })}
-                    placeholder="z.B. FF Musterdorf"
-                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 focus:outline-none focus:border-indigo-500 text-slate-200"
+                    placeholder="Freiwillige Feuerwehr"
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 text-white"
                   />
                 </div>
-
                 <div>
-                  <label className="block font-medium text-slate-400 mb-1">Ort</label>
+                  <label className="text-xs font-bold text-slate-400 block mb-1">Ort</label>
                   <input
                     type="text"
                     value={eventFormData.location}
                     onChange={(e) => setEventFormData({ ...eventFormData, location: e.target.value })}
-                    placeholder="z.B. Festzelt Hauptplatz"
-                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 focus:outline-none focus:border-indigo-500 text-slate-200"
+                    placeholder="Festzelt Sportplatz"
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 text-white"
                   />
                 </div>
               </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block font-medium text-slate-400 mb-1">Startzeit</label>
+                  <label className="text-xs font-bold text-slate-400 block mb-1">Startzeit</label>
                   <input
                     type="datetime-local"
                     value={eventFormData.startTime}
                     onChange={(e) => setEventFormData({ ...eventFormData, startTime: e.target.value })}
-                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 focus:outline-none focus:border-indigo-500 text-slate-200"
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 text-white text-sm"
                   />
                 </div>
-
                 <div>
-                  <label className="block font-medium text-slate-400 mb-1">Endzeit</label>
+                  <label className="text-xs font-bold text-slate-400 block mb-1">Endzeit</label>
                   <input
                     type="datetime-local"
                     value={eventFormData.endTime}
                     onChange={(e) => setEventFormData({ ...eventFormData, endTime: e.target.value })}
-                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 focus:outline-none focus:border-indigo-500 text-slate-200"
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 text-white text-sm"
                   />
                 </div>
               </div>
-            </div>
-
-            <div className="flex gap-3 pt-4 border-t border-slate-800">
-              <button
-                type="button"
-                onClick={() => setIsEventModalOpen(false)}
-                className="flex-1 px-4 py-2.5 rounded-xl font-bold bg-slate-800 hover:bg-slate-700 transition-colors text-sm"
-              >
-                Abbrechen
-              </button>
-              <button
-                type="button"
-                onClick={handleSaveEvent}
-                className="flex-1 px-4 py-2.5 rounded-xl font-bold bg-indigo-600 hover:bg-indigo-500 text-white transition-colors text-sm shadow-lg shadow-indigo-600/30"
-              >
-                Speichern
-              </button>
-            </div>
+              <div className="flex gap-2 justify-end pt-2">
+                <button
+                  type="button"
+                  onClick={() => setIsEventModalOpen(false)}
+                  className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold"
+                >
+                  Abbrechen
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold"
+                >
+                  Speichern
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}
 
-      {/* Generic Area / Item Modal */}
+      {/* GENERIC ITEM MODAL (Areas, Stations, etc.) */}
       {isModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-          <div className="bg-slate-900 border border-slate-700 rounded-3xl p-6 w-full max-w-md shadow-2xl animate-slide-up">
-            <h3 className="text-xl font-bold mb-4">{editingItem ? 'Eintrag bearbeiten' : 'Neu anlegen'}</h3>
-            
-            <div className="space-y-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+          <div className="bg-slate-900 border border-slate-800 p-6 rounded-3xl max-w-md w-full shadow-2xl space-y-4">
+            <h3 className="text-xl font-bold text-white">
+              {editingItem ? 'Eintrag bearbeiten' : 'Neu anlegen'}
+            </h3>
+            <form onSubmit={handleSaveModal} className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-slate-400 mb-1">Name</label>
-                <input 
-                  type="text" 
+                <label className="text-xs font-bold text-slate-400 block mb-1">Bezeichnung</label>
+                <input
+                  type="text"
+                  required
                   value={formData.name}
-                  onChange={(e) => setFormData({...formData, name: e.target.value})}
-                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 focus:outline-none focus:border-indigo-500 transition-colors"
-                  placeholder="z.B. Zelt"
+                  onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                  placeholder="Name..."
+                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 text-white"
                 />
               </div>
-              
-              <div>
-                <label className="block text-sm font-medium text-slate-400 mb-1">Sortierung</label>
-                <input 
-                  type="number" 
-                  value={formData.sortOrder}
-                  onChange={(e) => setFormData({...formData, sortOrder: parseInt(e.target.value) || 0})}
-                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 focus:outline-none focus:border-indigo-500 transition-colors"
-                />
-              </div>
-            </div>
 
-            <div className="flex gap-3 mt-8">
-              <button 
-                onClick={() => setIsModalOpen(false)}
-                className="flex-1 px-4 py-3 rounded-xl font-bold bg-slate-800 hover:bg-slate-700 transition-colors"
-              >
-                Abbrechen
-              </button>
-              <button 
-                onClick={handleSave}
-                className="flex-1 px-4 py-3 rounded-xl font-bold bg-indigo-500 hover:bg-indigo-400 transition-colors"
-              >
-                Speichern
-              </button>
-            </div>
+              {activeTab === 'stations' && (
+                <div>
+                  <label className="text-xs font-bold text-slate-400 block mb-1">Zugewiesener Bondrucker</label>
+                  <select
+                    value={formData.printerId || ''}
+                    onChange={(e) => setFormData({ ...formData, printerId: e.target.value || undefined })}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 text-white text-sm"
+                  >
+                    <option value="">Standard-Drucker verwenden</option>
+                    {printersList.map((p: any) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name} ({p.type})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              <div>
+                <label className="text-xs font-bold text-slate-400 block mb-1">Sortierung</label>
+                <input
+                  type="number"
+                  value={formData.sortOrder}
+                  onChange={(e) => setFormData({ ...formData, sortOrder: Number(e.target.value) })}
+                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 text-white"
+                />
+              </div>
+              <div className="flex gap-2 justify-end pt-2">
+                <button
+                  type="button"
+                  onClick={() => setIsModalOpen(false)}
+                  className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold"
+                >
+                  Abbrechen
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold"
+                >
+                  Speichern
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

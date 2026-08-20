@@ -11,8 +11,8 @@ export class OrdersController {
 
   @Post()
   @Roles('ADMINISTRATOR', 'WAITER', 'CASHIER')
-  async createOrder(@Request() req, @Body() body: any) {
-    const userId = req.user.userId;
+  async createOrder(@Request() req: any, @Body() body: any) {
+    const userId = req.user?.userId;
     return this.ordersService.createOrder(userId, body);
   }
 
@@ -23,44 +23,54 @@ export class OrdersController {
   }
 
   @Post(':id/payments')
-  @Roles('ADMINISTRATOR', 'CASHIER', 'WAITER')
+  @Roles('ADMINISTRATOR', 'WAITER', 'CASHIER')
   async addPayments(
-    @Request() req,
+    @Request() req: any,
     @Param('id') id: string,
     @Body('payments') payments: { amount: number, method: 'CASH' | 'CARD' | 'VOUCHER' }[]
   ) {
-    const userId = req.user?.userId || null;
+    const userId = req.user?.userId;
     return this.ordersService.addPaymentsToOrder(id, payments, userId);
   }
 
-  @Post(':id/cancel')
-  async cancelOrder(
-    @Request() req,
-    @Param('id') id: string,
-    @Body('reason') reason?: string
+  @Post(':id/reprint')
+  @Roles('ADMINISTRATOR', 'WAITER', 'CASHIER', 'STATION')
+  async reprintOrder(
+    @Request() req: any,
+    @Param('id') id: string
   ) {
-    const userId = req.user?.userId || null;
-    return this.ordersService.cancelOrder(id, userId, reason);
+    const userId = req.user?.userId;
+    return this.ordersService.reprintOrder(id, userId);
+  }
+
+  @Post(':id/cancel')
+  @Roles('ADMINISTRATOR', 'WAITER', 'CASHIER')
+  async cancelOrder(
+    @Request() req: any,
+    @Param('id') id: string,
+    @Body('reason') reason: string
+  ) {
+    const userId = req.user?.userId;
+    return this.ordersService.cancelOrder(id, reason, userId);
   }
 
   @Post('items/:itemId/cancel')
+  @Roles('ADMINISTRATOR', 'WAITER', 'CASHIER')
   async cancelOrderItem(
-    @Request() req,
+    @Request() req: any,
     @Param('itemId') itemId: string,
-    @Body('reason') reason?: string
+    @Body('reason') reason: string
   ) {
-    const userId = req.user?.userId || null;
-    return this.ordersService.cancelOrderItem(itemId, userId, reason);
+    const userId = req.user?.userId;
+    return this.ordersService.cancelOrderItem(itemId, reason, userId);
   }
 
   @Patch(':id/priority')
-  @Roles('ADMINISTRATOR', 'STATION', 'WAITER')
-  async togglePriority(
-    @Request() req,
+  @Roles('ADMINISTRATOR', 'WAITER', 'CASHIER', 'STATION')
+  async updatePriority(
     @Param('id') id: string,
     @Body('isPriority') isPriority: boolean
   ) {
-    const userId = req.user?.userId || null;
-    return this.ordersService.toggleOrderPriority(id, isPriority, userId);
+    return this.ordersService.updatePriority(id, isPriority);
   }
 }

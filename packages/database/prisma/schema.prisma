@@ -85,6 +85,10 @@ model Station {
   isActive  Boolean  @default(true)
   eventId   String
   event     Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  
+  printerId String?
+  printer   Printer? @relation(fields: [printerId], references: [id], onDelete: SetNull)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -270,6 +274,13 @@ enum PrintJobStatus {
   FAILED
 }
 
+enum PrintJobType {
+  STATION_TICKET
+  PRODUCT_VOUCHER
+  RECEIPT
+  CASHIER_CLOSING
+}
+
 model Printer {
   id              String      @id @default(uuid())
   name            String
@@ -278,6 +289,7 @@ model Printer {
   port            Int?
   isActive        Boolean     @default(true)
   jobs            PrintJob[]
+  stations        Station[]
   createdAt       DateTime    @default(now())
   updatedAt       DateTime    @updatedAt
 }
@@ -286,6 +298,7 @@ model PrintJob {
   id              String          @id @default(uuid())
   printerId       String
   printer         Printer         @relation(fields: [printerId], references: [id])
+  jobType         PrintJobType    @default(STATION_TICKET)
   content         Json            // The data payload for the printed ticket
   status          PrintJobStatus  @default(PENDING)
   orderId         String?         // Optional reference to the order

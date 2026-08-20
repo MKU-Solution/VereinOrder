@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api } from '../lib/api';
-import { Clock, RefreshCw, CheckCircle, Settings2 } from 'lucide-react';
+import { Clock, RefreshCw, CheckCircle, Settings2, Printer } from 'lucide-react';
 import { CheckoutModal } from '../components/CheckoutModal';
 import { OrderDetailsModal } from '../components/OrderDetailsModal';
 
@@ -57,6 +57,16 @@ export const UnpaidOrders = () => {
     }
   };
 
+  const handleReprintOrder = async (orderId: string) => {
+    try {
+      await api.post(`/orders/${orderId}/reprint`);
+      alert('Nachdruckauftrag erfolgreich an die Drucker gesendet!');
+    } catch (err) {
+      console.error("Reprint failed", err);
+      alert('Fehler beim Nachdrucken!');
+    }
+  };
+
   const formatPrice = (cents: number) => `€ ${(cents / 100).toFixed(2)}`;
 
   if (isLoading) return <div className="text-center py-20 animate-pulse text-slate-400">Lade offene Bestellungen...</div>;
@@ -105,9 +115,20 @@ export const UnpaidOrders = () => {
                           {order.lifecycleStatus}
                         </span>
                       </div>
-                      <div className="flex items-center gap-4">
-                        <span className="text-lg font-bold">{formatPrice(order.totalAmount)}</span>
-                        <button onClick={() => setEditingOrder(order)} className="p-2 hover:bg-slate-700 rounded-xl transition-colors text-slate-400">
+                      <div className="flex items-center gap-2">
+                        <span className="text-lg font-bold mr-2">{formatPrice(order.totalAmount)}</span>
+                        <button 
+                          onClick={() => handleReprintOrder(order.id)} 
+                          title="Bons/Beleg nachdrucken"
+                          className="p-2 hover:bg-slate-700 rounded-xl transition-colors text-indigo-400 hover:text-indigo-300"
+                        >
+                          <Printer className="w-5 h-5" />
+                        </button>
+                        <button 
+                          onClick={() => setEditingOrder(order)} 
+                          title="Bestellung bearbeiten / stornieren"
+                          className="p-2 hover:bg-slate-700 rounded-xl transition-colors text-slate-400"
+                        >
                           <Settings2 className="w-5 h-5" />
                         </button>
                       </div>
