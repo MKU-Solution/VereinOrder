@@ -14,6 +14,7 @@ interface CreateOrderDto {
   payments?: { amount: number, method: 'CASH' | 'CARD' | 'VOUCHER' }[];
   idempotencyKey?: string;
   tableName?: string;
+  areaId?: string;
 }
 
 @Injectable()
@@ -185,6 +186,14 @@ export class OrdersService {
     }) : null;
     const cashierSessionId = activeSession?.id || null;
 
+    if (dto.areaId) {
+      const area = await this.prisma.area.findFirst({
+        where: { id: dto.areaId, eventId: dto.eventId },
+        select: { id: true }
+      });
+      if (!area) throw new BadRequestException('Area does not belong to the selected event');
+    }
+
     return await this.prisma.$transaction(async (prisma) => {
       const order = await prisma.order.create({
         data: {
@@ -196,6 +205,7 @@ export class OrdersService {
           eventId: dto.eventId,
           idempotencyKey: dto.idempotencyKey,
           tableName: dto.tableName,
+          areaId: dto.areaId,
           cashierSessionId,
           items: {
             create: orderItemsData

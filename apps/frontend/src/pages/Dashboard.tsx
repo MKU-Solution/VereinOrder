@@ -101,6 +101,7 @@ export const Dashboard = () => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [successMsg, setSuccessMsg] = useState('');
   const [tableName, setTableName] = useState('');
+  const [areaId, setAreaId] = useState<string | undefined>();
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [selectedProductForOptions, setSelectedProductForOptions] = useState<any | null>(null);
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
@@ -135,7 +136,8 @@ export const Dashboard = () => {
               items: order.items, 
               payments: order.payments,
               idempotencyKey: order.idempotencyKey,
-              tableName: order.tableName
+              tableName: order.tableName,
+              areaId: order.areaId
             });
             await removeOfflineOrder(order.idempotencyKey);
           } catch (e) {
@@ -227,7 +229,10 @@ export const Dashboard = () => {
     }
   };
 
-  const handleCheckoutSubmit = async (payments?: { amount: number, method: 'CASH' | 'CARD' | 'VOUCHER' }[]) => {
+  const handleCheckoutSubmit = async (
+    payments?: { amount: number, method: 'CASH' | 'CARD' | 'VOUCHER' }[],
+    checkoutTableName?: string,
+  ) => {
     if (items.length === 0) return;
     
     // Check if any cart items are out of stock
@@ -239,7 +244,9 @@ export const Dashboard = () => {
 
     setIsSubmitting(true);
     const idempotencyKey = crypto.randomUUID();
-    const nameToUse = tableName || 'Unbekannt';
+    const normalizedCheckoutTable = checkoutTableName?.trim();
+    const nameToUse = normalizedCheckoutTable || tableName || 'Unbekannt';
+    const areaToUse = normalizedCheckoutTable && normalizedCheckoutTable !== tableName.trim() ? undefined : areaId;
 
     try {
       const orderItems = items.map(i => ({
@@ -257,12 +264,14 @@ export const Dashboard = () => {
         items: orderItems, 
         payments, 
         idempotencyKey,
-        tableName: nameToUse 
+        tableName: nameToUse,
+        areaId: areaToUse,
       });
 
       setSuccessMsg('Gesendet!');
       clearCart();
       setTableName('');
+      setAreaId(undefined);
       setTimeout(() => setSuccessMsg(''), 2000);
     } catch (err: any) {
       console.error("Order submission failed, saving offline", err);
@@ -284,12 +293,14 @@ export const Dashboard = () => {
           items: orderItems,
           payments: payments || [],
           tableName: nameToUse,
+          areaId: areaToUse,
           createdAt: Date.now()
         });
         
         setSuccessMsg('Offline gespeichert!');
         clearCart();
         setTableName('');
+        setAreaId(undefined);
         setTimeout(() => setSuccessMsg(''), 3000);
       } else {
         alert('Fehler bei der Buchung: ' + (err.response?.data?.message || err.message));
@@ -500,7 +511,10 @@ export const Dashboard = () => {
       <TableSelectionModal
         isOpen={isTableModalOpen}
         onClose={() => setIsTableModalOpen(false)}
-        onSelect={(table) => setTableName(table)}
+        onSelect={(table, selectedAreaId) => {
+          setTableName(table);
+          setAreaId(selectedAreaId);
+        }}
         eventId={products.length > 0 ? products[0].eventId : null}
       />
     </div>
