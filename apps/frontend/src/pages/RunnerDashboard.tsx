@@ -428,16 +428,19 @@ export const RunnerDashboard = () => {
     }
   };
 
-  const matchesArea = (order: RunnerOrder) =>
-    selectedArea === "all" ||
-    (selectedArea === "none" ? !order.areaId : order.areaId === selectedArea);
+  const matchesArea = useCallback(
+    (order: RunnerOrder) =>
+      selectedArea === "all" ||
+      (selectedArea === "none" ? !order.areaId : order.areaId === selectedArea),
+    [selectedArea],
+  );
   const filteredReady = useMemo(
     () => readyOrders.filter(matchesArea),
-    [readyOrders, selectedArea],
+    [readyOrders, matchesArea],
   );
   const filteredMine = useMemo(
     () => myOrders.filter(matchesArea),
-    [myOrders, selectedArea],
+    [myOrders, matchesArea],
   );
   const areaCount = (areaId: string) =>
     readyOrders.filter((order) =>

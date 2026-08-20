@@ -62,11 +62,19 @@ export class SessionsService {
 
     try {
       return await this.prisma.$transaction(async (prisma) => {
-        const event = await prisma.event.findFirst({
-          where: { id: eventId, status: { in: ["ACTIVE", "TEST_MODE"] } },
-          select: { id: true },
-        });
-        if (!event)
+        const events = await prisma.$queryRaw<
+          { id: string; status: string; testMode: boolean }[]
+        >(Prisma.sql`
+          SELECT "id", "status", "testMode" FROM "Event" WHERE "id" = ${eventId} FOR UPDATE
+        `);
+        const event = events[0];
+        const dataMode =
+          event?.status === "ACTIVE" && !event.testMode
+            ? "LIVE"
+            : event?.status === "TEST_MODE" && event.testMode
+              ? "TEST"
+              : null;
+        if (!dataMode)
           throw new BadRequestException(
             "Event is not active for cashier sessions",
           );
@@ -81,7 +89,13 @@ export class SessionsService {
         }
 
         const session = await prisma.cashierSession.create({
-          data: { userId, eventId, startingBalance, status: "ACTIVE" },
+          data: {
+            userId,
+            eventId,
+            startingBalance,
+            status: "ACTIVE",
+            dataMode,
+          },
         });
         await prisma.auditLog.create({
           data: {

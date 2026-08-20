@@ -18,7 +18,15 @@ describe("OrdersService – Bonkassen-Schnellverkauf für Issue #52", () => {
   beforeEach(() => {
     prisma = {
       $transaction: jest.fn((callback) => callback(prisma)),
-      $queryRaw: jest.fn().mockResolvedValue([{ id: "session-1" }]),
+      $queryRaw: jest.fn().mockImplementation((query: any) => {
+        const sql = query?.strings?.join("") || "";
+        if (sql.includes('FROM "Event"')) {
+          return Promise.resolve([
+            { id: "event-1", status: "TEST_MODE", testMode: true },
+          ]);
+        }
+        return Promise.resolve([{ id: "session-1", dataMode: "TEST" }]);
+      }),
       event: {
         findFirst: jest.fn().mockResolvedValue({ id: "event-1" }),
         findUnique: jest
@@ -46,6 +54,7 @@ describe("OrdersService – Bonkassen-Schnellverkauf für Issue #52", () => {
           eventId: "event-1",
           userId: "cashier-1",
           totalAmount: 900,
+          dataMode: "TEST",
           tableName: null,
           isPriority: false,
           createdAt: new Date("2026-08-20T10:00:00Z"),
@@ -175,7 +184,14 @@ describe("OrdersService – Bonkassen-Schnellverkauf für Issue #52", () => {
   });
 
   it("bricht ohne aktive Kassensitzung vor Bestellung und Zahlung ab", async () => {
-    prisma.$queryRaw.mockResolvedValue([]);
+    prisma.$queryRaw.mockImplementation((query: any) => {
+      const sql = query?.strings?.join("") || "";
+      return Promise.resolve(
+        sql.includes('FROM "Event"')
+          ? [{ id: "event-1", status: "TEST_MODE", testMode: true }]
+          : [],
+      );
+    });
 
     await expect(
       service.createQuickSale("cashier-1", {

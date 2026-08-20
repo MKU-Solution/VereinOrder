@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useAuthStore } from "../store/useAuthStore";
 import { api } from "../lib/api";
 import {
@@ -54,7 +54,7 @@ export const CashierDashboard = () => {
   const [closingBalanceInput, setClosingBalanceInput] = useState("");
   const [showCloseModal, setShowCloseModal] = useState(false);
 
-  const fetchSession = async () => {
+  const fetchSession = useCallback(async () => {
     if (!eventId) return;
     try {
       setLoading(true);
@@ -75,7 +75,7 @@ export const CashierDashboard = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [eventId]);
 
   useEffect(() => {
     const fetchEvent = async () => {
@@ -94,7 +94,7 @@ export const CashierDashboard = () => {
 
   useEffect(() => {
     if (eventId) fetchSession();
-  }, [eventId]);
+  }, [eventId, fetchSession]);
 
   const handleStartSession = async (e: React.FormEvent) => {
     e.preventDefault();

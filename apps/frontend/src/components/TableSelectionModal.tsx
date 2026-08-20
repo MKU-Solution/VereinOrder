@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react';
-import { X, Delete, History, MapPin, Search } from 'lucide-react';
-import { api } from '../lib/api';
+import { useState, useEffect } from "react";
+import { X, Delete, History, MapPin, Search } from "lucide-react";
+import { api } from "../lib/api";
 
 interface TableSelectionModalProps {
   isOpen: boolean;
@@ -9,47 +9,57 @@ interface TableSelectionModalProps {
   eventId: string | null;
 }
 
-export const TableSelectionModal = ({ isOpen, onClose, onSelect, eventId }: TableSelectionModalProps) => {
-  const [inputValue, setInputValue] = useState('');
+export const TableSelectionModal = ({
+  isOpen,
+  onClose,
+  onSelect,
+  eventId,
+}: TableSelectionModalProps) => {
+  const [inputValue, setInputValue] = useState("");
   const [areas, setAreas] = useState<any[]>([]);
   const [recentTables, setRecentTables] = useState<string[]>([]);
   const [selectedAreaId, setSelectedAreaId] = useState<string | undefined>();
 
   useEffect(() => {
-    if (isOpen) {
-      setInputValue('');
-      setSelectedAreaId(undefined);
-      loadAreas();
-      loadRecentTables();
-    }
-  }, [isOpen, eventId]);
+    if (!isOpen) return;
+    setInputValue("");
+    setSelectedAreaId(undefined);
 
-  const loadAreas = async () => {
-    if (!eventId) return;
-    try {
-      const res = await api.get(`/areas?eventId=${eventId}`);
-      setAreas(res.data);
-    } catch (err) {
-      console.error('Failed to load areas', err);
-    }
-  };
+    const loadAreas = async () => {
+      if (!eventId) {
+        setAreas([]);
+        return;
+      }
+      try {
+        const res = await api.get(`/areas?eventId=${eventId}`);
+        setAreas(res.data);
+      } catch (err) {
+        console.error("Failed to load areas", err);
+      }
+    };
 
-  const loadRecentTables = () => {
     try {
-      const stored = localStorage.getItem('vereinorder_recent_tables');
+      const stored = localStorage.getItem("vereinorder_recent_tables");
       if (stored) {
         setRecentTables(JSON.parse(stored));
       }
     } catch (err) {
-      console.error('Failed to load recent tables', err);
+      console.error("Failed to load recent tables", err);
     }
-  };
+    void loadAreas();
+  }, [isOpen, eventId]);
 
   const saveRecentTable = (table: string) => {
-    if (!table || table === 'Abholung') return;
+    if (!table || table === "Abholung") return;
     try {
-      let updated = [table, ...recentTables.filter(t => t !== table)].slice(0, 5);
-      localStorage.setItem('vereinorder_recent_tables', JSON.stringify(updated));
+      const updated = [table, ...recentTables.filter((t) => t !== table)].slice(
+        0,
+        5,
+      );
+      localStorage.setItem(
+        "vereinorder_recent_tables",
+        JSON.stringify(updated),
+      );
       setRecentTables(updated);
     } catch (err) {
       // Ignore
@@ -57,19 +67,22 @@ export const TableSelectionModal = ({ isOpen, onClose, onSelect, eventId }: Tabl
   };
 
   const handleNumpad = (val: string) => {
-    setInputValue(prev => prev + val);
+    setInputValue((prev) => prev + val);
   };
 
   const handleBackspace = () => {
-    setInputValue(prev => prev.slice(0, -1));
+    setInputValue((prev) => prev.slice(0, -1));
   };
 
   const handleAreaSelect = (areaId: string, areaName: string) => {
-    setInputValue(areaName + ' ');
+    setInputValue(areaName + " ");
     setSelectedAreaId(areaId);
   };
 
-  const handleSubmit = (tableToSubmit: string = inputValue, areaId: string | null | undefined = selectedAreaId) => {
+  const handleSubmit = (
+    tableToSubmit: string = inputValue,
+    areaId: string | null | undefined = selectedAreaId,
+  ) => {
     const finalTable = tableToSubmit.trim();
     if (finalTable) {
       saveRecentTable(finalTable);
@@ -79,7 +92,7 @@ export const TableSelectionModal = ({ isOpen, onClose, onSelect, eventId }: Tabl
   };
 
   const handleTakeaway = () => {
-    onSelect('Abholung');
+    onSelect("Abholung");
     onClose();
   };
 
@@ -92,13 +105,15 @@ export const TableSelectionModal = ({ isOpen, onClose, onSelect, eventId }: Tabl
           <MapPin className="text-indigo-400 w-6 h-6" />
           Tisch / Bereich
         </h2>
-        <button onClick={onClose} className="p-2 rounded-full bg-slate-800 text-slate-400 hover:text-white transition-colors">
+        <button
+          onClick={onClose}
+          className="p-2 rounded-full bg-slate-800 text-slate-400 hover:text-white transition-colors"
+        >
           <X className="w-6 h-6" />
         </button>
       </div>
 
       <div className="flex-1 overflow-y-auto p-4 space-y-6">
-        
         {/* Input Field */}
         <div className="bg-slate-800 p-4 rounded-2xl flex items-center shadow-inner">
           <Search className="w-6 h-6 text-slate-500 mr-3" />
@@ -114,7 +129,14 @@ export const TableSelectionModal = ({ isOpen, onClose, onSelect, eventId }: Tabl
             autoFocus
           />
           {inputValue && (
-            <button onClick={() => { setInputValue(''); setSelectedAreaId(undefined); }} className="p-2 text-slate-400 hover:text-white" aria-label="Eingabe löschen">
+            <button
+              onClick={() => {
+                setInputValue("");
+                setSelectedAreaId(undefined);
+              }}
+              className="p-2 text-slate-400 hover:text-white"
+              aria-label="Eingabe löschen"
+            >
               <X className="w-6 h-6" />
             </button>
           )}
@@ -123,14 +145,16 @@ export const TableSelectionModal = ({ isOpen, onClose, onSelect, eventId }: Tabl
         {/* Areas Quick Select */}
         {areas.length > 0 && (
           <div className="space-y-2">
-            <h3 className="text-sm font-semibold text-slate-400 uppercase tracking-wider">Bereiche</h3>
+            <h3 className="text-sm font-semibold text-slate-400 uppercase tracking-wider">
+              Bereiche
+            </h3>
             <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
-              {areas.map(a => (
+              {areas.map((a) => (
                 <button
                   key={a.id}
                   onClick={() => handleAreaSelect(a.id, a.name)}
                   aria-pressed={selectedAreaId === a.id}
-                  className={`shrink-0 border px-5 py-3 rounded-xl font-bold whitespace-nowrap active:bg-indigo-500/40 transition-colors ${selectedAreaId === a.id ? 'bg-indigo-500 text-white border-indigo-400' : 'bg-indigo-500/20 text-indigo-300 border-indigo-500/30'}`}
+                  className={`shrink-0 border px-5 py-3 rounded-xl font-bold whitespace-nowrap active:bg-indigo-500/40 transition-colors ${selectedAreaId === a.id ? "bg-indigo-500 text-white border-indigo-400" : "bg-indigo-500/20 text-indigo-300 border-indigo-500/30"}`}
                 >
                   {a.name}
                 </button>
@@ -146,7 +170,7 @@ export const TableSelectionModal = ({ isOpen, onClose, onSelect, eventId }: Tabl
               <History className="w-4 h-4" /> Zuletzt verwendet
             </h3>
             <div className="flex flex-wrap gap-2">
-              {recentTables.map(t => (
+              {recentTables.map((t) => (
                 <button
                   key={t}
                   onClick={() => handleSubmit(t, null)}
@@ -161,7 +185,7 @@ export const TableSelectionModal = ({ isOpen, onClose, onSelect, eventId }: Tabl
 
         {/* Numpad */}
         <div className="grid grid-cols-3 gap-3 mt-auto pt-6">
-          {[1, 2, 3, 4, 5, 6, 7, 8, 9].map(num => (
+          {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((num) => (
             <button
               key={num}
               onClick={() => handleNumpad(num.toString())}
@@ -177,7 +201,7 @@ export const TableSelectionModal = ({ isOpen, onClose, onSelect, eventId }: Tabl
             Abholung
           </button>
           <button
-            onClick={() => handleNumpad('0')}
+            onClick={() => handleNumpad("0")}
             className="bg-slate-800 hover:bg-slate-700 active:bg-slate-600 text-white text-3xl font-bold py-6 rounded-2xl transition-colors shadow-sm"
           >
             0
