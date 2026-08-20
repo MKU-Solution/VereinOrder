@@ -1,7 +1,7 @@
-import { Injectable, Inject, NotFoundException } from '@nestjs/common';
-import { PrismaClient } from '@vereinorder/database';
-import { PRISMA_CLIENT } from '../prisma/prisma.module';
-import * as bcrypt from 'bcryptjs';
+import { Injectable, Inject, NotFoundException } from "@nestjs/common";
+import { PrismaClient } from "@vereinorder/database";
+import { PRISMA_CLIENT } from "../prisma/prisma.module";
+import * as bcrypt from "bcryptjs";
 
 @Injectable()
 export class UsersService {
@@ -15,9 +15,9 @@ export class UsersService {
         role: true,
         isActive: true,
         createdAt: true,
-        updatedAt: true
+        updatedAt: true,
       },
-      orderBy: { createdAt: 'desc' }
+      orderBy: { createdAt: "desc" },
     });
   }
 
@@ -30,23 +30,23 @@ export class UsersService {
         username: data.username,
         role: data.role,
         isActive: data.isActive ?? true,
-        pinHash
+        pinHash,
       },
-      select: { id: true, username: true, role: true, isActive: true }
+      select: { id: true, username: true, role: true, isActive: true },
     });
 
     if (createdByUserId) {
       await this.prisma.auditLog.create({
         data: {
-          action: 'USER_CREATED',
+          action: "USER_CREATED",
           entityId: user.id,
-          entityType: 'User',
+          entityType: "User",
           userId: createdByUserId,
           details: {
             username: user.username,
-            role: user.role
-          }
-        }
+            role: user.role,
+          },
+        },
       });
     }
 
@@ -55,33 +55,46 @@ export class UsersService {
 
   async update(id: string, data: any, updatedByUserId?: string) {
     const existing = await this.prisma.user.findUnique({ where: { id } });
-    if (!existing) throw new NotFoundException('User not found');
+    if (!existing) throw new NotFoundException("User not found");
 
     const updated = await this.prisma.user.update({
       where: { id },
       data: {
         username: data.username,
         role: data.role,
-        isActive: data.isActive
+        isActive: data.isActive,
       },
-      select: { id: true, username: true, role: true, isActive: true }
+      select: { id: true, username: true, role: true, isActive: true },
     });
+
+    if (existing.username !== updated.username) {
+      await this.prisma.authThrottle.deleteMany({
+        where: {
+          key: {
+            in: [
+              existing.username.toLocaleLowerCase("en-US"),
+              updated.username.toLocaleLowerCase("en-US"),
+            ],
+          },
+        },
+      });
+    }
 
     if (updatedByUserId) {
       await this.prisma.auditLog.create({
         data: {
-          action: 'USER_UPDATED',
+          action: "USER_UPDATED",
           entityId: id,
-          entityType: 'User',
+          entityType: "User",
           userId: updatedByUserId,
           details: {
             username: updated.username,
             previousRole: existing.role,
             newRole: updated.role,
             previousActive: existing.isActive,
-            newActive: updated.isActive
-          }
-        }
+            newActive: updated.isActive,
+          },
+        },
       });
     }
 
@@ -95,20 +108,23 @@ export class UsersService {
     const updated = await this.prisma.user.update({
       where: { id },
       data: { pinHash },
-      select: { id: true, username: true }
+      select: { id: true, username: true },
+    });
+    await this.prisma.authThrottle.deleteMany({
+      where: { key: updated.username.toLocaleLowerCase("en-US") },
     });
 
     if (updatedByUserId) {
       await this.prisma.auditLog.create({
         data: {
-          action: 'USER_PIN_CHANGED',
+          action: "USER_PIN_CHANGED",
           entityId: id,
-          entityType: 'User',
+          entityType: "User",
           userId: updatedByUserId,
           details: {
-            username: updated.username
-          }
-        }
+            username: updated.username,
+          },
+        },
       });
     }
 

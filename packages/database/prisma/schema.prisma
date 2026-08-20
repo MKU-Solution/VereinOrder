@@ -32,6 +32,13 @@ model User {
   cashierSessions CashierSession[]
 }
 
+model AuthThrottle {
+  key            String    @id
+  failedAttempts Int       @default(0)
+  lockedUntil    DateTime?
+  updatedAt      DateTime  @updatedAt
+}
+
 enum EventStatus {
   DRAFT
   PREPARED
