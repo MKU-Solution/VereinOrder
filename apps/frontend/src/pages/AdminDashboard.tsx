@@ -98,7 +98,23 @@ export const AdminDashboard = () => {
   // Generic Modal State (for Areas / Simple Items)
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingItem, setEditingItem] = useState<any>(null);
-  const [formData, setFormData] = useState<{name: string, sortOrder: number, printerId?: string}>({ name: '', sortOrder: 0 });
+  const [formData, setFormData] = useState<{name: string, shortName?: string, sortOrder: number, printerId?: string}>({ name: '', shortName: '', sortOrder: 0, printerId: '' });
+  const [modalError, setModalError] = useState('');
+  const [isSavingModal, setIsSavingModal] = useState(false);
+
+  // Product Modal State
+  const [isProductModalOpen, setIsProductModalOpen] = useState(false);
+  const [editingProduct, setEditingProduct] = useState<any>(null);
+  const [productFormData, setProductFormData] = useState({
+    name: '',
+    euro: '',
+    cent: '',
+    categoryId: '',
+    targetStationId: '',
+    sortOrder: '0'
+  });
+  const [productCategories, setProductCategories] = useState<any[]>([]);
+  const [productStations, setProductStations] = useState<any[]>([]);
 
   // Printer Modal State
   const [isPrinterModalOpen, setIsPrinterModalOpen] = useState(false);
@@ -220,7 +236,14 @@ export const AdminDashboard = () => {
     { id: 'users', label: 'Mitarbeiter', icon: Users },
   ] as const;
 
-  const handleOpenModal = (item?: any) => {
+  const handleModalEscape = (e: React.KeyboardEvent, closeModal: () => void) => {
+    if (e.key === 'Escape' && !isSavingModal) {
+      e.preventDefault();
+      closeModal();
+    }
+  };
+
+  const handleOpenModal = async (item?: any) => {
     if (activeTab === 'events') {
       if (item) {
         setEditingEvent(item);
@@ -265,17 +288,47 @@ export const AdminDashboard = () => {
         });
       }
       setIsPrinterModalOpen(true);
+    } else if (activeTab === 'products') {
+      setModalError('');
+      setEditingProduct(item || null);
+      const price = Number.isInteger(item?.price) ? item.price : 0;
+      setProductFormData({
+        name: item?.name || '',
+        euro: String(Math.floor(price / 100)),
+        cent: String(Math.abs(price % 100)).padStart(2, '0'),
+        categoryId: item?.categoryId || '',
+        targetStationId: item?.targetStationId || '',
+        sortOrder: String(item?.sortOrder ?? 0)
+      });
+      setIsProductModalOpen(true);
+      if (!eventId) {
+        setModalError('Bitte wähle zuerst eine Veranstaltung aus.');
+        return;
+      }
+      try {
+        const [categoriesRes, stationsRes] = await Promise.all([
+          api.get(`/categories?eventId=${eventId}`),
+          api.get(`/stations/admin/all?eventId=${eventId}`)
+        ]);
+        setProductCategories(categoriesRes.data || []);
+        setProductStations(stationsRes.data || []);
+      } catch (err) {
+        console.error('Failed to load product modal options', err);
+        setModalError('Kategorien oder Stationen konnten nicht geladen werden. Bitte erneut versuchen.');
+      }
     } else {
+      setModalError('');
       if (item) {
         setEditingItem(item);
         setFormData({ 
           name: item.name || item.username || '', 
-          sortOrder: item.sortOrder || 0,
+          shortName: item.shortName || '',
+          sortOrder: item.sortOrder ?? 0,
           printerId: item.printerId || ''
         });
       } else {
         setEditingItem(null);
-        setFormData({ name: '', sortOrder: 0, printerId: '' });
+        setFormData({ name: '', shortName: '', sortOrder: 0, printerId: '' });
       }
       setIsModalOpen(true);
     }
@@ -283,6 +336,27 @@ export const AdminDashboard = () => {
 
   const handleSaveModal = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSavingModal) return;
+    setModalError('');
+
+    if (activeTab === 'stations') {
+      const name = formData.name.trim();
+      const shortName = (formData.shortName || '').trim();
+      if (!name) {
+        setModalError('Bitte gib einen Namen für die Station ein.');
+        return;
+      }
+      if (shortName.length > 12) {
+        setModalError('Die Kurzbezeichnung darf höchstens 12 Zeichen lang sein.');
+        return;
+      }
+      if (!Number.isInteger(formData.sortOrder)) {
+        setModalError('Die Sortierung muss eine ganze Zahl sein.');
+        return;
+      }
+    }
+
+    setIsSavingModal(true);
     try {
       if (activeTab === 'printers') {
         if (editingPrinter) {
@@ -310,25 +384,106 @@ export const AdminDashboard = () => {
         if (activeTab === 'areas') endpoint = '/areas';
         if (activeTab === 'stations') endpoint = '/stations';
         if (activeTab === 'categories') endpoint = '/categories';
-        if (activeTab === 'products') endpoint = '/products';
         if (activeTab === 'users') endpoint = '/users';
 
-        const payload = {
-          ...formData,
-          eventId: (activeTab !== 'users') ? eventId : undefined,
-        };
-
-        if (editingItem) {
-          await api.patch(`${endpoint}/${editingItem.id}`, payload);
+        if (activeTab === 'stations') {
+          const payload = {
+            name: formData.name.trim(),
+            shortName: (formData.shortName || '').trim() || null,
+            printerId: formData.printerId || null,
+            sortOrder: formData.sortOrder
+          };
+          if (editingItem) {
+            await api.patch(`${endpoint}/${editingItem.id}`, payload);
+          } else {
+            await api.post(endpoint, { ...payload, eventId });
+          }
+        } else if (activeTab === 'areas' || activeTab === 'categories') {
+          const payload = { name: formData.name, sortOrder: formData.sortOrder };
+          if (editingItem) {
+            await api.patch(`${endpoint}/${editingItem.id}`, payload);
+          } else {
+            await api.post(endpoint, { ...payload, eventId });
+          }
         } else {
-          await api.post(endpoint, payload);
+          // Benutzer verwenden weiterhin den bisherigen, nicht erweiterten Modalumfang.
+          const payload = { name: formData.name, sortOrder: formData.sortOrder, printerId: formData.printerId };
+          if (editingItem) {
+            await api.patch(`${endpoint}/${editingItem.id}`, payload);
+          } else {
+            await api.post(endpoint, payload);
+          }
         }
         setIsModalOpen(false);
       }
       fetchData();
     } catch (err) {
       console.error('Failed to save item', err);
-      alert('Fehler beim Speichern');
+      if (activeTab === 'events' || activeTab === 'printers') {
+        alert('Fehler beim Speichern');
+      } else {
+        setModalError('Speichern fehlgeschlagen. Bitte prüfe die Eingaben und versuche es erneut.');
+      }
+    } finally {
+      setIsSavingModal(false);
+    }
+  };
+
+  const handleSaveProductModal = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (isSavingModal) return;
+    setModalError('');
+
+    const name = productFormData.name.trim();
+    const euroInput = productFormData.euro.trim();
+    const centInput = productFormData.cent.trim();
+    const sortOrderInput = productFormData.sortOrder.trim();
+    const euro = Number(euroInput);
+    const cent = Number(centInput);
+    const sortOrder = Number(sortOrderInput);
+    if (!eventId) {
+      setModalError('Bitte wähle zuerst eine Veranstaltung aus.');
+      return;
+    }
+    if (!name) {
+      setModalError('Bitte gib einen Produktnamen ein.');
+      return;
+    }
+    if (!/^\d+$/.test(euroInput) || !/^\d+$/.test(centInput) || !Number.isSafeInteger(euro) || euro < 0 || !Number.isSafeInteger(cent) || cent < 0 || cent > 99) {
+      setModalError('Euro muss eine nichtnegative ganze Zahl und Cent ein Wert von 0 bis 99 sein.');
+      return;
+    }
+    if (!/^-?\d+$/.test(sortOrderInput) || !Number.isInteger(sortOrder)) {
+      setModalError('Die Sortierung muss eine ganze Zahl sein.');
+      return;
+    }
+    const price = euro * 100 + cent;
+    if (!Number.isSafeInteger(price) || price > 2_147_483_647) {
+      setModalError('Der Preis ist zu hoch. Maximal erlaubt sind 21.474.836,47 Euro.');
+      return;
+    }
+
+    setIsSavingModal(true);
+    try {
+      const payload = {
+        name,
+        price,
+        categoryId: productFormData.categoryId || null,
+        targetStationId: productFormData.targetStationId || null,
+        sortOrder
+      };
+      if (editingProduct) {
+        await api.patch(`/products/${editingProduct.id}`, payload);
+      } else {
+        await api.post('/products', { ...payload, eventId });
+      }
+      setIsProductModalOpen(false);
+      fetchData();
+    } catch (err) {
+      console.error('Failed to save product', err);
+      setModalError('Speichern fehlgeschlagen. Bitte prüfe die Eingaben und versuche es erneut.');
+    } finally {
+      setIsSavingModal(false);
     }
   };
 
@@ -1568,66 +1723,213 @@ export const AdminDashboard = () => {
         </div>
       )}
 
+      {/* PRODUCT MODAL */}
+      {isProductModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="product-modal-title"
+            onKeyDown={(e) => handleModalEscape(e, () => setIsProductModalOpen(false))}
+            className="bg-slate-900 border border-slate-800 p-6 rounded-3xl max-w-lg w-full max-h-[calc(100vh-2rem)] overflow-y-auto shadow-2xl space-y-4"
+          >
+            <h3 id="product-modal-title" className="text-xl font-bold text-white">
+              {editingProduct ? 'Produkt bearbeiten' : 'Neues Produkt anlegen'}
+            </h3>
+            <form onSubmit={handleSaveProductModal} className="space-y-4">
+              {modalError && (
+                <p role="alert" className="rounded-xl border border-rose-500/50 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">
+                  {modalError}
+                </p>
+              )}
+              <div>
+                <label htmlFor="product-name" className="text-xs font-bold text-slate-400 block mb-1">Produktname</label>
+                <input
+                  id="product-name"
+                  type="text"
+                  required
+                  autoFocus
+                  value={productFormData.name}
+                  onChange={(e) => setProductFormData({ ...productFormData, name: e.target.value })}
+                  className="w-full min-h-11 bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 text-white"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label htmlFor="product-euro" className="text-xs font-bold text-slate-400 block mb-1">Preis in Euro</label>
+                  <input
+                    id="product-euro"
+                    type="number"
+                    min="0"
+                    step="1"
+                    inputMode="numeric"
+                    required
+                    value={productFormData.euro}
+                    onChange={(e) => setProductFormData({ ...productFormData, euro: e.target.value })}
+                    className="w-full min-h-11 bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 text-white"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="product-cent" className="text-xs font-bold text-slate-400 block mb-1">Preis in Cent</label>
+                  <input
+                    id="product-cent"
+                    type="number"
+                    min="0"
+                    max="99"
+                    step="1"
+                    inputMode="numeric"
+                    required
+                    value={productFormData.cent}
+                    onChange={(e) => setProductFormData({ ...productFormData, cent: e.target.value })}
+                    className="w-full min-h-11 bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 text-white"
+                  />
+                </div>
+              </div>
+              <div>
+                <label htmlFor="product-category" className="text-xs font-bold text-slate-400 block mb-1">Kategorie</label>
+                <select
+                  id="product-category"
+                  value={productFormData.categoryId}
+                  onChange={(e) => setProductFormData({ ...productFormData, categoryId: e.target.value })}
+                  className="w-full min-h-11 bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 text-white"
+                >
+                  <option value="">Keine Kategorie</option>
+                  {productCategories.map((category: any) => (
+                    <option key={category.id} value={category.id}>{category.name}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label htmlFor="product-station" className="text-xs font-bold text-slate-400 block mb-1">Zielstation</label>
+                <select
+                  id="product-station"
+                  value={productFormData.targetStationId}
+                  onChange={(e) => setProductFormData({ ...productFormData, targetStationId: e.target.value })}
+                  className="w-full min-h-11 bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 text-white"
+                >
+                  <option value="">Keine Zielstation</option>
+                  {productStations.map((station: any) => (
+                    <option key={station.id} value={station.id}>{station.name}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label htmlFor="product-sort-order" className="text-xs font-bold text-slate-400 block mb-1">Sortierung</label>
+                <input
+                  id="product-sort-order"
+                  type="number"
+                  step="1"
+                  required
+                  value={productFormData.sortOrder}
+                  onChange={(e) => setProductFormData({ ...productFormData, sortOrder: e.target.value })}
+                  className="w-full min-h-11 bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 text-white"
+                />
+              </div>
+              <div className="flex gap-2 justify-end pt-2">
+                <button
+                  type="button"
+                  onClick={() => setIsProductModalOpen(false)}
+                  className="min-h-11 px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold"
+                >
+                  Abbrechen
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSavingModal}
+                  className="min-h-11 px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-60 text-white font-bold"
+                >
+                  {isSavingModal ? 'Speichert …' : 'Speichern'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* GENERIC ITEM MODAL (Areas, Stations, etc.) */}
       {isModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
-          <div className="bg-slate-900 border border-slate-800 p-6 rounded-3xl max-w-md w-full shadow-2xl space-y-4">
-            <h3 className="text-xl font-bold text-white">
+          <div role="dialog" aria-modal="true" aria-labelledby="item-modal-title" onKeyDown={(e) => handleModalEscape(e, () => setIsModalOpen(false))} className="bg-slate-900 border border-slate-800 p-6 rounded-3xl max-w-md w-full max-h-[calc(100vh-2rem)] overflow-y-auto shadow-2xl space-y-4">
+            <h3 id="item-modal-title" className="text-xl font-bold text-white">
               {editingItem ? 'Eintrag bearbeiten' : 'Neu anlegen'}
             </h3>
             <form onSubmit={handleSaveModal} className="space-y-4">
+              {modalError && (
+                <p role="alert" className="rounded-xl border border-rose-500/50 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">
+                  {modalError}
+                </p>
+              )}
               <div>
-                <label className="text-xs font-bold text-slate-400 block mb-1">Bezeichnung</label>
+                <label htmlFor="item-name" className="text-xs font-bold text-slate-400 block mb-1">Bezeichnung</label>
                 <input
+                  id="item-name"
                   type="text"
                   required
+                  autoFocus={activeTab === 'stations'}
                   value={formData.name}
                   onChange={(e) => setFormData({ ...formData, name: e.target.value })}
                   placeholder="Name..."
-                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 text-white"
+                  className="w-full min-h-11 bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 text-white"
                 />
               </div>
 
               {activeTab === 'stations' && (
-                <div>
-                  <label className="text-xs font-bold text-slate-400 block mb-1">Zugewiesener Bondrucker</label>
-                  <select
-                    value={formData.printerId || ''}
-                    onChange={(e) => setFormData({ ...formData, printerId: e.target.value || undefined })}
-                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 text-white text-sm"
-                  >
-                    <option value="">Standard-Drucker verwenden</option>
-                    {printersList.map((p: any) => (
-                      <option key={p.id} value={p.id}>
-                        {p.name} ({p.type})
-                      </option>
-                    ))}
-                  </select>
-                </div>
+                <>
+                  <div>
+                    <label htmlFor="station-short-name" className="text-xs font-bold text-slate-400 block mb-1">Kurzbezeichnung</label>
+                    <input
+                      id="station-short-name"
+                      type="text"
+                      maxLength={12}
+                      value={formData.shortName || ''}
+                      onChange={(e) => setFormData({ ...formData, shortName: e.target.value })}
+                      className="w-full min-h-11 bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 text-white"
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="station-printer" className="text-xs font-bold text-slate-400 block mb-1">Zugewiesener Bondrucker</label>
+                    <select
+                      id="station-printer"
+                      value={formData.printerId || ''}
+                      onChange={(e) => setFormData({ ...formData, printerId: e.target.value })}
+                      className="w-full min-h-11 bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 text-white text-sm"
+                    >
+                      <option value="">Standard-Drucker verwenden</option>
+                      {printersList.map((p: any) => (
+                        <option key={p.id} value={p.id}>
+                          {p.name} ({p.type})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </>
               )}
 
               <div>
-                <label className="text-xs font-bold text-slate-400 block mb-1">Sortierung</label>
+                <label htmlFor="item-sort-order" className="text-xs font-bold text-slate-400 block mb-1">Sortierung</label>
                 <input
+                  id="item-sort-order"
                   type="number"
+                  step="1"
                   value={formData.sortOrder}
                   onChange={(e) => setFormData({ ...formData, sortOrder: Number(e.target.value) })}
-                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 text-white"
+                  className="w-full min-h-11 bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 text-white"
                 />
               </div>
               <div className="flex gap-2 justify-end pt-2">
                 <button
                   type="button"
                   onClick={() => setIsModalOpen(false)}
-                  className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold"
+                  className="min-h-11 px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold"
                 >
                   Abbrechen
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold"
+                  disabled={isSavingModal}
+                  className="min-h-11 px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-60 text-white font-bold"
                 >
-                  Speichern
+                  {isSavingModal ? 'Speichert …' : 'Speichern'}
                 </button>
               </div>
             </form>
