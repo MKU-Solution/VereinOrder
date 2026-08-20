@@ -41,14 +41,16 @@ export class ProductsController {
 
   @Post()
   @Roles('ADMINISTRATOR', 'EVENT_MANAGER')
-  async createProduct(@Body() data: any) {
-    return this.productsService.createProduct(data);
+  async createProduct(@Request() req: any, @Body() data: any) {
+    const userId = req.user?.userId;
+    return this.productsService.createProduct(data, userId);
   }
 
   @Patch(':id')
   @Roles('ADMINISTRATOR', 'EVENT_MANAGER')
-  async updateProduct(@Param('id') id: string, @Body() data: any) {
-    return this.productsService.updateProduct(id, data);
+  async updateProduct(@Request() req: any, @Param('id') id: string, @Body() data: any) {
+    const userId = req.user?.userId;
+    return this.productsService.updateProduct(id, data, userId);
   }
 }
 

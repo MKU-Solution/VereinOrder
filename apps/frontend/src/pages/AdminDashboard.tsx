@@ -22,10 +22,12 @@ import {
   HardDrive,
   Download,
   RotateCcw,
-  ShieldCheck
+  ShieldCheck,
+  Search,
+  FileSpreadsheet
 } from 'lucide-react';
 
-type Tab = 'events' | 'stations' | 'categories' | 'products' | 'users' | 'areas' | 'printers' | 'backups';
+type Tab = 'events' | 'stations' | 'categories' | 'products' | 'users' | 'areas' | 'printers' | 'backups' | 'audit';
 
 interface EventItem {
   id: string;
@@ -57,6 +59,22 @@ interface BackupItem {
   counts: Record<string, number>;
 }
 
+interface AuditLogItem {
+  id: string;
+  action: string;
+  entityId: string;
+  entityType: string;
+  userId?: string;
+  user?: {
+    id: string;
+    name: string;
+    username: string;
+    role: string;
+  };
+  details?: any;
+  createdAt: string;
+}
+
 export const AdminDashboard = () => {
   const [activeTab, setActiveTab] = useState<Tab>('events');
   const [data, setData] = useState<any[]>([]);
@@ -64,6 +82,11 @@ export const AdminDashboard = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [isBackingUp, setIsBackingUp] = useState(false);
   const [eventId, setEventId] = useState<string>('');
+
+  // Audit state
+  const [auditStats, setAuditStats] = useState<any>(null);
+  const [auditFilterAction, setAuditFilterAction] = useState<string>('');
+  const [auditSearch, setAuditSearch] = useState<string>('');
   
   // Generic Modal State (for Areas / Simple Items)
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -132,9 +155,22 @@ export const AdminDashboard = () => {
       if (activeTab === 'areas') endpoint = `/areas?eventId=${eventId}`;
       if (activeTab === 'printers') endpoint = '/print-jobs/printers';
       if (activeTab === 'backups') endpoint = '/backup/list';
+      if (activeTab === 'audit') {
+        const queryParams = new URLSearchParams();
+        if (auditFilterAction) queryParams.set('action', auditFilterAction);
+        if (auditSearch) queryParams.set('search', auditSearch);
+        endpoint = `/audit/logs?${queryParams.toString()}`;
+
+        const statsRes = await api.get('/audit/stats');
+        setAuditStats(statsRes.data);
+      }
 
       const res = await api.get(endpoint);
-      setData(res.data);
+      if (activeTab === 'audit') {
+        setData(res.data.logs || []);
+      } else {
+        setData(res.data);
+      }
 
       if (activeTab === 'printers') {
         setPrintersList(res.data);
@@ -144,10 +180,10 @@ export const AdminDashboard = () => {
     } finally {
       setIsLoading(false);
     }
-  }, [activeTab, eventId]);
+  }, [activeTab, eventId, auditFilterAction, auditSearch]);
 
   useEffect(() => {
-    if (activeTab === 'events' || activeTab === 'printers' || activeTab === 'backups' || eventId) {
+    if (activeTab === 'events' || activeTab === 'printers' || activeTab === 'backups' || activeTab === 'audit' || eventId) {
       fetchData();
     }
   }, [activeTab, eventId, fetchData]);
@@ -158,6 +194,7 @@ export const AdminDashboard = () => {
     { id: 'stations', label: 'Stationen', icon: Store },
     { id: 'printers', label: 'Drucker & Bon-Routing', icon: Printer },
     { id: 'backups', label: 'Backups & Datensicherung', icon: HardDrive },
+    { id: 'audit', label: 'Audit-Protokoll & Sicherheit', icon: ShieldAlert },
     { id: 'categories', label: 'Kategorien', icon: Tag },
     { id: 'products', label: 'Produkte', icon: Package },
     { id: 'users', label: 'Mitarbeiter', icon: Users },
@@ -332,6 +369,23 @@ export const AdminDashboard = () => {
     }
   };
 
+  // --- AUDIT ACTIONS ---
+  const handleExportAuditCsv = async () => {
+    try {
+      const res = await api.get('/audit/export', { responseType: 'blob' });
+      const url = window.URL.createObjectURL(new Blob([res.data]));
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', `vereinorder_audit_log_${new Date().toISOString().slice(0, 10)}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+    } catch (err) {
+      console.error('Failed to export audit log', err);
+      alert('Fehler beim Exportieren des Audit-Logs');
+    }
+  };
+
   const handleDelete = async (id: string) => {
     if (!confirm('Diesen Eintrag wirklich unwiderruflich löschen?')) return;
     try {
@@ -462,15 +516,41 @@ export const AdminDashboard = () => {
     }
   };
 
+  const getActionBadge = (action?: string) => {
+    if (!action) return <span className="bg-slate-800 text-slate-500 px-2.5 py-0.5 rounded-full text-xs font-medium">Unbekannt</span>;
+    if (action.includes('CANCEL')) {
+      return <span className="bg-rose-500/20 text-rose-300 border border-rose-500/30 px-2.5 py-0.5 rounded-full text-xs font-bold">Storno</span>;
+    }
+    if (action.includes('PRICE')) {
+      return <span className="bg-amber-500/20 text-amber-300 border border-amber-500/30 px-2.5 py-0.5 rounded-full text-xs font-bold">Preisänderung</span>;
+    }
+    if (action.includes('PAYMENT')) {
+      return <span className="bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-2.5 py-0.5 rounded-full text-xs font-bold">Zahlung</span>;
+    }
+    if (action === 'LOGIN') {
+      return <span className="bg-blue-500/20 text-blue-300 border border-blue-500/30 px-2.5 py-0.5 rounded-full text-xs font-bold">Login</span>;
+    }
+    if (action === 'FAILED_LOGIN') {
+      return <span className="bg-red-600/30 text-red-300 border border-red-500/50 px-2.5 py-0.5 rounded-full text-xs font-bold">Fehlversuch</span>;
+    }
+    if (action.includes('RKSV')) {
+      return <span className="bg-purple-500/20 text-purple-300 border border-purple-500/30 px-2.5 py-0.5 rounded-full text-xs font-bold">RKSV-Erklärung</span>;
+    }
+    if (action.includes('BACKUP')) {
+      return <span className="bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 px-2.5 py-0.5 rounded-full text-xs font-bold">Datensicherung</span>;
+    }
+    return <span className="bg-slate-800 text-slate-300 px-2.5 py-0.5 rounded-full text-xs font-medium">{action}</span>;
+  };
+
   return (
     <div className="space-y-6">
       {/* Header */}
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
           <h1 className="text-3xl font-bold">Administration & Stammdaten</h1>
-          <p className="text-slate-400 text-sm mt-1">Veranstaltungssteuerung, Druck-Routing, Backups und Sortimentspflege</p>
+          <p className="text-slate-400 text-sm mt-1">Veranstaltungssteuerung, Druck-Routing, Backups, Sicherheit & Audit-Log</p>
         </div>
-        {activeTab !== 'backups' && (
+        {activeTab !== 'backups' && activeTab !== 'audit' && (
           <button 
             onClick={() => handleOpenModal()} 
             className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2.5 px-5 rounded-2xl flex items-center gap-2 shadow-lg shadow-indigo-600/30 transition-all active:scale-95 shrink-0"
@@ -753,6 +833,141 @@ export const AdminDashboard = () => {
                     <tr>
                       <td colSpan={6} className="text-center py-12 text-slate-500">
                         Noch keine Datensicherungen vorhanden. Erstelle jetzt ein manuelles Backup.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        ) : activeTab === 'audit' ? (
+          /* Audit-Log & Security */
+          <div className="space-y-6">
+            {/* KPI Summary Cards */}
+            {auditStats && (
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+                <div className="bg-slate-900/80 border border-slate-800 p-4 rounded-2xl">
+                  <span className="text-xs text-slate-400 font-medium">Gesamt-Aktionen</span>
+                  <div className="text-2xl font-bold text-white mt-1">{auditStats.totalCount}</div>
+                </div>
+                <div className="bg-slate-900/80 border border-slate-800 p-4 rounded-2xl">
+                  <span className="text-xs text-slate-400 font-medium">Heute</span>
+                  <div className="text-2xl font-bold text-indigo-400 mt-1">{auditStats.todayCount}</div>
+                </div>
+                <div className="bg-slate-900/80 border border-slate-800 p-4 rounded-2xl">
+                  <span className="text-xs text-slate-400 font-medium">Stornierungen</span>
+                  <div className="text-2xl font-bold text-rose-400 mt-1">{auditStats.cancellationsCount}</div>
+                </div>
+                <div className="bg-slate-900/80 border border-slate-800 p-4 rounded-2xl">
+                  <span className="text-xs text-slate-400 font-medium">Preisänderungen</span>
+                  <div className="text-2xl font-bold text-amber-400 mt-1">{auditStats.priceChangesCount}</div>
+                </div>
+                <div className="bg-slate-900/80 border border-slate-800 p-4 rounded-2xl">
+                  <span className="text-xs text-slate-400 font-medium">Login-Fehlversuche</span>
+                  <div className="text-2xl font-bold text-red-500 mt-1">{auditStats.failedLoginsCount}</div>
+                </div>
+                <div className="bg-slate-900/80 border border-slate-800 p-4 rounded-2xl">
+                  <span className="text-xs text-slate-400 font-medium">RKSV-Bestätigungen</span>
+                  <div className="text-2xl font-bold text-purple-400 mt-1">{auditStats.rksvConfirmationsCount}</div>
+                </div>
+              </div>
+            )}
+
+            {/* Filter Bar & Export */}
+            <div className="flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-3 bg-slate-900/80 border border-slate-800 p-4 rounded-2xl">
+              <div className="flex flex-wrap items-center gap-3 flex-1">
+                <div className="relative flex-1 min-w-[200px]">
+                  <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                  <input
+                    type="text"
+                    value={auditSearch}
+                    onChange={(e) => setAuditSearch(e.target.value)}
+                    placeholder="Benutzer, Aktion oder Detail durchsuchen..."
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl pl-9 pr-4 py-2 text-sm text-white placeholder-slate-500"
+                  />
+                </div>
+
+                <select
+                  value={auditFilterAction}
+                  onChange={(e) => setAuditFilterAction(e.target.value)}
+                  className="bg-slate-800 border border-slate-700 rounded-xl px-4 py-2 text-sm text-white font-medium"
+                >
+                  <option value="">Alle Aktionen</option>
+                  <option value="LOGIN">Anmeldung (Login)</option>
+                  <option value="FAILED_LOGIN">Fehlgeschlagene Logins</option>
+                  <option value="CANCEL_ORDER">Bestellstorno</option>
+                  <option value="CANCEL_ORDER_ITEM">Positionstorno</option>
+                  <option value="PRICE_CHANGED">Preisänderung</option>
+                  <option value="PAYMENT_RECEIVED">Zahlung</option>
+                  <option value="ACTIVATE_EVENT_RKSV">RKSV-Bestätigung</option>
+                  <option value="CREATE_BACKUP">Datensicherung</option>
+                </select>
+              </div>
+
+              <button
+                onClick={handleExportAuditCsv}
+                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs rounded-xl shadow-md shadow-indigo-600/30 transition flex items-center gap-2 shrink-0 justify-center"
+              >
+                <FileSpreadsheet className="w-4 h-4" />
+                Audit-Log als CSV exportieren
+              </button>
+            </div>
+
+            {/* Audit Log Table */}
+            <div className="overflow-x-auto">
+              <table className="w-full text-left">
+                <thead>
+                  <tr className="text-slate-400 border-b border-slate-700/50 text-xs uppercase font-semibold">
+                    <th className="pb-3">Zeitpunkt</th>
+                    <th className="pb-3">Aktion</th>
+                    <th className="pb-3">Benutzer</th>
+                    <th className="pb-3">Entität</th>
+                    <th className="pb-3">Details & Begründung</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-700/50 text-sm">
+                  {data.map((log: AuditLogItem) => (
+                    <tr key={log.id} className="hover:bg-slate-800/30 transition-colors">
+                      <td className="py-3.5 whitespace-nowrap text-slate-300 font-mono text-xs">
+                        {new Date(log.createdAt).toLocaleString('de-AT')}
+                      </td>
+                      <td className="py-3.5">
+                        {getActionBadge(log.action)}
+                      </td>
+                      <td className="py-3.5 text-slate-200">
+                        {log.user ? (
+                          <div className="flex items-center gap-2">
+                            <span className="font-semibold">{log.user.username}</span>
+                            <span className="text-[10px] bg-slate-800 px-1.5 py-0.5 rounded text-slate-400">{log.user.role}</span>
+                          </div>
+                        ) : (
+                          <span className="text-slate-500 italic">System</span>
+                        )}
+                      </td>
+                      <td className="py-3.5 font-mono text-xs text-slate-400">
+                        {log.entityType}
+                      </td>
+                      <td className="py-3.5 text-xs text-slate-300 font-mono max-w-md truncate">
+                        {log.details ? (
+                          <span title={JSON.stringify(log.details, null, 2)}>
+                            {log.details.reason ? (
+                              <span className="text-rose-300 font-semibold mr-2">Grund: „{log.details.reason}“</span>
+                            ) : null}
+                            {log.details.previousPrice ? (
+                              <span className="text-amber-300 font-semibold mr-2">
+                                € {(log.details.previousPrice / 100).toFixed(2)} ➔ € {(log.details.newPrice / 100).toFixed(2)}
+                              </span>
+                            ) : null}
+                            {JSON.stringify(log.details)}
+                          </span>
+                        ) : '-'}
+                      </td>
+                    </tr>
+                  ))}
+                  {data.length === 0 && (
+                    <tr>
+                      <td colSpan={5} className="text-center py-12 text-slate-500">
+                        Keine Audit-Einträge für die gewählten Filter gefunden.
                       </td>
                     </tr>
                   )}

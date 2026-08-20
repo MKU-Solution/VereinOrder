@@ -239,6 +239,22 @@ export class OrdersService {
     const user = userId ? await this.prisma.user.findUnique({ where: { id: userId } }) : null;
 
     await this.dispatchPrintJobs(this.prisma, order, user);
+
+    if (userId) {
+      await this.prisma.auditLog.create({
+        data: {
+          action: 'REPRINT_ORDER',
+          entityId: orderId,
+          entityType: 'Order',
+          userId,
+          details: {
+            orderNumber: order.orderNumber,
+            totalAmount: order.totalAmount
+          }
+        }
+      });
+    }
+
     return { success: true, message: 'Nachdruckaufträge erfolgreich in die Druckerwarteschlange eingereiht' };
   }
 
@@ -296,11 +312,31 @@ export class OrdersService {
         }))
       });
 
-      return await prisma.order.update({
+      const updatedOrder = await prisma.order.update({
         where: { id: orderId },
         data: { paymentStatus: newPaymentStatus },
         include: { items: { include: { product: true } }, payments: true }
       });
+
+      if (userId) {
+        await prisma.auditLog.create({
+          data: {
+            action: 'PAYMENT_RECEIVED',
+            entityId: orderId,
+            entityType: 'Order',
+            userId,
+            details: {
+              orderNumber: order.orderNumber,
+              paymentsCount: payments.length,
+              amountPaid: newPaid,
+              totalAmount: order.totalAmount,
+              newPaymentStatus
+            }
+          }
+        });
+      }
+
+      return updatedOrder;
     });
   }
 

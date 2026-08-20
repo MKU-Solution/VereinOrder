@@ -80,12 +80,51 @@ export class ProductsService {
     });
   }
 
-  async createProduct(data: any) {
-    return this.prisma.product.create({ data });
+  async createProduct(data: any, userId?: string) {
+    const product = await this.prisma.product.create({ data });
+    if (userId) {
+      await this.prisma.auditLog.create({
+        data: {
+          action: 'PRODUCT_CREATED',
+          entityId: product.id,
+          entityType: 'Product',
+          userId,
+          details: {
+            name: product.name,
+            price: product.price,
+            eventId: product.eventId
+          }
+        }
+      });
+    }
+    return product;
   }
 
-  async updateProduct(id: string, data: any) {
-    return this.prisma.product.update({ where: { id }, data });
+  async updateProduct(id: string, data: any, userId?: string) {
+    const existing = await this.prisma.product.findUnique({ where: { id } });
+    if (!existing) throw new NotFoundException('Product not found');
+
+    const updated = await this.prisma.product.update({ where: { id }, data });
+
+    if (userId) {
+      const isPriceChanged = data.price !== undefined && data.price !== existing.price;
+      await this.prisma.auditLog.create({
+        data: {
+          action: isPriceChanged ? 'PRICE_CHANGED' : 'PRODUCT_UPDATED',
+          entityId: id,
+          entityType: 'Product',
+          userId,
+          details: {
+            name: updated.name,
+            previousPrice: existing.price,
+            newPrice: updated.price,
+            changedFields: Object.keys(data)
+          }
+        }
+      });
+    }
+
+    return updated;
   }
 
   // --- ADMIN METHODS: CATEGORIES ---
