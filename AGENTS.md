@@ -103,7 +103,7 @@ verwertbares Ergebnis.
 ## Pflichtprüfungen
 
 Vor Commit mindestens Formatierung, Linting, Typprüfung und relevante Tests ausführen.
-Frontendänderungen zusätzlich zwingend durch den Agenten über den `browser_subagent` auf ihre Funktionalität (Interaktion, Modals, Formulare) in einem echten Browser bei ungefähr 390×844, 768×1024 und 1440×900 Pixel prüfen. Die UI darf nicht ungetestet gepusht werden. Datenbank-, Docker- und Raspberry-Pi-Änderungen benötigen die jeweils relevanten Integrationsprüfungen.
+Frontendänderungen zusätzlich zwingend durch den Agenten über den `browser_subagent` auf ihre Funktionalität (Interaktion, Modals, Formulare) in einem echten Browser bei ungefähr 390×844, 768×1024 und 1440×900 Pixel prüfen. Dabei muss zwingend sowohl mit einem **Administrator-Benutzer** (`admin`) als auch mit einem **Kellner-Benutzer** (`kellner1` / `WAITER`) getestet werden. Die UI darf nicht ungetestet gepusht werden. Datenbank-, Docker- und Raspberry-Pi-Änderungen benötigen die jeweils relevanten Integrationsprüfungen.
 
 ## Abschlussbericht
 
