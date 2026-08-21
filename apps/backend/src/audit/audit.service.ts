@@ -1,5 +1,5 @@
 import { Injectable, Inject } from "@nestjs/common";
-import { PrismaClient, AuditLog } from "@vereinorder/database";
+import { Prisma, PrismaClient, AuditLog } from "@vereinorder/database";
 import { PRISMA_CLIENT } from "../prisma/prisma.module";
 
 export interface AuditQueryDto {
@@ -15,14 +15,23 @@ export interface AuditQueryDto {
 export class AuditService {
   constructor(@Inject(PRISMA_CLIENT) private prisma: PrismaClient) {}
 
-  async log(data: {
-    action: string;
-    entityId: string;
-    entityType: string;
-    userId?: string;
-    details?: any;
-  }): Promise<AuditLog> {
-    return this.prisma.auditLog.create({
+  /**
+   * Optionaler zweiter Parameter erlaubt anderen Diensten, den Audit-Eintrag
+   * in derselben Datenbanktransaktion zu schreiben wie die fachliche
+   * Änderung (z. B. Failover-Entscheidungen im Print-Job-Modul). Ohne
+   * Angabe wird wie bisher der globale Client verwendet.
+   */
+  async log(
+    data: {
+      action: string;
+      entityId: string;
+      entityType: string;
+      userId?: string;
+      details?: any;
+    },
+    client: PrismaClient | Prisma.TransactionClient = this.prisma,
+  ): Promise<AuditLog> {
+    return client.auditLog.create({
       data: {
         action: data.action,
         entityId: data.entityId,

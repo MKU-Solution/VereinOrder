@@ -7,7 +7,11 @@ describe("PrintJobsController", () => {
   let controller: PrintJobsController;
   const printJobsService = {
     claimNextJob: jest.fn(),
-    updateJobStatus: jest.fn(),
+    transitionPhase: jest.fn(),
+    heartbeat: jest.fn(),
+    reportOutcome: jest.fn(),
+    findUnresolvedJobs: jest.fn(),
+    resolveJob: jest.fn(),
     findJobStatus: jest.fn(),
     findAllPrinters: jest.fn(),
     createPrinter: jest.fn(),
@@ -31,6 +35,8 @@ describe("PrintJobsController", () => {
     "updatePrinter",
     "testPrinter",
     "getJobStatus",
+    "getUnresolvedJobs",
+    "resolveJob",
   ] as const)(
     "schützt %s im Backend für ADMINISTRATOR und EVENT_MANAGER",
     (method) => {
@@ -61,5 +67,62 @@ describe("PrintJobsController", () => {
       status: "FAILED",
     });
     expect(printJobsService.findJobStatus).toHaveBeenCalledWith("job-1");
+  });
+
+  it("reicht den Claim-Aufruf unverändert an den Dienst weiter", async () => {
+    printJobsService.claimNextJob.mockResolvedValue({ id: "job-1" });
+    await expect(controller.claimNextJob()).resolves.toEqual({ id: "job-1" });
+  });
+
+  it("reicht den Phasenwechsel mit Lease-Token und optionaler cupsJobId weiter", async () => {
+    printJobsService.transitionPhase.mockResolvedValue({ id: "job-1" });
+
+    await controller.transitionPhase("job-1", "lease-1", "SPOOLED", 42);
+
+    expect(printJobsService.transitionPhase).toHaveBeenCalledWith(
+      "job-1",
+      "lease-1",
+      "SPOOLED",
+      42,
+    );
+  });
+
+  it("reicht den Herzschlag weiter", async () => {
+    printJobsService.heartbeat.mockResolvedValue({
+      leaseExpiresAt: new Date(),
+    });
+    await controller.heartbeat("job-1", "lease-1");
+    expect(printJobsService.heartbeat).toHaveBeenCalledWith("job-1", "lease-1");
+  });
+
+  it("reicht die Ergebnismeldung des Workers unverändert weiter", async () => {
+    printJobsService.reportOutcome.mockResolvedValue({ id: "job-1" });
+    const body = { leaseId: "lease-1", outcome: "NOT_PRINTED" as const };
+
+    await controller.reportOutcome("job-1", body);
+
+    expect(printJobsService.reportOutcome).toHaveBeenCalledWith("job-1", body);
+  });
+
+  it("liefert die Liste unklarer Druckaufträge", async () => {
+    printJobsService.findUnresolvedJobs.mockResolvedValue([{ id: "job-1" }]);
+    await expect(controller.getUnresolvedJobs()).resolves.toEqual([
+      { id: "job-1" },
+    ]);
+  });
+
+  it("übergibt Person und Rolle aus dem Request an die Admin-Entscheidung", async () => {
+    printJobsService.resolveJob.mockResolvedValue({ id: "job-1" });
+    const req = { user: { userId: "user-1", role: "ADMINISTRATOR" } };
+    const body = { resolution: "DISCARDED" as const, comment: "kein Bon" };
+
+    await controller.resolveJob(req, "job-1", body);
+
+    expect(printJobsService.resolveJob).toHaveBeenCalledWith(
+      "job-1",
+      body,
+      "user-1",
+      "ADMINISTRATOR",
+    );
   });
 });
