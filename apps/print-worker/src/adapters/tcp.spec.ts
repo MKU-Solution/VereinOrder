@@ -25,15 +25,17 @@ interface TestServer {
 
 /** Lokaler Ersatzdrucker: nimmt Bytes entgegen und schließt wie ein Bondrucker. */
 async function startServer(
-  options: { closeOnEnd?: boolean; hangUpImmediately?: boolean } = {},
+  options: { closeOnEnd?: boolean; resetImmediately?: boolean } = {},
 ): Promise<TestServer> {
   const chunks: Buffer[] = [];
   const sockets = new Set<net.Socket>();
 
   const server = net.createServer((socket) => {
     sockets.add(socket);
-    if (options.hangUpImmediately) {
-      socket.destroy();
+    if (options.resetImmediately) {
+      // Verbindungsabbruch mit RST, damit der Abbruch auf allen Plattformen
+      // gleich aussieht. Ein blosses destroy() sendet je nach System nur FIN.
+      socket.resetAndDestroy();
       return;
     }
     socket.on("data", (chunk) => chunks.push(chunk));
@@ -124,8 +126,8 @@ describe("TCP-Transport gegen einen lokalen Testdrucker", () => {
     expect(error.message).toContain(`127.0.0.1:${port}`);
   });
 
-  it("meldet einen Abbruch, wenn der Drucker sofort auflegt", async () => {
-    const server = await startServer({ hangUpImmediately: true });
+  it("meldet einen Abbruch, wenn der Drucker die Verbindung zurücksetzt", async () => {
+    const server = await startServer({ resetImmediately: true });
     try {
       const target = targetFor(server.port);
       const error = await createTcpAdapter()
