@@ -1,0 +1,11 @@
+node_modules
+dist
+build
+coverage
+playwright-report
+test-results
+apps/backend/backups
+*.tsbuildinfo
+apps/frontend/vite.config.js
+apps/frontend/vite.config.d.ts
+pnpm-lock.yaml

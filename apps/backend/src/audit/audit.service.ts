@@ -1,6 +1,6 @@
-import { Injectable, Inject } from '@nestjs/common';
-import { PrismaClient, AuditLog } from '@vereinorder/database';
-import { PRISMA_CLIENT } from '../prisma/prisma.module';
+import { Injectable, Inject } from "@nestjs/common";
+import { PrismaClient, AuditLog } from "@vereinorder/database";
+import { PRISMA_CLIENT } from "../prisma/prisma.module";
 
 export interface AuditQueryDto {
   action?: string;
@@ -28,8 +28,8 @@ export class AuditService {
         entityId: data.entityId,
         entityType: data.entityType,
         userId: data.userId || null,
-        details: data.details || null
-      }
+        details: data.details || null,
+      },
     });
   }
 
@@ -44,9 +44,9 @@ export class AuditService {
 
     if (query.search) {
       where.OR = [
-        { action: { contains: query.search, mode: 'insensitive' } },
-        { entityType: { contains: query.search, mode: 'insensitive' } },
-        { user: { username: { contains: query.search, mode: 'insensitive' } } }
+        { action: { contains: query.search, mode: "insensitive" } },
+        { entityType: { contains: query.search, mode: "insensitive" } },
+        { user: { username: { contains: query.search, mode: "insensitive" } } },
       ];
     }
 
@@ -56,13 +56,13 @@ export class AuditService {
         where,
         include: {
           user: {
-            select: { id: true, username: true, role: true }
-          }
+            select: { id: true, username: true, role: true },
+          },
         },
-        orderBy: { createdAt: 'desc' },
+        orderBy: { createdAt: "desc" },
         take: limit,
-        skip: offset
-      })
+        skip: offset,
+      }),
     ]);
 
     return { total, limit, offset, logs };
@@ -70,7 +70,11 @@ export class AuditService {
 
   async getStats() {
     const now = new Date();
-    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const todayStart = new Date(
+      now.getFullYear(),
+      now.getMonth(),
+      now.getDate(),
+    );
 
     const [
       totalCount,
@@ -78,14 +82,16 @@ export class AuditService {
       cancellationsCount,
       priceChangesCount,
       failedLoginsCount,
-      rksvConfirmationsCount
+      rksvConfirmationsCount,
     ] = await Promise.all([
       this.prisma.auditLog.count(),
       this.prisma.auditLog.count({ where: { createdAt: { gte: todayStart } } }),
-      this.prisma.auditLog.count({ where: { action: { in: ['CANCEL_ORDER', 'CANCEL_ORDER_ITEM'] } } }),
-      this.prisma.auditLog.count({ where: { action: 'PRICE_CHANGED' } }),
-      this.prisma.auditLog.count({ where: { action: 'FAILED_LOGIN' } }),
-      this.prisma.auditLog.count({ where: { action: 'ACTIVATE_EVENT_RKSV' } })
+      this.prisma.auditLog.count({
+        where: { action: { in: ["CANCEL_ORDER", "CANCEL_ORDER_ITEM"] } },
+      }),
+      this.prisma.auditLog.count({ where: { action: "PRICE_CHANGED" } }),
+      this.prisma.auditLog.count({ where: { action: "FAILED_LOGIN" } }),
+      this.prisma.auditLog.count({ where: { action: "ACTIVATE_EVENT_RKSV" } }),
     ]);
 
     return {
@@ -94,24 +100,36 @@ export class AuditService {
       cancellationsCount,
       priceChangesCount,
       failedLoginsCount,
-      rksvConfirmationsCount
+      rksvConfirmationsCount,
     };
   }
 
   async exportCsv(): Promise<string> {
     const logs = await this.prisma.auditLog.findMany({
       include: {
-        user: { select: { username: true, role: true } }
+        user: { select: { username: true, role: true } },
       },
-      orderBy: { createdAt: 'desc' },
-      take: 5000
+      orderBy: { createdAt: "desc" },
+      take: 5000,
     });
 
-    const headers = ['ID', 'Zeitstempel', 'Aktion', 'Entitaet', 'Entitaets-ID', 'Benutzer-ID', 'Benutzername', 'Rolle', 'Details / Begruendung'];
-    const rows = logs.map(l => {
-      const detailsStr = l.details ? JSON.stringify(l.details).replace(/"/g, '""') : '';
-      const userName = l.user?.username || 'System';
-      const role = l.user?.role || 'SYSTEM';
+    const headers = [
+      "ID",
+      "Zeitstempel",
+      "Aktion",
+      "Entitaet",
+      "Entitaets-ID",
+      "Benutzer-ID",
+      "Benutzername",
+      "Rolle",
+      "Details / Begruendung",
+    ];
+    const rows = logs.map((l) => {
+      const detailsStr = l.details
+        ? JSON.stringify(l.details).replace(/"/g, '""')
+        : "";
+      const userName = l.user?.username || "System";
+      const role = l.user?.role || "SYSTEM";
 
       return [
         l.id,
@@ -119,14 +137,14 @@ export class AuditService {
         l.action,
         l.entityType,
         l.entityId,
-        l.userId || '',
+        l.userId || "",
         `"${userName}"`,
         role,
-        `"${detailsStr}"`
-      ].join(';');
+        `"${detailsStr}"`,
+      ].join(";");
     });
 
-    const bom = '\uFEFF';
-    return bom + headers.join(';') + '\r\n' + rows.join('\r\n');
+    const bom = "\uFEFF";
+    return bom + headers.join(";") + "\r\n" + rows.join("\r\n");
   }
 }

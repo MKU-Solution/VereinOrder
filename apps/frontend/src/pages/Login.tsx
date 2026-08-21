@@ -1,27 +1,30 @@
-import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { api } from '../lib/api';
-import { useAuthStore } from '../store/useAuthStore';
-import { LogIn, User, KeyRound } from 'lucide-react';
+import { useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { api } from "../lib/api";
+import { useAuthStore } from "../store/useAuthStore";
+import { LogIn, User, KeyRound } from "lucide-react";
 
 export const Login = () => {
-  const [username, setUsername] = useState('');
-  const [pin, setPin] = useState('');
-  const [error, setError] = useState('');
+  const [username, setUsername] = useState("");
+  const [pin, setPin] = useState("");
+  const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const setToken = useAuthStore((state) => state.setToken);
   const navigate = useNavigate();
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    setError('');
+    setError("");
     setIsLoading(true);
     try {
-      const response = await api.post('/auth/login', { username, pin });
+      const response = await api.post("/auth/login", { username, pin });
       setToken(response.data.access_token);
-      navigate('/');
+      navigate("/");
     } catch (err: any) {
-      setError(err.response?.data?.message || 'Login fehlgeschlagen. Bitte überprüfe deine Eingaben.');
+      setError(
+        err.response?.data?.message ||
+          "Login fehlgeschlagen. Bitte überprüfe deine Eingaben.",
+      );
     } finally {
       setIsLoading(false);
     }
@@ -32,20 +35,28 @@ export const Login = () => {
       {/* Decorative blobs */}
       <div className="absolute top-[-10%] left-[-10%] w-96 h-96 bg-indigo-600/30 rounded-full blur-3xl animate-pulse"></div>
       <div className="absolute bottom-[-10%] right-[-10%] w-96 h-96 bg-emerald-600/20 rounded-full blur-3xl animate-pulse delay-1000"></div>
-      
+
       <div className="glass w-full max-w-md p-8 rounded-3xl z-10 animate-slide-up relative overflow-hidden">
         {/* Subtle top highlight */}
         <div className="absolute top-0 left-0 right-0 h-[1px] bg-gradient-to-r from-transparent via-indigo-500/50 to-transparent"></div>
-        
+
         <div className="text-center mb-8 animate-fade-in">
           <div className="w-16 h-16 bg-gradient-to-br from-indigo-500 to-emerald-500 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg shadow-indigo-500/20">
             <LogIn className="w-8 h-8 text-white" />
           </div>
-          <h1 className="text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-white to-slate-400">VereinOrder</h1>
-          <p className="text-slate-400 mt-2 text-sm">Festbetrieb-Kassensystem</p>
+          <h1 className="text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-white to-slate-400">
+            VereinOrder
+          </h1>
+          <p className="text-slate-400 mt-2 text-sm">
+            Festbetrieb-Kassensystem
+          </p>
         </div>
 
-        <form onSubmit={handleLogin} className="space-y-5 animate-fade-in" style={{ animationDelay: '100ms' }}>
+        <form
+          onSubmit={handleLogin}
+          className="space-y-5 animate-fade-in"
+          style={{ animationDelay: "100ms" }}
+        >
           {error && (
             <div className="bg-red-500/10 border border-red-500/50 text-red-400 px-4 py-3 rounded-xl text-sm flex items-start gap-2">
               <span className="shrink-0 mt-0.5">⚠</span>
@@ -54,7 +65,9 @@ export const Login = () => {
           )}
 
           <div className="space-y-1">
-            <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider ml-1">Benutzername</label>
+            <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider ml-1">
+              Benutzername
+            </label>
             <div className="relative">
               <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
                 <User className="h-5 w-5 text-slate-500" />
@@ -71,7 +84,9 @@ export const Login = () => {
           </div>
 
           <div className="space-y-1">
-            <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider ml-1">PIN</label>
+            <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider ml-1">
+              PIN
+            </label>
             <div className="relative">
               <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
                 <KeyRound className="h-5 w-5 text-slate-500" />

@@ -1,6 +1,6 @@
-import { Injectable } from '@nestjs/common';
-import { Subject, Observable } from 'rxjs';
-import { filter, map } from 'rxjs/operators';
+import { Injectable } from "@nestjs/common";
+import { Subject, Observable } from "rxjs";
+import { filter, map } from "rxjs/operators";
 
 export interface RealtimeMessage {
   eventId?: string;
@@ -18,14 +18,17 @@ export class RealtimeService {
 
   getStream(filterEventId?: string): Observable<any> {
     return this.eventSubject.asObservable().pipe(
-      filter(msg => !filterEventId || !msg.eventId || msg.eventId === filterEventId),
-      map(msg => ({
+      filter(
+        (msg) =>
+          !filterEventId || !msg.eventId || msg.eventId === filterEventId,
+      ),
+      map((msg) => ({
         data: {
           type: msg.type,
           data: msg.data,
-          timestamp: new Date().toISOString()
-        }
-      }))
+          timestamp: new Date().toISOString(),
+        },
+      })),
     );
   }
 }

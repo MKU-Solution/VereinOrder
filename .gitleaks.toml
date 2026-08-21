@@ -1,0 +1,11 @@
+title = "VereinOrder Gitleaks-Konfiguration"
+
+[allowlist]
+description = "Dokumentierte Beispiele und exakt eingegrenzte CI-Testzugänge"
+paths = [
+  '''(^|/)\.env\.example$''',
+]
+regexes = [
+  '''postgresql://postgres:postgres@127\.0\.0\.1:5432/vereinorder_(integration|e2e)_test\?schema=public''',
+  '''POSTGRES_PASSWORD:\s*postgres''',
+]
