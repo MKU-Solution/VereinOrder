@@ -100,6 +100,50 @@ describe("Druckerkonfiguration", () => {
     expect(target.kind).toBe("simulator");
   });
 
+  it("übernimmt CUPS_IPP mit Port-Vorgabe 631 und Pflicht-queueName", () => {
+    const target = resolveTarget({
+      id: "p9",
+      name: "Theke",
+      type: "CUPS_IPP",
+      queueName: "theke-raw",
+    });
+
+    expect(target).toMatchObject({
+      kind: "cups-ipp",
+      port: 631,
+      queueName: "theke-raw",
+    });
+    expect(target.host).toBeUndefined();
+  });
+
+  it("übernimmt bei CUPS_IPP einen abweichenden Host, wenn angegeben", () => {
+    const target = resolveTarget({
+      id: "p10",
+      name: "Theke",
+      type: "CUPS_IPP",
+      ipAddress: "cups.verein.local",
+      queueName: "theke-raw",
+      port: 6310,
+    });
+
+    expect(target.host).toBe("cups.verein.local");
+    expect(target.port).toBe(6310);
+  });
+
+  it("verlangt einen queueName für CUPS_IPP", () => {
+    expect(() =>
+      resolveTarget({ id: "p11", name: "Theke", type: "CUPS_IPP" }),
+    ).toThrow(PrinterConfigurationError);
+    expect(() =>
+      resolveTarget({
+        id: "p11",
+        name: "Theke",
+        type: "CUPS_IPP",
+        queueName: "  ",
+      }),
+    ).toThrow(/queueName/);
+  });
+
   it("weist unbekannte Druckertypen ab, statt still zu drucken", () => {
     expect(() =>
       resolveTarget({ id: "p7", name: "Alt", type: "ESC_POS_USB" }),

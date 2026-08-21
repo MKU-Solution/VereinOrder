@@ -1,11 +1,15 @@
-import axios from "axios";
+import axios, { AxiosError } from "axios";
 
 import {
+  classifyOutcome,
   createAdapterRegistry,
+  DeliveryContext,
   PrinterAdapter,
+  PrintOutcomeClass,
   PrintTransportError,
   selectAdapter,
 } from "./adapters";
+import { LeaseLostError } from "./lease";
 import { createLogger } from "./logging";
 import { PrintJobLike } from "./printing/documents";
 import { prepareDocument } from "./printing/prepare";
@@ -13,6 +17,18 @@ import { PrinterConfigurationError, PrinterRow, resolveTarget } from "./target";
 
 interface PrintJob extends PrintJobLike {
   printer: PrinterRow;
+  /** Fencing-Token der laufenden Reservierung (M2). */
+  leaseId: string;
+  leaseExpiresAt: string;
+}
+
+interface OutcomeReport {
+  leaseId: string;
+  outcome: PrintOutcomeClass;
+  errorCode?: string;
+  errorMessage?: string;
+  bytesWritten?: number;
+  cupsJobState?: string;
 }
 
 const BACKEND_URL = process.env.BACKEND_URL || "http://127.0.0.1:3000";
@@ -25,6 +41,12 @@ const DEFAULT_TIMEOUT_MS = positiveNumber(process.env.PRINT_TIMEOUT_MS, 5000);
 const FORCE_SIMULATOR = ["1", "true", "yes", "ja"].includes(
   String(process.env.PRINT_FORCE_SIMULATOR ?? "").toLowerCase(),
 );
+
+/** Vorgabe aus Abschnitt 3.2 (M2): Herzschlag alle 20 Sekunden. */
+const HEARTBEAT_INTERVAL_MS = 20000;
+/** Rückstaffelung der beharrlichen Ergebnismeldung (M4). */
+const REPORT_RETRY_INITIAL_DELAY_MS = 1000;
+const REPORT_RETRY_MAX_DELAY_MS = 30000;
 
 const logger = createLogger({ secrets: [PRINT_WORKER_TOKEN ?? ""] });
 
@@ -46,6 +68,13 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/** 409 Conflict: die Reservierung gehört diesem Worker nicht mehr. */
+function isLeaseConflict(error: unknown): boolean {
+  return (
+    axios.isAxiosError(error) && (error as AxiosError).response?.status === 409
+  );
+}
+
 async function claimNextJob(): Promise<PrintJob | null> {
   try {
     const response = await axios.post(
@@ -62,32 +91,118 @@ async function claimNextJob(): Promise<PrintJob | null> {
   }
 }
 
-async function reportStatus(
+/**
+ * Bestätigt einen Phasenwechsel beim Backend. Vor dem ersten gesendeten Byte
+ * MUSS `CLAIMED -> DELIVERING` bestätigt sein (Pflicht 1 / M3) – das ist die
+ * Sicherung gegen Doppeldruck. Ein `409` bedeutet, dass die Reservierung
+ * nicht mehr gehört; das wird als {@link LeaseLostError} weitergereicht,
+ * jeder andere Fehler (z. B. Backend nicht erreichbar) als gewöhnlicher
+ * Fehler, der ebenfalls den Druckversuch verhindert.
+ */
+async function confirmPhase(
   jobId: string,
-  status: "PRINTED" | "FAILED",
-  errorMessage?: string,
-): Promise<boolean> {
+  leaseId: string,
+  phase: "DELIVERING" | "SPOOLED",
+  cupsJobId?: number,
+): Promise<void> {
   try {
     await axios.patch(
-      `${BACKEND_URL}/print-jobs/${jobId}/status`,
-      { status, errorMessage },
+      `${BACKEND_URL}/print-jobs/${jobId}/phase`,
+      { leaseId, phase, cupsJobId },
       { headers: workerHeaders() },
     );
-    return true;
   } catch (error) {
-    logger.error("backend.status_failed", {
-      jobId,
-      status,
-      message: (error as Error).message,
-    });
-    return false;
+    if (isLeaseConflict(error)) {
+      throw new LeaseLostError(
+        `Phasenwechsel nach ${phase} abgelehnt: Reservierung verloren.`,
+      );
+    }
+    throw error;
   }
 }
 
 /**
- * Druckt genau einen Auftrag. Der Auftrag gilt erst nach erfolgreichem
- * Transportabschluss als gedruckt; jeder Fehler wird mit stabiler Kennung
- * und ohne Auftragsinhalte gemeldet.
+ * Hält die Reservierung während eines laufenden Auftrags am Leben (M2).
+ * Ein `409` beim Herzschlag bedeutet endgültigen Lease-Verlust; ab dann gilt
+ * `held.value = false` und jede weitere Ergebnismeldung wird nicht mehr
+ * versucht.
+ */
+function startHeartbeat(
+  jobId: string,
+  leaseId: string,
+): { held: { value: boolean }; stop: () => void } {
+  const held = { value: true };
+  const timer = setInterval(() => {
+    if (!held.value) return;
+    axios
+      .post(
+        `${BACKEND_URL}/print-jobs/${jobId}/heartbeat`,
+        { leaseId },
+        { headers: workerHeaders() },
+      )
+      .catch((error) => {
+        if (isLeaseConflict(error)) {
+          held.value = false;
+          logger.warn("lease.lost", { jobId, phase: "heartbeat" });
+          return;
+        }
+        logger.warn("backend.heartbeat_failed", {
+          jobId,
+          message: (error as Error).message,
+        });
+      });
+  }, HEARTBEAT_INTERVAL_MS);
+  timer.unref?.();
+  return { held, stop: () => clearInterval(timer) };
+}
+
+/**
+ * Beharrliche, gefencte Ergebnismeldung (M4, Pflicht 7). Wiederholt mit
+ * Rückstaffelung, solange die Lease gehalten wird (`held.value`). Die
+ * Meldung ist über `leaseId` gefenct und damit idempotent – ein `409`
+ * beendet die Wiederholung endgültig, jeder andere Fehler wird protokolliert
+ * und erneut versucht.
+ */
+async function reportOutcomePersistent(
+  jobId: string,
+  held: { value: boolean },
+  payload: OutcomeReport,
+): Promise<void> {
+  let attempt = 0;
+  let delayMs = REPORT_RETRY_INITIAL_DELAY_MS;
+
+  while (held.value) {
+    attempt += 1;
+    try {
+      await axios.patch(`${BACKEND_URL}/print-jobs/${jobId}/status`, payload, {
+        headers: workerHeaders(),
+      });
+      return;
+    } catch (error) {
+      if (isLeaseConflict(error)) {
+        held.value = false;
+        logger.warn("lease.lost", { jobId, phase: "status" });
+        return;
+      }
+      logger.warn("report.retry", {
+        jobId,
+        attempt,
+        delayMs,
+        outcome: payload.outcome,
+        message: (error as Error).message,
+      });
+      await sleep(delayMs);
+      delayMs = Math.min(delayMs * 2, REPORT_RETRY_MAX_DELAY_MS);
+    }
+  }
+}
+
+/**
+ * Druckt genau einen Auftrag. Der Phasenwechsel `CLAIMED -> DELIVERING`
+ * muss vor dem ersten gesendeten Byte beim Backend bestätigt sein (Pflicht
+ * 1); scheitert das, wird nicht gedruckt. Der Worker meldet dem Backend die
+ * Fehlerklasse (`NOT_PRINTED` | `PRINTED` | `UNCLEAR`), nicht mehr
+ * `PRINTED`/`FAILED` – das Backend entscheidet über Failover.
  */
 export async function processJob(
   job: PrintJob,
@@ -112,9 +227,33 @@ export async function processJob(
       printerId: job.printer?.id,
       message,
     });
-    await reportStatus(job.id, "FAILED", message);
+    const held = { value: true };
+    await reportOutcomePersistent(job.id, held, {
+      leaseId: job.leaseId,
+      outcome: "NOT_PRINTED",
+      errorCode: "PRINTER_CONFIGURATION",
+      errorMessage: message,
+    });
     return;
   }
+
+  // Pflicht 1: Vor dem ersten gesendeten Byte muss der Phasenwechsel
+  // CLAIMED -> DELIVERING beim Backend bestätigt sein. Scheitert das, wird
+  // NICHT gedruckt – das ist die Sicherung gegen Doppeldruck.
+  try {
+    await confirmPhase(job.id, job.leaseId, "DELIVERING");
+  } catch (error) {
+    if (error instanceof LeaseLostError) {
+      logger.warn("lease.lost", { jobId: job.id, phase: "DELIVERING" });
+    } else {
+      logger.error("job.phase_confirm_failed", {
+        jobId: job.id,
+        message: (error as Error).message,
+      });
+    }
+    return;
+  }
+  logger.info("phase.confirmed", { jobId: job.id, phase: "DELIVERING" });
 
   const prepared = prepareDocument(job, target);
   logger.info("job.claimed", {
@@ -128,12 +267,60 @@ export async function processJob(
     copies: target.copies,
   });
 
+  const heartbeat = startHeartbeat(job.id, job.leaseId);
   try {
-    const result = await selectAdapter(registry, target).deliver(
-      prepared,
-      target,
-    );
-    const marked = await reportStatus(job.id, "PRINTED");
+    const context: DeliveryContext = {
+      onSpooled: async (cupsJobId: number) => {
+        await confirmPhase(job.id, job.leaseId, "SPOOLED", cupsJobId);
+        logger.info("cups.spooled", { jobId: job.id, cupsJobId });
+      },
+      onEvent: (event, fields) =>
+        logger.info(event, { jobId: job.id, ...fields }),
+    };
+
+    let result;
+    try {
+      result = await selectAdapter(registry, target).deliver(
+        prepared,
+        target,
+        context,
+      );
+    } catch (error) {
+      if (error instanceof LeaseLostError) {
+        logger.warn("lease.lost", { jobId: job.id, phase: "DELIVERY" });
+        return;
+      }
+      const transportError =
+        error instanceof PrintTransportError ? error : undefined;
+      const outcome = transportError
+        ? classifyOutcome(transportError)
+        : "UNCLEAR";
+      const message =
+        transportError?.message ??
+        `Unerwarteter Fehler beim Drucken: ${(error as Error).message}`;
+
+      logger.error("job.failed", {
+        jobId: job.id,
+        jobType: job.jobType,
+        printerId: target.id,
+        transport: target.kind,
+        code: transportError?.code ?? "UNEXPECTED",
+        outcome,
+        durationMs: Date.now() - started,
+        message,
+      });
+
+      await reportOutcomePersistent(job.id, heartbeat.held, {
+        leaseId: job.leaseId,
+        outcome,
+        errorCode: transportError?.code ?? "UNEXPECTED",
+        errorMessage: message,
+        bytesWritten: transportError?.bytesWritten,
+        cupsJobState: transportError?.cupsJobState,
+      });
+      return;
+    }
+
     logger.info("job.printed", {
       jobId: job.id,
       jobType: job.jobType,
@@ -141,25 +328,15 @@ export async function processJob(
       transport: result.transport,
       bytes: result.bytes,
       durationMs: Date.now() - started,
-      statusReported: marked,
     });
-  } catch (error) {
-    const transportError =
-      error instanceof PrintTransportError ? error : undefined;
-    const message =
-      transportError?.message ??
-      `Unerwarteter Fehler beim Drucken: ${(error as Error).message}`;
 
-    logger.error("job.failed", {
-      jobId: job.id,
-      jobType: job.jobType,
-      printerId: target.id,
-      transport: target.kind,
-      code: transportError?.code ?? "UNEXPECTED",
-      durationMs: Date.now() - started,
-      message,
+    await reportOutcomePersistent(job.id, heartbeat.held, {
+      leaseId: job.leaseId,
+      outcome: "PRINTED",
+      cupsJobState: result.cupsJobState,
     });
-    await reportStatus(job.id, "FAILED", message);
+  } finally {
+    heartbeat.stop();
   }
 }
 
@@ -182,6 +359,7 @@ async function main(): Promise<void> {
     pollIntervalMs: POLL_INTERVAL_MS,
     timeoutMs: DEFAULT_TIMEOUT_MS,
     forceSimulator: FORCE_SIMULATOR,
+    heartbeatIntervalMs: HEARTBEAT_INTERVAL_MS,
   });
 
   while (running) {
