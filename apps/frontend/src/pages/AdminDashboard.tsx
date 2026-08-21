@@ -1,6 +1,7 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { api } from "../lib/api";
 import { EventConfigurationActions } from "../components/admin/EventConfigurationActions";
+import { useAuthStore } from "../store/useAuthStore";
 import {
   Users,
   Calendar,
@@ -31,6 +32,7 @@ import {
   RefreshCw,
   AlertOctagon,
   ArrowRight,
+  PowerOff,
 } from "lucide-react";
 
 type Tab =
@@ -109,6 +111,143 @@ const backendMessage = (error: unknown, fallback: string): string => {
   return fallback;
 };
 
+/**
+ * Bekannte Fehlerkennungen von Druckern in Klartext (Konzept 64, Abschnitt
+ * 2.3: "kein Fehlercode ohne Übersetzung"). Unbekannte Codes werden roh
+ * gezeigt statt verschluckt.
+ */
+const PRINTER_ERROR_LABELS: Record<string, string> = {
+  DNS_ERROR: "Name konnte nicht aufgelöst werden",
+  CONNECTION_LOST: "Verbindung während der Übertragung verloren",
+  CONNECTION_REFUSED: "Verbindung abgelehnt",
+  CUPS_JOB_ABORTED: "Druckwarteschlange hat den Auftrag abgebrochen",
+  CUPS_QUEUE_NOT_FOUND: "Warteschlange nicht gefunden",
+  LEASE_EXPIRED: "Keine Rückmeldung mehr erhalten",
+  REPORT_LOST: "Rückmeldung ist nicht angekommen",
+  PRINTER_CONFIG_ERROR: "Druckerkonfiguration ist fehlerhaft",
+  OUTPUT_FAILED: "Ausgabe ist fehlgeschlagen",
+};
+
+const describePrinterError = (code?: string | null): string =>
+  code ? (PRINTER_ERROR_LABELS[code] ?? code) : "unbekannter Fehler";
+
+/** Kurzform "6 Min." für die Diagnose-Kachel (Konzept 64, Abschnitt 1.3). */
+const formatMinutesAgoShort = (value?: string | null): string => {
+  if (!value) return "unbekannter Zeit";
+  const minutes = Math.max(
+    0,
+    Math.floor((Date.now() - new Date(value).getTime()) / 60000),
+  );
+  return minutes < 1 ? "< 1 Min." : `${minutes} Min.`;
+};
+
+/** Langform "6 Minuten" für die Auftragskarten (Konzept 64, Abschnitt 2.3). */
+const formatMinutesAgoLong = (value?: string | null): string => {
+  if (!value) return "unbekannter Zeit";
+  const minutes = Math.max(
+    0,
+    Math.floor((Date.now() - new Date(value).getTime()) / 60000),
+  );
+  if (minutes < 1) return "weniger als einer Minute";
+  return `${minutes} ${minutes === 1 ? "Minute" : "Minuten"}`;
+};
+
+const formatClockTime = (value?: string | null): string =>
+  value
+    ? new Date(value).toLocaleTimeString("de-AT", {
+        hour: "2-digit",
+        minute: "2-digit",
+      })
+    : "unbekannt";
+
+/** Auftragsart für die Kartenkopfzeile (Konzept 64, Abschnitt 2.3). */
+const JOB_TYPE_FALLBACK_LABELS: Record<string, string> = {
+  STATION_TICKET: "Abhol-/Küchenbon",
+  PRODUCT_VOUCHER: "Produktbon",
+  RECEIPT: "Kassenbeleg",
+};
+const KNOWN_JOB_TITLES: Record<string, string> = {
+  "ABHOL-/KÜCHENBON": "Abhol-/Küchenbon",
+  PRODUKTBON: "Produktbon",
+  KASSENBELEG: "Kassenbeleg",
+};
+const describeJobType = (job: any): string => {
+  const title =
+    typeof job?.content?.title === "string" ? job.content.title.trim() : "";
+  if (title) return KNOWN_JOB_TITLES[title.toUpperCase()] ?? title;
+  return JOB_TYPE_FALLBACK_LABELS[job?.jobType] ?? "Druckauftrag";
+};
+
+/**
+ * Klartext je unresolvedReason (Konzept 64, Abschnitt 2.3, Wortlaut laut
+ * Vorgabe). bytesWritten wird nur bei TRANSPORT und nur, wenn > 0, genannt.
+ */
+const describeUnresolvedReason = (job: any): string => {
+  const bytes = typeof job?.bytesWritten === "number" ? job.bytesWritten : null;
+  switch (job?.unresolvedReason) {
+    case "TRANSPORT":
+      return bytes && bytes > 0
+        ? `Verbindung nach ${bytes} Byte abgebrochen — auf dem Papier kann ein Teilbon liegen.`
+        : "Verbindung während der Übertragung abgebrochen — ob und wie viel gedruckt wurde, ist nicht bekannt.";
+    case "LEASE_EXPIRED":
+      return "Der Druck-Dienst hat sich seit Beginn der Übertragung nicht mehr gemeldet — ob gedruckt wurde, ist nicht bekannt.";
+    case "REPORT_LOST":
+      return "Der Bon wurde vermutlich gedruckt, aber die Bestätigung ist nicht beim Server angekommen.";
+    case "CUPS_ABORTED":
+      return "Die Druckwarteschlange hat den Auftrag abgebrochen, möglicherweise während er schon lief.";
+    case "CUPS_CANCELED":
+      return "Der Auftrag wurde in der Warteschlange abgebrochen, während er möglicherweise schon lief.";
+    default:
+      return "Das Ergebnis dieses Druckauftrags ist unklar.";
+  }
+};
+
+type PrinterDiagRowState = {
+  Icon: typeof CheckCircle2;
+  colorClass: string;
+  text: string;
+};
+
+/**
+ * Zustand einer Druckerzeile in der Diagnose-Kachel (Konzept 64, Abschnitt
+ * 1.3). Zustand 2 ("Warteschlange angehalten") und die per-Drucker-Variante
+ * von Zustand 6 sind hier bewusst NICHT abgebildet: der eingefrorene
+ * Feldvertrag liefert weder ein aggregiertes cupsJobState/SPOOLED-Signal je
+ * Drucker noch ein per-Drucker cupsReachable-Feld, sondern nur den globalen
+ * cupsHostReachable-Wert (siehe Banner in der Kachel). Eine Erfindung dieser
+ * Signale würde eine Genauigkeit vortäuschen, die die Daten nicht hergeben.
+ */
+const getPrinterDiagState = (
+  printer: any,
+  printersById: Record<string, any>,
+): PrinterDiagRowState => {
+  if (!printer.isActive) {
+    return {
+      Icon: PowerOff,
+      colorClass: "text-slate-400",
+      text: "Manuell deaktiviert",
+    };
+  }
+  if (printer.bypassed) {
+    const errorLabel = describePrinterError(printer.lastErrorCode);
+    if (printer.fallbackPrinterId) {
+      const fallbackName =
+        printersById[printer.fallbackPrinterId]?.name ?? "unbekannt";
+      return {
+        Icon: AlertTriangle,
+        colorClass: "text-rose-400",
+        text: `Automatisch umgangen – Fehler vor ${formatMinutesAgoShort(printer.lastErrorAt)}: ${errorLabel}. Aufträge gehen aktuell an „${fallbackName}".`,
+      };
+    }
+    return {
+      Icon: AlertOctagon,
+      colorClass: "text-rose-400",
+      text: `Fehler seit ${formatMinutesAgoShort(printer.lastErrorAt)}: ${errorLabel}. Kein Ersatzdrucker hinterlegt.`,
+    };
+  }
+  return { Icon: CheckCircle2, colorClass: "text-emerald-400", text: "Bereit" };
+};
+
 export const AdminDashboard = () => {
   const [activeTab, setActiveTab] = useState<Tab>("events");
   const [data, setData] = useState<any[]>([]);
@@ -163,10 +302,43 @@ export const AdminDashboard = () => {
     cutMode: "PARTIAL",
     copies: 1,
     timeoutMs: 5000,
+    queueName: "",
+    fallbackPrinterId: "",
   });
   const [printerTests, setPrinterTests] = useState<
     Record<string, { state: "running" | "ok" | "error"; message: string }>
   >({});
+
+  // Unklare Druckaufträge (Issue #64 / Admin-Entscheidung)
+  const [unresolvedJobs, setUnresolvedJobs] = useState<any[]>([]);
+  const [resolveDialog, setResolveDialog] = useState<{
+    job: any;
+    action: "REPRINTED" | "CONFIRMED_PRINTED" | "DISCARDED";
+  } | null>(null);
+  const [resolveTargetPrinterId, setResolveTargetPrinterId] = useState("");
+  const [resolveChecked, setResolveChecked] = useState(false);
+  const [resolveComment, setResolveComment] = useState("");
+  const [resolveError, setResolveError] = useState("");
+  const [isResolving, setIsResolving] = useState(false);
+  const [justResolvedIds, setJustResolvedIds] = useState<
+    Record<string, { tone: "ok" | "reprint" | "discard"; text: string }>
+  >({});
+
+  // Diagnose-Kachel: Hintergrund-Poll-Zustand (Issue #64, Abschnitt 1.4/1.7)
+  const [diagnosticsLastFetchedAt, setDiagnosticsLastFetchedAt] =
+    useState<Date | null>(null);
+  const [diagnosticsPollFailed, setDiagnosticsPollFailed] = useState(false);
+
+  const currentUserRole = useAuthStore((s) => s.user?.role);
+  // Nur zum Ausblenden von Knöpfen, siehe Konzept 64, Abschnitt 0 und 2.7 -
+  // maßgeblich bleibt der RolesGuard im Backend.
+  const canDiscardPrintJobs = currentUserRole === "ADMINISTRATOR";
+
+  const printersById = useMemo(() => {
+    const map: Record<string, any> = {};
+    for (const p of printersList) map[p.id] = p;
+    return map;
+  }, [printersList]);
 
   // Event Modal State
   const [isEventModalOpen, setIsEventModalOpen] = useState(false);
@@ -241,6 +413,8 @@ export const AdminDashboard = () => {
         setData(res.data.logs || []);
       } else if (activeTab === "diagnostics") {
         setDiagnosticsData(res.data);
+        setDiagnosticsLastFetchedAt(new Date());
+        setDiagnosticsPollFailed(false);
       } else {
         setData(res.data);
       }
@@ -255,6 +429,27 @@ export const AdminDashboard = () => {
     }
   }, [activeTab, eventId, auditFilterAction, auditSearch]);
 
+  /**
+   * Unklare Druckaufträge (Konzept 64, Abschnitt 2.1/2.2). Läuft
+   * unabhängig vom aktiven Tab, weil sowohl das Tab-Abzeichen als auch die
+   * Diagnose-Kennzahl "Unklar" jederzeit stimmen müssen, nicht nur wenn der
+   * Tab "Drucker & Bon-Routing" offen ist.
+   */
+  const fetchUnresolvedJobs = useCallback(async () => {
+    try {
+      const res = await api.get("/print-jobs/unresolved");
+      setUnresolvedJobs(res.data || []);
+    } catch (err) {
+      console.error("Failed to load unresolved print jobs", err);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchUnresolvedJobs();
+    const interval = setInterval(fetchUnresolvedJobs, 10000);
+    return () => clearInterval(interval);
+  }, [fetchUnresolvedJobs]);
+
   useEffect(() => {
     if (
       activeTab === "events" ||
@@ -268,14 +463,33 @@ export const AdminDashboard = () => {
     }
   }, [activeTab, eventId, fetchData]);
 
+  /**
+   * Hintergrund-Poll der Diagnose-Kachel: läuft ohne den globalen
+   * Ladezustand zu berühren, damit die Anzeige nicht alle 10 s zum
+   * "Lade Daten…"-Bildschirm zurückspringt (Konzept 64, Abschnitt 1.7). Bei
+   * Fehlschlag bleiben die zuletzt bekannten Werte sichtbar und Banner
+   * 1.4(b) erscheint.
+   */
+  const pollDiagnosticsSilently = useCallback(async () => {
+    try {
+      const res = await api.get("/diagnostics/status");
+      setDiagnosticsData(res.data);
+      setDiagnosticsLastFetchedAt(new Date());
+      setDiagnosticsPollFailed(false);
+    } catch (err) {
+      console.error("Background diagnostics poll failed", err);
+      setDiagnosticsPollFailed(true);
+    }
+  }, []);
+
   // Periodic poll for diagnostics tab
   useEffect(() => {
     if (activeTab !== "diagnostics") return;
     const interval = setInterval(() => {
-      fetchData();
+      pollDiagnosticsSilently();
     }, 10000);
     return () => clearInterval(interval);
-  }, [activeTab, fetchData]);
+  }, [activeTab, pollDiagnosticsSilently]);
 
   const tabs = [
     { id: "events", label: "Veranstaltungen & Lifecycle", icon: Calendar },
@@ -340,6 +554,8 @@ export const AdminDashboard = () => {
           cutMode: item.cutMode || "PARTIAL",
           copies: item.copies || 1,
           timeoutMs: item.timeoutMs || 5000,
+          queueName: item.queueName || "",
+          fallbackPrinterId: item.fallbackPrinterId || "",
         });
       } else {
         setEditingPrinter(null);
@@ -353,6 +569,8 @@ export const AdminDashboard = () => {
           cutMode: "PARTIAL",
           copies: 1,
           timeoutMs: 5000,
+          queueName: "",
+          fallbackPrinterId: "",
         });
       }
       setIsPrinterModalOpen(true);
@@ -431,13 +649,26 @@ export const AdminDashboard = () => {
     setIsSavingModal(true);
     try {
       if (activeTab === "printers") {
+        // fallbackPrinterId ist eine Fremdschlüssel-Spalte im Backend - eine
+        // leere Zeichenkette wäre dort kein gültiger Wert, sondern muss
+        // explizit null bedeuten. queueName wird nur bei CUPS_IPP befüllt,
+        // sonst bewusst mitgeschickt als null, damit ein Typwechsel weg von
+        // CUPS_IPP die Warteschlange auch serverseitig aufräumt.
+        const printerPayload = {
+          ...printerFormData,
+          fallbackPrinterId: printerFormData.fallbackPrinterId || null,
+          queueName:
+            printerFormData.type === "CUPS_IPP"
+              ? printerFormData.queueName.trim()
+              : null,
+        };
         if (editingPrinter) {
           await api.patch(
             `/print-jobs/printers/${editingPrinter.id}`,
-            printerFormData,
+            printerPayload,
           );
         } else {
-          await api.post("/print-jobs/printers", printerFormData);
+          await api.post("/print-jobs/printers", printerPayload);
         }
         setIsPrinterModalOpen(false);
       } else if (activeTab === "events") {
@@ -754,6 +985,85 @@ export const AdminDashboard = () => {
     }
   };
 
+  // --- ADMIN-ENTSCHEIDUNG BEI UNKLAREM DRUCKERGEBNIS (Konzept 64, Abschnitt 2.5) ---
+  const openResolveDialog = (
+    job: any,
+    action: "REPRINTED" | "CONFIRMED_PRINTED" | "DISCARDED",
+  ) => {
+    setResolveDialog({ job, action });
+    setResolveTargetPrinterId("");
+    setResolveChecked(false);
+    setResolveComment("");
+    setResolveError("");
+  };
+
+  const closeResolveDialog = () => {
+    setResolveDialog(null);
+    setResolveError("");
+    // Auch nach einem Abbruch (z. B. nach einer 409-Meldung) neu laden,
+    // damit die Liste den tatsächlichen Stand zeigt (Konzept 64, 2.8).
+    fetchUnresolvedJobs();
+  };
+
+  const canConfirmResolve = resolveDialog
+    ? resolveDialog.action === "REPRINTED"
+      ? Boolean(resolveTargetPrinterId) && resolveChecked
+      : resolveDialog.action === "CONFIRMED_PRINTED"
+        ? resolveChecked
+        : resolveComment.trim().length > 0
+    : false;
+
+  const handleResolveSubmit = async () => {
+    if (!resolveDialog || !canConfirmResolve || isResolving) return;
+    const { job, action } = resolveDialog;
+    setIsResolving(true);
+    setResolveError("");
+    try {
+      const payload: Record<string, unknown> = { resolution: action };
+      if (action === "REPRINTED")
+        payload.targetPrinterId = resolveTargetPrinterId;
+      if (resolveComment.trim()) payload.comment = resolveComment.trim();
+
+      await api.post(`/print-jobs/${job.id}/resolve`, payload);
+
+      const feedback =
+        action === "REPRINTED"
+          ? {
+              tone: "reprint" as const,
+              text: `Neuer Druckauftrag an „${
+                printersById[resolveTargetPrinterId]?.name ?? "unbekannt"
+              }" eingereiht.`,
+            }
+          : action === "CONFIRMED_PRINTED"
+            ? { tone: "ok" as const, text: "Als gedruckt bestätigt." }
+            : { tone: "discard" as const, text: "Verworfen." };
+
+      setJustResolvedIds((prev) => ({ ...prev, [job.id]: feedback }));
+      setResolveDialog(null);
+      // Zähler sofort nachziehen (2.8, Punkt 3); die anschließende
+      // Verzögerung erlaubt, dass die Inline-Bestätigung an Ort und Stelle
+      // sichtbar bleibt, bevor die Karte aus der Liste verschwindet.
+      setTimeout(() => {
+        setJustResolvedIds((prev) => {
+          const rest = { ...prev };
+          delete rest[job.id];
+          return rest;
+        });
+        fetchUnresolvedJobs();
+      }, 2600);
+    } catch (err) {
+      console.error("Failed to resolve print job", err);
+      setResolveError(
+        backendMessage(
+          err,
+          "Die Entscheidung konnte nicht gespeichert werden.",
+        ),
+      );
+    } finally {
+      setIsResolving(false);
+    }
+  };
+
   const handleDelete = async (id: string) => {
     if (!confirm("Diesen Eintrag wirklich unwiderruflich löschen?")) return;
     try {
@@ -995,6 +1305,20 @@ export const AdminDashboard = () => {
             >
               <Icon className="w-4 h-4" />
               {tab.label}
+              {tab.id === "printers" && (
+                <span
+                  className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-bold ${
+                    unresolvedJobs.length > 0
+                      ? "bg-amber-500 text-slate-950"
+                      : "bg-slate-800 text-slate-500"
+                  }`}
+                >
+                  {unresolvedJobs.length > 0 && (
+                    <span className="w-1.5 h-1.5 rounded-full bg-slate-950 animate-pulse" />
+                  )}
+                  {unresolvedJobs.length}
+                </span>
+              )}
             </button>
           );
         })}
@@ -1119,7 +1443,7 @@ export const AdminDashboard = () => {
               )}
 
             {/* 4 Detail Grid Tiles */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-start">
               {/* 1. Backend & Host */}
               <div className="bg-slate-900/70 border border-slate-800 p-5 rounded-2xl space-y-4">
                 <div className="flex items-center gap-3">
@@ -1240,9 +1564,16 @@ export const AdminDashboard = () => {
                       <h4 className="font-bold text-slate-100">
                         Drucker & Warteschlange
                       </h4>
-                      <span className="text-xs text-slate-400">
+                      <span className="text-xs text-slate-400 block">
                         {diagnosticsData?.printers.active || 0} von{" "}
                         {diagnosticsData?.printers.total || 0} Druckern aktiv
+                      </span>
+                      <span className="text-[11px] text-slate-500 block">
+                        Stand:{" "}
+                        {diagnosticsLastFetchedAt
+                          ? diagnosticsLastFetchedAt.toLocaleTimeString("de-AT")
+                          : "–"}{" "}
+                        Uhr
                       </span>
                     </div>
                   </div>
@@ -1251,7 +1582,7 @@ export const AdminDashboard = () => {
                     <button
                       disabled={isRetryingJobs}
                       onClick={handleRetryFailedJobs}
-                      className="px-3 py-1.5 bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold rounded-xl transition flex items-center gap-1.5"
+                      className="px-3 py-1.5 bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold rounded-xl transition flex items-center gap-1.5 shrink-0"
                     >
                       <RotateCcw className="w-3.5 h-3.5" />
                       {isRetryingJobs
@@ -1261,7 +1592,46 @@ export const AdminDashboard = () => {
                   )}
                 </div>
 
-                <div className="grid grid-cols-3 gap-2 text-xs">
+                {diagnosticsData?.printers.cupsHostReachable === false && (
+                  <div
+                    role="alert"
+                    className="bg-rose-500/10 border border-rose-500/30 text-rose-300 rounded-xl px-4 py-3 text-sm flex gap-2 items-start"
+                  >
+                    <AlertOctagon className="w-4 h-4 shrink-0 mt-0.5" />
+                    <span>
+                      CUPS-Dienst auf dem Host ist nicht erreichbar
+                      (Portprüfung, Port 631). Angezeigte Werte sind der zuletzt
+                      bekannte Stand
+                      {diagnosticsData?.printers.cupsCheckedAt
+                        ? `: ${new Date(
+                            diagnosticsData.printers.cupsCheckedAt,
+                          ).toLocaleTimeString("de-AT", {
+                            hour: "2-digit",
+                            minute: "2-digit",
+                          })} Uhr.`
+                        : "."}
+                    </span>
+                  </div>
+                )}
+
+                {!isLoading && diagnosticsPollFailed && (
+                  <div
+                    role="alert"
+                    className="bg-rose-500/10 border border-rose-500/30 text-rose-300 rounded-xl px-4 py-3 text-sm flex gap-2 items-start"
+                  >
+                    <RefreshCw className="w-4 h-4 shrink-0 mt-0.5" />
+                    <span>
+                      Diagnosedaten konnten nicht aktualisiert werden. Letzter
+                      erfolgreicher Abruf:{" "}
+                      {diagnosticsLastFetchedAt
+                        ? diagnosticsLastFetchedAt.toLocaleTimeString("de-AT")
+                        : "unbekannt"}{" "}
+                      Uhr.
+                    </span>
+                  </div>
+                )}
+
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
                   <div className="bg-slate-800/50 p-3 rounded-xl">
                     <span className="text-slate-400 block mb-1">
                       Wartend (Pending)
@@ -1286,7 +1656,61 @@ export const AdminDashboard = () => {
                       {diagnosticsData?.printers.queue.failed || 0}
                     </span>
                   </div>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab("printers")}
+                    className="bg-slate-800/50 hover:bg-slate-800 p-3 rounded-xl text-left transition"
+                  >
+                    <span className="text-slate-400 block mb-1">Unklar</span>
+                    <span className="text-indigo-300 font-bold font-mono">
+                      {diagnosticsData?.printers.queue.unclear || 0}
+                    </span>
+                  </button>
                 </div>
+
+                {diagnosticsData?.printers.list &&
+                  diagnosticsData.printers.list.length > 0 && (
+                    <div className="border-t border-slate-800 pt-1">
+                      {diagnosticsData.printers.list.map((printer: any) => {
+                        const state = getPrinterDiagState(
+                          printer,
+                          printersById,
+                        );
+                        const StateIcon = state.Icon;
+                        const showCupsBadge =
+                          printer.type === "CUPS_IPP" &&
+                          diagnosticsData?.printers.cupsHostReachable === false;
+                        return (
+                          <div
+                            key={printer.id}
+                            className="flex flex-col sm:flex-row sm:items-start gap-1 sm:gap-3 py-2.5 border-b border-slate-800/60 last:border-b-0"
+                          >
+                            <div className="flex items-center gap-2 sm:w-40 shrink-0">
+                              <StateIcon
+                                className={`w-4 h-4 shrink-0 ${state.colorClass}`}
+                              />
+                              <span className="text-slate-200 font-bold text-xs truncate">
+                                {printer.name}
+                              </span>
+                            </div>
+                            <div
+                              className={`flex-1 min-w-0 text-xs sm:max-w-sm md:max-w-md ${state.colorClass}`}
+                            >
+                              {state.text}
+                            </div>
+                            {showCupsBadge && (
+                              <span
+                                title="TCP-Portprüfung gegen Port 631 – kein Nachweis, dass der Druckdienst selbst funktioniert."
+                                className="text-[11px] font-bold text-rose-400 sm:ml-auto shrink-0"
+                              >
+                                CUPS-Dienst: nicht erreichbar
+                              </span>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
               </div>
 
               {/* 4. Backup & Storage */}
@@ -1452,7 +1876,114 @@ export const AdminDashboard = () => {
           </div>
         ) : activeTab === "printers" ? (
           /* Printers Table */
-          <div className="space-y-4">
+          <div className="space-y-6">
+            {/* Unklare Druckaufträge (Konzept 64, Abschnitt 2.2) */}
+            {unresolvedJobs.length === 0 ? (
+              <div className="text-sm text-slate-500 flex items-center gap-2 py-2">
+                <CheckCircle2 className="w-4 h-4" />
+                Keine unklaren Druckaufträge.
+              </div>
+            ) : (
+              <div className="bg-amber-500/5 border border-amber-500/30 rounded-2xl p-5 space-y-4">
+                <div className="flex items-center gap-2 text-amber-300 font-bold">
+                  <AlertTriangle className="w-5 h-5" />
+                  Unklare Druckaufträge ({unresolvedJobs.length})
+                </div>
+                <p className="text-xs text-slate-400">
+                  Diese Aufträge brauchen eine Entscheidung, bevor sie aus der
+                  Warteschlange verschwinden. Bitte am Drucker nachsehen.
+                </p>
+                <div className="space-y-3">
+                  {unresolvedJobs.map((job: any) => {
+                    const feedback = justResolvedIds[job.id];
+                    return (
+                      <div
+                        key={job.id}
+                        className="bg-slate-900/70 border border-slate-800 rounded-xl p-4 space-y-3"
+                      >
+                        {feedback ? (
+                          <div
+                            role="status"
+                            className={`text-sm font-bold rounded-xl px-3 py-2 border ${
+                              feedback.tone === "ok"
+                                ? "bg-emerald-500/15 text-emerald-300 border-emerald-500/30"
+                                : feedback.tone === "reprint"
+                                  ? "bg-indigo-500/15 text-indigo-300 border-indigo-500/30"
+                                  : "bg-slate-800 text-slate-300 border-slate-700"
+                            }`}
+                          >
+                            {feedback.text}
+                          </div>
+                        ) : (
+                          <>
+                            <div>
+                              <div className="text-sm font-bold text-slate-100">
+                                {describeJobType(job)} · Bestellung #
+                                {job.content?.orderNumber ?? "?"} ·{" "}
+                                {job.printerName}
+                              </div>
+                              <div className="text-xs text-slate-500 mt-0.5">
+                                vor {formatMinutesAgoLong(job.unresolvedAt)} (
+                                {formatClockTime(job.unresolvedAt)} Uhr)
+                              </div>
+                            </div>
+                            <p className="text-sm text-slate-300 sm:max-w-prose">
+                              {describeUnresolvedReason(job)}
+                            </p>
+                            <details className="text-xs text-slate-500">
+                              <summary className="cursor-pointer select-none">
+                                Details
+                              </summary>
+                              <div className="mt-1 space-y-0.5 font-mono">
+                                <div>Versuche: {job.attemptCount ?? "–"}</div>
+                                <div>Failover: {job.failoverCount ?? "–"}</div>
+                                {job.cupsJobState && (
+                                  <div>CUPS-Status: {job.cupsJobState}</div>
+                                )}
+                              </div>
+                            </details>
+                            <div className="flex flex-col sm:flex-row sm:items-center gap-2 pt-2 border-t border-slate-800">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  openResolveDialog(job, "CONFIRMED_PRINTED")
+                                }
+                                className="w-full sm:w-auto px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-100 text-sm font-bold border border-slate-700 flex items-center justify-center gap-2"
+                              >
+                                <CheckCircle2 className="w-4 h-4" />
+                                Als gedruckt bestätigen
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  openResolveDialog(job, "REPRINTED")
+                                }
+                                className="w-full sm:w-auto px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-100 text-sm font-bold border border-slate-700 flex items-center justify-center gap-2"
+                              >
+                                <RotateCcw className="w-4 h-4" />
+                                Erneut drucken
+                              </button>
+                              {canDiscardPrintJobs && (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    openResolveDialog(job, "DISCARDED")
+                                  }
+                                  className="sm:ml-auto text-xs font-bold text-rose-400 hover:text-rose-300 underline underline-offset-2 self-start sm:self-auto pl-1 py-1"
+                                >
+                                  Verwerfen
+                                </button>
+                              )}
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
             <div className="flex justify-between items-center text-sm text-slate-400 pb-2 border-b border-slate-800">
               <span>
                 Konfigurierte Beleg- und Küchenbondrucker (ESC/POS & Konsole)
@@ -2025,12 +2556,22 @@ export const AdminDashboard = () => {
                 </label>
                 <select
                   value={printerFormData.type}
-                  onChange={(e) =>
-                    setPrinterFormData({
-                      ...printerFormData,
-                      type: e.target.value,
-                    })
-                  }
+                  onChange={(e) => {
+                    const nextType = e.target.value;
+                    setPrinterFormData((prev) => ({
+                      ...prev,
+                      type: nextType,
+                      // Port-Vorgabe je Typ (Konzept 64: 631 für CUPS_IPP).
+                      // Ein bereits bewusst gesetzter Port wird nicht
+                      // überschrieben, nur der jeweilige Vorgabewert.
+                      port:
+                        nextType === "CUPS_IPP"
+                          ? 631
+                          : nextType === "ESC_POS_NETWORK" && prev.port === 631
+                            ? 9100
+                            : prev.port,
+                    }));
+                  }}
                   className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 text-white"
                 >
                   <option value="CONSOLE">
@@ -2039,6 +2580,7 @@ export const AdminDashboard = () => {
                   <option value="ESC_POS_NETWORK">
                     ESC/POS-Netzwerkdrucker (LAN / WLAN)
                   </option>
+                  <option value="CUPS_IPP">CUPS-Warteschlange (IPP)</option>
                 </select>
                 <p className="text-xs text-slate-500 mt-1">
                   USB- und Treiberdrucker werden nicht unterstützt.
@@ -2085,6 +2627,114 @@ export const AdminDashboard = () => {
                   </div>
                 </div>
               )}
+              {printerFormData.type === "CUPS_IPP" && (
+                <>
+                  <div className="grid grid-cols-3 gap-2">
+                    <div className="col-span-2">
+                      <label
+                        className="text-xs font-bold text-slate-400 block mb-1"
+                        htmlFor="printer-cups-host"
+                      >
+                        CUPS-Host (optional)
+                      </label>
+                      <input
+                        id="printer-cups-host"
+                        type="text"
+                        value={printerFormData.ipAddress}
+                        onChange={(e) =>
+                          setPrinterFormData({
+                            ...printerFormData,
+                            ipAddress: e.target.value,
+                          })
+                        }
+                        placeholder="cups.verein.local (leer = Standardhost)"
+                        className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 text-white"
+                      />
+                    </div>
+                    <div>
+                      <label
+                        className="text-xs font-bold text-slate-400 block mb-1"
+                        htmlFor="printer-cups-port"
+                      >
+                        Port
+                      </label>
+                      <input
+                        id="printer-cups-port"
+                        type="number"
+                        value={printerFormData.port}
+                        onChange={(e) =>
+                          setPrinterFormData({
+                            ...printerFormData,
+                            port: Number(e.target.value),
+                          })
+                        }
+                        className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 text-white"
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label
+                      className="text-xs font-bold text-slate-400 block mb-1"
+                      htmlFor="printer-queue-name"
+                    >
+                      Warteschlangenname (Pflichtfeld)
+                    </label>
+                    <input
+                      id="printer-queue-name"
+                      type="text"
+                      required
+                      value={printerFormData.queueName}
+                      onChange={(e) =>
+                        setPrinterFormData({
+                          ...printerFormData,
+                          queueName: e.target.value,
+                        })
+                      }
+                      placeholder="z. B. theke1-raw"
+                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 text-white"
+                    />
+                    <p className="text-xs text-slate-500 mt-1">
+                      Muss eine Raw-Warteschlange sein; der Worker liefert
+                      fertige ESC/POS-Bytes.
+                    </p>
+                  </div>
+                </>
+              )}
+
+              <div>
+                <label
+                  className="text-xs font-bold text-slate-400 block mb-1"
+                  htmlFor="printer-fallback"
+                >
+                  Ersatzdrucker bei Ausfall (optional)
+                </label>
+                <select
+                  id="printer-fallback"
+                  value={printerFormData.fallbackPrinterId}
+                  onChange={(e) =>
+                    setPrinterFormData({
+                      ...printerFormData,
+                      fallbackPrinterId: e.target.value,
+                    })
+                  }
+                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 text-white"
+                >
+                  <option value="">– Kein Ersatzdrucker –</option>
+                  {printersList
+                    .filter(
+                      (p: any) => p.isActive && p.id !== editingPrinter?.id,
+                    )
+                    .map((p: any) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name}
+                      </option>
+                    ))}
+                </select>
+                <p className="text-xs text-slate-500 mt-1">
+                  Übernimmt Aufträge automatisch, wenn dieser Drucker Fehler
+                  meldet.
+                </p>
+              </div>
 
               <div className="grid grid-cols-2 gap-2">
                 <div>
@@ -2219,6 +2869,166 @@ export const AdminDashboard = () => {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* RESOLVE MODAL (Konzept 64, Abschnitt 2.5) */}
+      {resolveDialog && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm"
+          onKeyDown={(e) => {
+            if (e.key === "Escape" && !isResolving) {
+              e.preventDefault();
+              closeResolveDialog();
+            }
+          }}
+        >
+          <div className="bg-slate-900 border border-slate-800 p-6 rounded-3xl max-w-md w-full shadow-2xl space-y-4">
+            <h3 className="text-xl font-bold text-white">
+              {resolveDialog.action === "REPRINTED"
+                ? "Erneut drucken"
+                : resolveDialog.action === "CONFIRMED_PRINTED"
+                  ? "Als gedruckt bestätigen"
+                  : "Druckauftrag verwerfen"}
+            </h3>
+
+            <div className="text-sm text-slate-300">
+              {describeJobType(resolveDialog.job)} · Bestellung #
+              {resolveDialog.job.content?.orderNumber ?? "?"} ·{" "}
+              {resolveDialog.action === "REPRINTED"
+                ? `zuletzt: ${resolveDialog.job.printerName}`
+                : resolveDialog.job.printerName}
+            </div>
+
+            {resolveDialog.action !== "DISCARDED" && (
+              <p className="text-sm text-slate-400 sm:max-w-prose">
+                {describeUnresolvedReason(resolveDialog.job)}
+              </p>
+            )}
+
+            {resolveDialog.action === "DISCARDED" && (
+              <p className="text-sm text-rose-300 bg-rose-500/10 border border-rose-500/30 rounded-xl px-3 py-2">
+                Dieser Auftrag wird endgültig nicht mehr gedruckt und nicht als
+                gedruckt gebucht. Das kann nicht rückgängig gemacht werden.
+              </p>
+            )}
+
+            {resolveError && (
+              <p
+                role="alert"
+                className="text-sm font-bold text-rose-300 bg-rose-500/15 border border-rose-500/30 rounded-xl px-3 py-2"
+              >
+                {resolveError}
+              </p>
+            )}
+
+            {resolveDialog.action === "REPRINTED" && (
+              <div>
+                <label
+                  className="text-xs font-bold text-slate-400 block mb-1"
+                  htmlFor="resolve-target-printer"
+                >
+                  Zieldrucker
+                </label>
+                <select
+                  id="resolve-target-printer"
+                  value={resolveTargetPrinterId}
+                  onChange={(e) => setResolveTargetPrinterId(e.target.value)}
+                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 text-white"
+                >
+                  <option value="">– Zieldrucker wählen –</option>
+                  {printersList
+                    .filter((p: any) => p.isActive)
+                    .map((p: any) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name}
+                      </option>
+                    ))}
+                </select>
+              </div>
+            )}
+
+            {(resolveDialog.action === "REPRINTED" ||
+              resolveDialog.action === "CONFIRMED_PRINTED") && (
+              <label className="flex items-start gap-2.5 text-sm text-slate-300">
+                <input
+                  type="checkbox"
+                  checked={resolveChecked}
+                  onChange={(e) => setResolveChecked(e.target.checked)}
+                  className="mt-1"
+                />
+                <span>
+                  {resolveDialog.action === "REPRINTED"
+                    ? "Ich habe am Drucker nachgesehen: dort liegt kein vollständiger Bon."
+                    : "Ich habe am Drucker nachgesehen: der vollständige Bon liegt dort vor."}
+                </span>
+              </label>
+            )}
+
+            {resolveDialog.action === "REPRINTED" && (
+              <div>
+                <label
+                  className="text-xs font-bold text-slate-400 block mb-1"
+                  htmlFor="resolve-comment"
+                >
+                  Anmerkung (optional)
+                </label>
+                <input
+                  id="resolve-comment"
+                  type="text"
+                  value={resolveComment}
+                  onChange={(e) => setResolveComment(e.target.value)}
+                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 text-white"
+                />
+              </div>
+            )}
+
+            {resolveDialog.action === "DISCARDED" && (
+              <div>
+                <label
+                  className="text-xs font-bold text-slate-400 block mb-1"
+                  htmlFor="resolve-discard-comment"
+                >
+                  Begründung (Pflichtfeld)
+                </label>
+                <input
+                  id="resolve-discard-comment"
+                  type="text"
+                  value={resolveComment}
+                  onChange={(e) => setResolveComment(e.target.value)}
+                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 text-white"
+                />
+              </div>
+            )}
+
+            <div className="flex gap-2 justify-end pt-2">
+              <button
+                type="button"
+                onClick={closeResolveDialog}
+                className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold"
+              >
+                Abbrechen
+              </button>
+              <button
+                type="button"
+                disabled={!canConfirmResolve || isResolving}
+                onClick={handleResolveSubmit}
+                className={`px-5 py-2 rounded-xl font-bold text-white disabled:opacity-40 disabled:cursor-not-allowed ${
+                  resolveDialog.action === "DISCARDED"
+                    ? "bg-rose-600 hover:bg-rose-500"
+                    : "bg-indigo-600 hover:bg-indigo-500"
+                }`}
+              >
+                {isResolving
+                  ? "Wird gespeichert …"
+                  : resolveDialog.action === "REPRINTED"
+                    ? "Erneut drucken"
+                    : resolveDialog.action === "CONFIRMED_PRINTED"
+                      ? "Als gedruckt bestätigen"
+                      : "Verwerfen"}
+              </button>
+            </div>
           </div>
         </div>
       )}
