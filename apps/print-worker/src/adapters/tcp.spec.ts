@@ -4,7 +4,7 @@ import { decodeFromCodepage } from "../printing/charset";
 import { prepareDocument } from "../printing/prepare";
 import { PrintTarget, resolveTarget } from "../target";
 import { createTcpAdapter } from "./tcp";
-import { PrintTransportError } from "./types";
+import { classifyOutcome, PrintTransportError } from "./types";
 
 const job = {
   id: "job-1",
@@ -25,7 +25,11 @@ interface TestServer {
 
 /** Lokaler Ersatzdrucker: nimmt Bytes entgegen und schließt wie ein Bondrucker. */
 async function startServer(
-  options: { closeOnEnd?: boolean; resetImmediately?: boolean } = {},
+  options: {
+    closeOnEnd?: boolean;
+    resetImmediately?: boolean;
+    resetAfterBytes?: number;
+  } = {},
 ): Promise<TestServer> {
   const chunks: Buffer[] = [];
   const sockets = new Set<net.Socket>();
@@ -36,6 +40,20 @@ async function startServer(
       // Verbindungsabbruch mit RST, damit der Abbruch auf allen Plattformen
       // gleich aussieht. Ein blosses destroy() sendet je nach System nur FIN.
       socket.resetAndDestroy();
+      return;
+    }
+    if (options.resetAfterBytes !== undefined) {
+      // Nimmt einen Teil der Daten entgegen und setzt dann zurück – so lässt
+      // sich ein Abbruch mitten in der Übertragung nachbilden.
+      let received = 0;
+      socket.on("data", (chunk) => {
+        chunks.push(chunk);
+        received += chunk.length;
+        if (received >= options.resetAfterBytes!) {
+          socket.resetAndDestroy();
+        }
+      });
+      socket.on("error", () => undefined);
       return;
     }
     socket.on("data", (chunk) => chunks.push(chunk));
@@ -124,9 +142,11 @@ describe("TCP-Transport gegen einen lokalen Testdrucker", () => {
     expect(error).toBeInstanceOf(PrintTransportError);
     expect(error.code).toBe("CONNECTION_REFUSED");
     expect(error.message).toContain(`127.0.0.1:${port}`);
+    expect(error.bytesWritten).toBe(0);
+    expect(classifyOutcome(error)).toBe("NOT_PRINTED");
   });
 
-  it("meldet einen Abbruch, wenn der Drucker die Verbindung zurücksetzt", async () => {
+  it("meldet einen sofortigen Verbindungsabbruch mit dem tatsächlichen Beweiswert", async () => {
     const server = await startServer({ resetImmediately: true });
     try {
       const target = targetFor(server.port);
@@ -136,6 +156,36 @@ describe("TCP-Transport gegen einen lokalen Testdrucker", () => {
 
       expect(error).toBeInstanceOf(PrintTransportError);
       expect(["CONNECTION_LOST", "WRITE_FAILED"]).toContain(error.code);
+      // Auf einer schnellen Loopback-Verbindung kann der Kernel bereits
+      // Bytes entgegengenommen haben, obwohl der Server "sofort" zurücksetzt
+      // – genau die Race, die Abschnitt 2.1 (b) beschreibt. Massgeblich ist
+      // deshalb ausschliesslich bytesWritten, nicht ein Merker-Flag; die
+      // Klasse muss in jedem Fall konsistent daraus folgen.
+      expect(error.bytesWritten).toBeGreaterThanOrEqual(0);
+      expect(classifyOutcome(error)).toBe(
+        error.bytesWritten > 0 ? "UNCLEAR" : "NOT_PRINTED",
+      );
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("wertet einen Abbruch nach begonnener Übertragung als unklar (bytesWritten > 0)", async () => {
+    // Regressionstest zu Abschnitt 2.1 (b) der Architekturvorgabe: der frühere
+    // Kommentar "kein Byte übergeben -> nicht gedruckt" war zu optimistisch.
+    // Maßgeblich ist die tatsächlich geschriebene Bytezahl, nicht das
+    // ehemalige written-Flag. Ein Abbruch mit bytesWritten > 0 ist UNCLEAR.
+    const server = await startServer({ resetAfterBytes: 8 });
+    try {
+      const target = targetFor(server.port);
+      const error = await createTcpAdapter()
+        .deliver(prepareDocument(job, target), target)
+        .catch((caught) => caught);
+
+      expect(error).toBeInstanceOf(PrintTransportError);
+      expect(error.code).toBe("CONNECTION_LOST");
+      expect(error.bytesWritten).toBeGreaterThan(0);
+      expect(classifyOutcome(error)).toBe("UNCLEAR");
     } finally {
       await server.close();
     }
@@ -156,6 +206,8 @@ describe("TCP-Transport gegen einen lokalen Testdrucker", () => {
     expect(error.code).toBe("TIMEOUT");
     expect(error.message).toContain("250 ms");
     expect(Date.now() - started).toBeGreaterThanOrEqual(200);
+    expect(error.bytesWritten).toBe(0);
+    expect(classifyOutcome(error)).toBe("NOT_PRINTED");
   });
 
   it("meldet einen nicht auflösbaren Druckernamen", async () => {

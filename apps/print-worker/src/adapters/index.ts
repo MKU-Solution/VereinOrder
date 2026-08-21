@@ -1,4 +1,5 @@
 import { PrintTarget } from "../target";
+import { createCupsAdapter } from "./cups";
 import { createSimulatorAdapter } from "./simulator";
 import { createTcpAdapter } from "./tcp";
 import { PrinterAdapter } from "./types";
@@ -6,6 +7,7 @@ import { PrinterAdapter } from "./types";
 export * from "./types";
 export { createSimulatorAdapter, renderSimulation } from "./simulator";
 export { createTcpAdapter } from "./tcp";
+export { createCupsAdapter } from "./cups";
 
 /**
  * Hält je Transportart genau einen Adapter bereit. Die Auswahl erfolgt über
@@ -13,7 +15,11 @@ export { createTcpAdapter } from "./tcp";
  */
 export function createAdapterRegistry(): Map<string, PrinterAdapter> {
   const registry = new Map<string, PrinterAdapter>();
-  for (const adapter of [createTcpAdapter(), createSimulatorAdapter()]) {
+  for (const adapter of [
+    createTcpAdapter(),
+    createSimulatorAdapter(),
+    createCupsAdapter(),
+  ]) {
     registry.set(adapter.kind, adapter);
   }
   return registry;

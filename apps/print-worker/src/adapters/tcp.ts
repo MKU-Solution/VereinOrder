@@ -70,7 +70,10 @@ function classify(error: NodeJS.ErrnoException): PrintErrorCode {
  *
  * Erfolgreich ist ein Auftrag erst, wenn alle Bytes gesendet und die
  * Verbindung sauber beendet wurde. Jeder andere Ausgang meldet einen Fehler
- * mit stabiler Kennung, damit der Auftrag als `FAILED` endet.
+ * mit stabiler Kennung und dem tatsächlichen Beweiswert `bytesWritten`
+ * (`socket.bytesWritten` im Moment des Scheiterns). Die Klasse — sicher
+ * nicht gedruckt oder unklar — leitet der Aufrufer daraus ab
+ * ({@link classifyOutcome}), nicht dieser Adapter.
  */
 export function createTcpAdapter(
   options: TcpAdapterOptions = {},
@@ -88,7 +91,7 @@ export function createTcpAdapter(
         const socket = connect({ host: target.host, port: target.port });
 
         let settled = false;
-        let written = false;
+        let finished = false;
         let deadline: NodeJS.Timeout | undefined;
         let linger: NodeJS.Timeout | undefined;
 
@@ -114,8 +117,18 @@ export function createTcpAdapter(
           if (settled) return;
           settled = true;
           clearTimers();
+          // Beweisträger: die tatsächlich auf die Verbindung geschriebene
+          // Bytezahl im Moment des Scheiterns, nicht ein Merker-Flag. Der
+          // Kernel kann bereits Teile des Puffers auf die Leitung gelegt
+          // haben, bevor der write()-Callback überhaupt feuert – ein
+          // Boolean wie "written" wäre hier sowohl zu früh als auch zu spät.
+          const bytesWritten = socket.bytesWritten;
           socket.destroy();
-          reject(new PrintTransportError(code, describe(code, target, raw)));
+          reject(
+            new PrintTransportError(code, describe(code, target, raw), {
+              bytesWritten,
+            }),
+          );
         };
 
         deadline = setTimeout(() => fail("TIMEOUT"), target.timeoutMs);
@@ -133,7 +146,6 @@ export function createTcpAdapter(
               fail("WRITE_FAILED");
               return;
             }
-            written = true;
             socket.end();
           });
         });
@@ -141,19 +153,24 @@ export function createTcpAdapter(
         socket.on("finish", () => {
           // Alle Bytes sind übergeben und das Verbindungsende ist gesendet.
           // Ab hier zählt nur noch die Nachlauffrist.
+          finished = true;
           if (deadline) clearTimeout(deadline);
           deadline = undefined;
           linger = setTimeout(succeed, lingerMs);
         });
 
         socket.on("close", (hadError: boolean) => {
-          // Schließt der Drucker, bevor die Daten übergeben wurden, ist der
-          // Bon nicht gedruckt – auch ohne Fehlerkennzeichen des Sockets.
-          if (hadError || !written) {
-            fail("CONNECTION_LOST");
+          if (settled) return;
+          // Schließt der Drucker von sich aus, nachdem alle Bytes übergeben
+          // wurden, ist das ein positives Abschlusszeugnis – es muss nicht
+          // auf die Nachlauffrist gewartet werden. Jeder andere Abbruch ist
+          // ein Fehler; ob er sicher nicht gedruckt oder unklar ist,
+          // entscheidet allein bytesWritten (siehe fail()).
+          if (!hadError && finished) {
+            succeed();
             return;
           }
-          succeed();
+          fail("CONNECTION_LOST");
         });
       });
     },

@@ -15,7 +15,7 @@ Dieses Dokument beschreibt die Inbetriebnahme von **VereinOrder** auf einem **Ra
 
 ## 2. Betriebssystem vorbereiten & Docker installieren
 
-Nach dem Flashen der SD-Karte mit dem *Raspberry Pi Imager*:
+Nach dem Flashen der SD-Karte mit dem _Raspberry Pi Imager_:
 
 ```bash
 # System aktualisieren
@@ -52,7 +52,8 @@ docker compose up -d
 
 ## 4. Ausfallsicherheit bei Stromausfall
 
-Alle Container sind mit `restart: always` konfiguriert. 
+Alle Container sind mit `restart: always` konfiguriert.
+
 - Nach einem plötzlichen Stromausfall (z. B. Notstromaggregat-Umschaltung) startet der Raspberry Pi automatisch neu.
 - Docker initialisiert PostgreSQL, Backend, Frontend und Print-Worker.
 - Nach ca. 20–30 Sekunden ist das Kassensystem wieder unter `http://<IP-des-Raspberry-Pi>` erreichbar.
@@ -68,7 +69,14 @@ USB-Bondrucker (z.B. Epson TM-T20, Bixolon, Munbyn) werden automatisch als `/dev
    ```bash
    ls -la /dev/usb/lp*
    ```
-2. In der Administration (`/admin` -> Tab *Drucker & Bon-Routing*) den Druckertyp `ESC_POS_USB` auswählen.
+2. In der Administration (`/admin` -> Tab _Drucker & Bon-Routing_) den Druckertyp `ESC_POS_USB` auswählen.
+
+**Ausführliche Anleitung:** Der USB-Bondrucker wird auf dem Pi über CUPS als Raw-Queue
+betrieben und in der Verwaltung als Druckertyp `CUPS_IPP` angelegt (nicht direkt über
+`/dev/usb/lp*`). Installation, Härtung von CUPS, Einrichtung der Raw-Queue, stabile
+Geräteidentität beim Wiedereinstecken, Ersatzdrucker-Zuordnung, Austausch im laufenden
+Betrieb und Fehlersuche stehen vollständig in
+[`docs/ops/druckerbetrieb.md`](./druckerbetrieb.md).
 
 ---
 

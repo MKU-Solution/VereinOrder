@@ -1,4 +1,5 @@
 import { Module } from "@nestjs/common";
+import { ScheduleModule } from "@nestjs/schedule";
 import { AuthModule } from "./auth/auth.module";
 import { PrismaModule } from "./prisma/prisma.module";
 import { ProductsModule } from "./products/products.module";
@@ -18,6 +19,8 @@ import { RunnerModule } from "./runner/runner.module";
 
 @Module({
   imports: [
+    // Terminplaner fuer den Lease-Reaper (Architekturvorgabe Abschnitt 3.2, M5).
+    ScheduleModule.forRoot(),
     PrismaModule,
     AuthModule,
     ProductsModule,
