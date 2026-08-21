@@ -27,7 +27,11 @@ pnpm build
 ```
 
 `format:check`, `lint` und `typecheck` verändern keine Quelldateien. Frontendtests laufen
-mit Vitest und jsdom, Backend-Unit-Tests mit Jest.
+mit Vitest und jsdom, Backend-Unit-Tests mit Jest. Der Print-Worker verwendet dieselbe
+Jest-Fassung wie das Backend samt `ts-jest`; beide sind reine Entwicklungsabhängigkeiten
+ohne native Bestandteile und laufen auf AMD64 und ARM64. Seine Transporttests starten
+einen lokalen TCP-Server als Ersatzdrucker und benötigen keine Hardware und kein Internet.
+Der Bondruck ist in `docs/development/printing.md` beschrieben.
 
 ## PostgreSQL-Integration
 
