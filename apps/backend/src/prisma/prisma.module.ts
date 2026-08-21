@@ -1,7 +1,7 @@
-import { Module, Global } from '@nestjs/common';
-import { PrismaClient } from '@vereinorder/database';
+import { Module, Global } from "@nestjs/common";
+import { PrismaClient } from "@vereinorder/database";
 
-export const PRISMA_CLIENT = 'PRISMA_CLIENT';
+export const PRISMA_CLIENT = "PRISMA_CLIENT";
 
 @Global()
 @Module({

@@ -21,13 +21,11 @@ describe("OrdersService – eventgebundener Betriebsmodus", () => {
       area: { findFirst: jest.fn() },
       cashierSession: { findFirst: jest.fn().mockResolvedValue(null) },
       user: {
-        findUnique: jest
-          .fn()
-          .mockResolvedValue({
-            id: "waiter-1",
-            username: "kellner1",
-            isActive: true,
-          }),
+        findUnique: jest.fn().mockResolvedValue({
+          id: "waiter-1",
+          username: "kellner1",
+          isActive: true,
+        }),
       },
       order: {
         findUnique: jest.fn().mockResolvedValue(null),

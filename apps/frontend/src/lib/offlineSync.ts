@@ -1,14 +1,14 @@
-import { openDB } from 'idb';
+import { openDB } from "idb";
 
-const DB_NAME = 'vereinorder-db';
-const STORE_NAME = 'offline-orders';
+const DB_NAME = "vereinorder-db";
+const STORE_NAME = "offline-orders";
 const DB_VERSION = 1;
 
 interface OfflineOrder {
   idempotencyKey: string;
   eventId: string;
   items: { productId: string; quantity: number }[];
-  payments: { amount: number, method: 'CASH' | 'CARD' | 'VOUCHER' }[];
+  payments: { amount: number; method: "CASH" | "CARD" | "VOUCHER" }[];
   tableName?: string;
   areaId?: string;
   createdAt: number;
@@ -18,7 +18,7 @@ const getDB = async () => {
   return openDB(DB_NAME, DB_VERSION, {
     upgrade(db) {
       if (!db.objectStoreNames.contains(STORE_NAME)) {
-        db.createObjectStore(STORE_NAME, { keyPath: 'idempotencyKey' });
+        db.createObjectStore(STORE_NAME, { keyPath: "idempotencyKey" });
       }
     },
   });

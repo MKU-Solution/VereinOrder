@@ -3,8 +3,8 @@ FROM node:20-alpine AS builder
 
 WORKDIR /app
 
-# Install pnpm and openssl for Prisma
-RUN npm install -g pnpm
+# Install pinned pnpm and openssl for Prisma
+RUN corepack enable && corepack prepare pnpm@9.15.4 --activate
 RUN apk add --no-cache openssl
 
 # Copy monorepo package manifests
@@ -30,7 +30,7 @@ WORKDIR /app
 ENV NODE_ENV=production
 RUN apk add --no-cache openssl
 
-RUN npm install -g pnpm
+RUN corepack enable && corepack prepare pnpm@9.15.4 --activate
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY packages/database/package.json ./packages/database/

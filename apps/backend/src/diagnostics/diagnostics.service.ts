@@ -1,10 +1,10 @@
-import { Injectable, Inject } from '@nestjs/common';
-import { PrismaClient } from '@vereinorder/database';
-import { PRISMA_CLIENT } from '../prisma/prisma.module';
-import { BackupService } from '../backup/backup.service';
+import { Injectable, Inject } from "@nestjs/common";
+import { PrismaClient } from "@vereinorder/database";
+import { PRISMA_CLIENT } from "../prisma/prisma.module";
+import { BackupService } from "../backup/backup.service";
 
 export interface Recommendation {
-  level: 'SUCCESS' | 'INFO' | 'WARNING' | 'ERROR';
+  level: "SUCCESS" | "INFO" | "WARNING" | "ERROR";
   title: string;
   message: string;
   actionTab?: string;
@@ -14,7 +14,7 @@ export interface Recommendation {
 export class DiagnosticsService {
   constructor(
     @Inject(PRISMA_CLIENT) private prisma: PrismaClient,
-    private backupService: BackupService
+    private backupService: BackupService,
   ) {}
 
   async getStatus() {
@@ -24,13 +24,13 @@ export class DiagnosticsService {
 
     // 1. PostgreSQL DB Check & Latency
     const startTime = Date.now();
-    let dbStatus = 'ONLINE';
+    let dbStatus = "ONLINE";
     let dbLatencyMs = 0;
     try {
       await this.prisma.$queryRaw`SELECT 1`;
       dbLatencyMs = Date.now() - startTime;
     } catch (e) {
-      dbStatus = 'ERROR';
+      dbStatus = "ERROR";
       dbLatencyMs = -1;
     }
 
@@ -45,18 +45,18 @@ export class DiagnosticsService {
       activePrintersCount,
       pendingPrintJobs,
       failedPrintJobs,
-      printedPrintJobs
+      printedPrintJobs,
     ] = await Promise.all([
       this.prisma.event.count(),
-      this.prisma.event.count({ where: { status: 'ACTIVE' } }),
+      this.prisma.event.count({ where: { status: "ACTIVE" } }),
       this.prisma.order.count(),
       this.prisma.product.count(),
       this.prisma.user.count(),
       this.prisma.printer.count(),
       this.prisma.printer.count({ where: { isActive: true } }),
-      this.prisma.printJob.count({ where: { status: 'PENDING' } }),
-      this.prisma.printJob.count({ where: { status: 'FAILED' } }),
-      this.prisma.printJob.count({ where: { status: 'PRINTED' } })
+      this.prisma.printJob.count({ where: { status: "PENDING" } }),
+      this.prisma.printJob.count({ where: { status: "FAILED" } }),
+      this.prisma.printJob.count({ where: { status: "PRINTED" } }),
     ]);
 
     // 3. Backup Status
@@ -71,76 +71,86 @@ export class DiagnosticsService {
     // 4. Generate Smart Health Recommendations
     const recommendations: Recommendation[] = [];
 
-    if (dbStatus === 'ERROR') {
+    if (dbStatus === "ERROR") {
       recommendations.push({
-        level: 'ERROR',
-        title: 'Datenbankverbindung unterbrochen',
-        message: 'PostgreSQL antwortet nicht. Bitte Docker-Container oder Datenbankdienst prüfen.'
+        level: "ERROR",
+        title: "Datenbankverbindung unterbrochen",
+        message:
+          "PostgreSQL antwortet nicht. Bitte Docker-Container oder Datenbankdienst prüfen.",
       });
     }
 
     if (failedPrintJobs > 0) {
       recommendations.push({
-        level: 'ERROR',
+        level: "ERROR",
         title: `${failedPrintJobs} fehlgeschlagene Druckaufträge`,
-        message: 'Ein oder mehrere Bondrucker konnten nicht erreicht werden. Prüfe Papierstand und USB/Netzwerkkabel.',
-        actionTab: 'diagnostics'
+        message:
+          "Ein oder mehrere Bondrucker konnten nicht erreicht werden. Prüfe Papierstand und USB/Netzwerkkabel.",
+        actionTab: "diagnostics",
       });
     }
 
     if (!latestBackup) {
       recommendations.push({
-        level: 'WARNING',
-        title: 'Keine Datensicherung vorhanden',
-        message: 'Es wurde noch kein Backup erstellt. Erstelle vor Festbeginn ein manuelles Backup.',
-        actionTab: 'backups'
+        level: "WARNING",
+        title: "Keine Datensicherung vorhanden",
+        message:
+          "Es wurde noch kein Backup erstellt. Erstelle vor Festbeginn ein manuelles Backup.",
+        actionTab: "backups",
       });
-    } else if (backupAgeHours !== null && backupAgeHours > 3 && activeEventsCount > 0) {
+    } else if (
+      backupAgeHours !== null &&
+      backupAgeHours > 3 &&
+      activeEventsCount > 0
+    ) {
       recommendations.push({
-        level: 'WARNING',
+        level: "WARNING",
         title: `Letztes Backup ist ${backupAgeHours.toFixed(0)} Stunden alt`,
-        message: 'Bei aktivem Festbetrieb wird eine regelmäßige Sicherung auf einen externen USB-Stick empfohlen.',
-        actionTab: 'backups'
+        message:
+          "Bei aktivem Festbetrieb wird eine regelmäßige Sicherung auf einen externen USB-Stick empfohlen.",
+        actionTab: "backups",
       });
     }
 
     if (printersCount === 0) {
       recommendations.push({
-        level: 'INFO',
-        title: 'Keine Drucker eingerichtet',
-        message: 'Aktuell sind keine Bondrucker hinterlegt. Druckaufträge werden simuliert.',
-        actionTab: 'printers'
+        level: "INFO",
+        title: "Keine Drucker eingerichtet",
+        message:
+          "Aktuell sind keine Bondrucker hinterlegt. Druckaufträge werden simuliert.",
+        actionTab: "printers",
       });
     }
 
     if (recommendations.length === 0) {
       recommendations.push({
-        level: 'SUCCESS',
-        title: 'Alle Systeme bereit für den Festbetrieb',
-        message: 'PostgreSQL-Datenbank, Backend-Dienste und Druck-Warteschlangen laufen einwandfrei.'
+        level: "SUCCESS",
+        title: "Alle Systeme bereit für den Festbetrieb",
+        message:
+          "PostgreSQL-Datenbank, Backend-Dienste und Druck-Warteschlangen laufen einwandfrei.",
       });
     }
 
     // Overall health determination
-    let overallHealth: 'GREEN' | 'YELLOW' | 'RED' = 'GREEN';
-    if (dbStatus === 'ERROR' || failedPrintJobs > 0) {
-      overallHealth = 'RED';
-    } else if (recommendations.some(r => r.level === 'WARNING')) {
-      overallHealth = 'YELLOW';
+    let overallHealth: "GREEN" | "YELLOW" | "RED" = "GREEN";
+    if (dbStatus === "ERROR" || failedPrintJobs > 0) {
+      overallHealth = "RED";
+    } else if (recommendations.some((r) => r.level === "WARNING")) {
+      overallHealth = "YELLOW";
     }
 
     return {
       overallHealth,
       serverTime,
       backend: {
-        appVersion: '0.1.0',
+        appVersion: "0.1.0",
         nodeVersion: process.version,
         uptimeSeconds,
         memory: {
           rssMb: (memory.rss / 1024 / 1024).toFixed(1),
           heapUsedMb: (memory.heapUsed / 1024 / 1024).toFixed(1),
-          heapTotalMb: (memory.heapTotal / 1024 / 1024).toFixed(1)
-        }
+          heapTotalMb: (memory.heapTotal / 1024 / 1024).toFixed(1),
+        },
       },
       database: {
         status: dbStatus,
@@ -150,8 +160,8 @@ export class DiagnosticsService {
           activeEvents: activeEventsCount,
           orders: ordersCount,
           products: productsCount,
-          users: usersCount
-        }
+          users: usersCount,
+        },
       },
       printers: {
         total: printersCount,
@@ -159,27 +169,27 @@ export class DiagnosticsService {
         queue: {
           pending: pendingPrintJobs,
           failed: failedPrintJobs,
-          printed: printedPrintJobs
-        }
+          printed: printedPrintJobs,
+        },
       },
       backup: {
         totalBackups: backups.length,
-        latestBackup
+        latestBackup,
       },
-      recommendations
+      recommendations,
     };
   }
 
   async retryFailedPrintJobs() {
     const updated = await this.prisma.printJob.updateMany({
-      where: { status: 'FAILED' },
-      data: { status: 'PENDING', errorMessage: null }
+      where: { status: "FAILED" },
+      data: { status: "PENDING", errorMessage: null },
     });
 
     return {
       success: true,
       message: `${updated.count} fehlgeschlagene Druckaufträge wurden erneut in die Warteschlange eingereiht.`,
-      retriedCount: updated.count
+      retriedCount: updated.count,
     };
   }
 }
