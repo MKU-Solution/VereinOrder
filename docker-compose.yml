@@ -58,6 +58,9 @@ services:
     environment:
       BACKEND_URL: http://backend:3000
       PRINT_WORKER_TOKEN: ${PRINT_WORKER_TOKEN:?PRINT_WORKER_TOKEN muss gesetzt sein}
+      PRINT_FORCE_SIMULATOR: ${PRINT_FORCE_SIMULATOR:-0}
+      PRINT_POLL_INTERVAL_MS: ${PRINT_POLL_INTERVAL_MS:-2500}
+      PRINT_TIMEOUT_MS: ${PRINT_TIMEOUT_MS:-5000}
     depends_on:
       - backend
 

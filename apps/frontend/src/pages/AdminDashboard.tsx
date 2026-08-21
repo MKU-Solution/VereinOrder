@@ -97,6 +97,18 @@ interface AuditLogItem {
   createdAt: string;
 }
 
+/**
+ * Liest die Begründung des Backends aus einem Fehler. Ohne sie bleibt der
+ * Anwenderin nur "Fehler", obwohl das Backend genau sagt, was fehlt.
+ */
+const backendMessage = (error: unknown, fallback: string): string => {
+  const message = (error as any)?.response?.data?.message;
+  if (typeof message === "string" && message.trim().length > 0) return message;
+  if (Array.isArray(message) && typeof message[0] === "string")
+    return message[0];
+  return fallback;
+};
+
 export const AdminDashboard = () => {
   const [activeTab, setActiveTab] = useState<Tab>("events");
   const [data, setData] = useState<any[]>([]);
@@ -146,7 +158,15 @@ export const AdminDashboard = () => {
     type: "CONSOLE",
     ipAddress: "",
     port: 9100,
+    paperWidth: 80,
+    codepage: "CP858",
+    cutMode: "PARTIAL",
+    copies: 1,
+    timeoutMs: 5000,
   });
+  const [printerTests, setPrinterTests] = useState<
+    Record<string, { state: "running" | "ok" | "error"; message: string }>
+  >({});
 
   // Event Modal State
   const [isEventModalOpen, setIsEventModalOpen] = useState(false);
@@ -307,6 +327,7 @@ export const AdminDashboard = () => {
       }
       setIsEventModalOpen(true);
     } else if (activeTab === "printers") {
+      setModalError("");
       if (item) {
         setEditingPrinter(item);
         setPrinterFormData({
@@ -314,6 +335,11 @@ export const AdminDashboard = () => {
           type: item.type || "CONSOLE",
           ipAddress: item.ipAddress || "",
           port: item.port || 9100,
+          paperWidth: item.paperWidth || 80,
+          codepage: item.codepage || "CP858",
+          cutMode: item.cutMode || "PARTIAL",
+          copies: item.copies || 1,
+          timeoutMs: item.timeoutMs || 5000,
         });
       } else {
         setEditingPrinter(null);
@@ -322,6 +348,11 @@ export const AdminDashboard = () => {
           type: "CONSOLE",
           ipAddress: "",
           port: 9100,
+          paperWidth: 80,
+          codepage: "CP858",
+          cutMode: "PARTIAL",
+          copies: 1,
+          timeoutMs: 5000,
         });
       }
       setIsPrinterModalOpen(true);
@@ -476,7 +507,16 @@ export const AdminDashboard = () => {
       fetchData();
     } catch (err) {
       console.error("Failed to save item", err);
-      if (activeTab === "events" || activeTab === "printers") {
+      if (activeTab === "printers") {
+        // Das Backend begründet abgelehnte Druckerdaten; diese Begründung
+        // gehört direkt in das Formular.
+        setModalError(
+          backendMessage(
+            err,
+            "Speichern fehlgeschlagen. Bitte prüfe die Eingaben und versuche es erneut.",
+          ),
+        );
+      } else if (activeTab === "events") {
         alert("Fehler beim Speichern");
       } else {
         setModalError(
@@ -560,15 +600,71 @@ export const AdminDashboard = () => {
     }
   };
 
+  /**
+   * Wartet auf den Ausgang eines Druckauftrags. Der Worker meldet erst nach
+   * dem Transport zurück, deshalb wird der Auftrag kurz abgefragt.
+   */
+  const waitForPrintJob = async (
+    jobId: string,
+  ): Promise<{ state: "ok" | "error"; message: string }> => {
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      try {
+        const { data } = await api.get(`/print-jobs/${jobId}/status`);
+        if (data.status === "PRINTED") {
+          return { state: "ok", message: "Testbon wurde gedruckt." };
+        }
+        if (data.status === "FAILED") {
+          return {
+            state: "error",
+            message: data.errorMessage || "Der Druck ist fehlgeschlagen.",
+          };
+        }
+      } catch (err) {
+        console.error("Failed to read print job status", err);
+        return {
+          state: "error",
+          message: backendMessage(
+            err,
+            "Der Auftragsstatus konnte nicht gelesen werden.",
+          ),
+        };
+      }
+    }
+    return {
+      state: "error",
+      message:
+        "Keine Rückmeldung innerhalb von 20 Sekunden. Läuft der Print-Worker?",
+    };
+  };
+
   const handleTestPrint = async (printerId: string) => {
+    setPrinterTests((prev) => ({
+      ...prev,
+      [printerId]: {
+        state: "running",
+        message: "Testbon eingereiht, warte auf den Drucker …",
+      },
+    }));
+
     try {
-      await api.post(`/print-jobs/printers/${printerId}/test`);
-      alert(
-        "Test-Druckauftrag erfolgreich an die Druckerwarteschlange gesendet!",
+      const { data: job } = await api.post(
+        `/print-jobs/printers/${printerId}/test`,
       );
+      const result = await waitForPrintJob(job.id);
+      setPrinterTests((prev) => ({ ...prev, [printerId]: result }));
     } catch (err) {
       console.error("Failed to test print", err);
-      alert("Fehler beim Senden des Testdrucks");
+      setPrinterTests((prev) => ({
+        ...prev,
+        [printerId]: {
+          state: "error",
+          message: backendMessage(
+            err,
+            "Der Testdruck konnte nicht gestartet werden.",
+          ),
+        },
+      }));
     }
   };
 
@@ -1380,11 +1476,17 @@ export const AdminDashboard = () => {
                         <h4 className="text-lg font-bold text-slate-100">
                           {printer.name}
                         </h4>
-                        <span className="text-xs text-slate-400 font-mono">
+                        <span className="text-xs text-slate-400 font-mono block">
                           Typ: {printer.type}{" "}
                           {printer.ipAddress
                             ? `(${printer.ipAddress}:${printer.port || 9100})`
                             : ""}
+                        </span>
+                        <span className="text-xs text-slate-500 font-mono block">
+                          {printer.paperWidth || 80} mm ·{" "}
+                          {printer.codepage || "CP858"} · Schnitt:{" "}
+                          {printer.cutMode || "PARTIAL"} · {printer.copies || 1}
+                          x · {printer.timeoutMs || 5000} ms
                         </span>
                       </div>
                     </div>
@@ -1395,13 +1497,31 @@ export const AdminDashboard = () => {
                     </span>
                   </div>
 
+                  {printerTests[printer.id] && (
+                    <div
+                      role="status"
+                      className={`text-xs font-bold rounded-xl px-3 py-2 border ${
+                        printerTests[printer.id].state === "ok"
+                          ? "bg-emerald-500/15 text-emerald-300 border-emerald-500/30"
+                          : printerTests[printer.id].state === "error"
+                            ? "bg-rose-500/15 text-rose-300 border-rose-500/30"
+                            : "bg-slate-800 text-slate-300 border-slate-700"
+                      }`}
+                    >
+                      {printerTests[printer.id].message}
+                    </div>
+                  )}
+
                   <div className="pt-2 flex justify-between items-center border-t border-slate-800">
                     <button
                       onClick={() => handleTestPrint(printer.id)}
-                      className="px-3 py-1.5 rounded-xl bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 text-xs font-bold transition flex items-center gap-1.5 border border-indigo-500/30"
+                      disabled={printerTests[printer.id]?.state === "running"}
+                      className="px-3 py-1.5 rounded-xl bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 text-xs font-bold transition flex items-center gap-1.5 border border-indigo-500/30 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       <Printer className="w-3.5 h-3.5" />
-                      Testbon drucken
+                      {printerTests[printer.id]?.state === "running"
+                        ? "Testbon läuft …"
+                        : "Testbon drucken"}
                     </button>
                     <div className="flex gap-2">
                       <button
@@ -1872,6 +1992,14 @@ export const AdminDashboard = () => {
             <h3 className="text-xl font-bold text-white">
               {editingPrinter ? "Drucker bearbeiten" : "Neuen Drucker anlegen"}
             </h3>
+            {modalError && (
+              <p
+                role="alert"
+                className="text-sm font-bold text-rose-300 bg-rose-500/15 border border-rose-500/30 rounded-xl px-3 py-2"
+              >
+                {modalError}
+              </p>
+            )}
             <form onSubmit={handleSaveModal} className="space-y-4">
               <div>
                 <label className="text-xs font-bold text-slate-400 block mb-1">
@@ -1905,15 +2033,16 @@ export const AdminDashboard = () => {
                   }
                   className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 text-white"
                 >
-                  <option value="CONSOLE">Konsole / Virtuell (Test)</option>
-                  <option value="ESC_POS_NETWORK">
-                    Netzwerk-Bondrucker (LAN / WLAN)
+                  <option value="CONSOLE">
+                    Simulator / Konsole (Test und Entwicklung)
                   </option>
-                  <option value="ESC_POS_USB">USB-Bondrucker</option>
-                  <option value="WINDOWS_DRIVER">
-                    Windows Treiber-Drucker
+                  <option value="ESC_POS_NETWORK">
+                    ESC/POS-Netzwerkdrucker (LAN / WLAN)
                   </option>
                 </select>
+                <p className="text-xs text-slate-500 mt-1">
+                  USB- und Treiberdrucker werden nicht unterstützt.
+                </p>
               </div>
               {printerFormData.type === "ESC_POS_NETWORK" && (
                 <div className="grid grid-cols-3 gap-2">
@@ -1935,10 +2064,14 @@ export const AdminDashboard = () => {
                     />
                   </div>
                   <div>
-                    <label className="text-xs font-bold text-slate-400 block mb-1">
+                    <label
+                      className="text-xs font-bold text-slate-400 block mb-1"
+                      htmlFor="printer-port"
+                    >
                       Port
                     </label>
                     <input
+                      id="printer-port"
                       type="number"
                       value={printerFormData.port}
                       onChange={(e) =>
@@ -1952,6 +2085,124 @@ export const AdminDashboard = () => {
                   </div>
                 </div>
               )}
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label
+                    className="text-xs font-bold text-slate-400 block mb-1"
+                    htmlFor="printer-paper-width"
+                  >
+                    Papierbreite
+                  </label>
+                  <select
+                    id="printer-paper-width"
+                    value={printerFormData.paperWidth}
+                    onChange={(e) =>
+                      setPrinterFormData({
+                        ...printerFormData,
+                        paperWidth: Number(e.target.value),
+                      })
+                    }
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 text-white"
+                  >
+                    <option value={58}>58 mm (32 Zeichen)</option>
+                    <option value={80}>80 mm (48 Zeichen)</option>
+                  </select>
+                </div>
+                <div>
+                  <label
+                    className="text-xs font-bold text-slate-400 block mb-1"
+                    htmlFor="printer-codepage"
+                  >
+                    Zeichensatz
+                  </label>
+                  <select
+                    id="printer-codepage"
+                    value={printerFormData.codepage}
+                    onChange={(e) =>
+                      setPrinterFormData({
+                        ...printerFormData,
+                        codepage: e.target.value,
+                      })
+                    }
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 text-white"
+                  >
+                    <option value="CP858">CP858 (Umlaute und Euro)</option>
+                    <option value="CP850">CP850 (Umlaute)</option>
+                    <option value="CP437">CP437 (ältere Geräte)</option>
+                  </select>
+                </div>
+                <div>
+                  <label
+                    className="text-xs font-bold text-slate-400 block mb-1"
+                    htmlFor="printer-cut-mode"
+                  >
+                    Schnitt
+                  </label>
+                  <select
+                    id="printer-cut-mode"
+                    value={printerFormData.cutMode}
+                    onChange={(e) =>
+                      setPrinterFormData({
+                        ...printerFormData,
+                        cutMode: e.target.value,
+                      })
+                    }
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 text-white"
+                  >
+                    <option value="PARTIAL">Teilschnitt</option>
+                    <option value="FULL">Vollschnitt</option>
+                    <option value="NONE">Kein Schnitt</option>
+                  </select>
+                </div>
+                <div>
+                  <label
+                    className="text-xs font-bold text-slate-400 block mb-1"
+                    htmlFor="printer-copies"
+                  >
+                    Ausfertigungen
+                  </label>
+                  <input
+                    id="printer-copies"
+                    type="number"
+                    min={1}
+                    max={9}
+                    value={printerFormData.copies}
+                    onChange={(e) =>
+                      setPrinterFormData({
+                        ...printerFormData,
+                        copies: Number(e.target.value),
+                      })
+                    }
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 text-white"
+                  />
+                </div>
+                {printerFormData.type === "ESC_POS_NETWORK" && (
+                  <div className="col-span-2">
+                    <label
+                      className="text-xs font-bold text-slate-400 block mb-1"
+                      htmlFor="printer-timeout"
+                    >
+                      Zeitlimit in Millisekunden
+                    </label>
+                    <input
+                      id="printer-timeout"
+                      type="number"
+                      min={250}
+                      max={120000}
+                      step={250}
+                      value={printerFormData.timeoutMs}
+                      onChange={(e) =>
+                        setPrinterFormData({
+                          ...printerFormData,
+                          timeoutMs: Number(e.target.value),
+                        })
+                      }
+                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 text-white"
+                    />
+                  </div>
+                )}
+              </div>
               <div className="flex gap-2 justify-end pt-2">
                 <button
                   type="button"

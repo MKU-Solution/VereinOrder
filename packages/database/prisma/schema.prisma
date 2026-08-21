@@ -359,16 +359,21 @@ enum PrintJobType {
 }
 
 model Printer {
-  id        String     @id @default(uuid())
-  name      String
-  type      String // e.g., 'CONSOLE', 'LAN', 'USB'
-  ipAddress String?
-  port      Int?
-  isActive  Boolean    @default(true)
-  jobs      PrintJob[]
-  stations  Station[]
-  createdAt DateTime   @default(now())
-  updatedAt DateTime   @updatedAt
+  id         String     @id @default(uuid())
+  name       String
+  type       String // 'CONSOLE' (Simulator) oder 'ESC_POS_NETWORK' (LAN/WLAN)
+  ipAddress  String?
+  port       Int?
+  isActive   Boolean    @default(true)
+  paperWidth Int        @default(80) // 58 oder 80 Millimeter
+  codepage   String     @default("CP858") // Zeichensatz fuer Umlaute und Euro
+  cutMode    String     @default("PARTIAL") // NONE, PARTIAL oder FULL
+  copies     Int        @default(1)
+  timeoutMs  Int        @default(5000) // Zeitlimit des Netzwerktransports
+  jobs       PrintJob[]
+  stations   Station[]
+  createdAt  DateTime   @default(now())
+  updatedAt  DateTime   @updatedAt
 }
 
 model PrintJob {
