@@ -77,6 +77,8 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: Prisma Client generieren
+        run: pnpm --filter @vereinorder/database run db:generate
       - name: PostgreSQL-Client bereitstellen
         run: sudo apt-get update && sudo apt-get install --yes postgresql-client
       - name: Testdatenbank verifizieren
@@ -118,6 +120,8 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: Prisma Client generieren
+        run: pnpm --filter @vereinorder/database run db:generate
       - name: Testdatenbank verifizieren
         run: pnpm test:db-guard
       - name: Schema und synthetische Rollen anlegen
