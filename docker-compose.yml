@@ -61,6 +61,11 @@ services:
       PRINT_FORCE_SIMULATOR: ${PRINT_FORCE_SIMULATOR:-0}
       PRINT_POLL_INTERVAL_MS: ${PRINT_POLL_INTERVAL_MS:-2500}
       PRINT_TIMEOUT_MS: ${PRINT_TIMEOUT_MS:-5000}
+      CUPS_BASE_URL: ${CUPS_BASE_URL:-http://host.docker.internal:631}
+      PRINT_CUPS_POLL_MS: ${PRINT_CUPS_POLL_MS:-1000}
+      PRINT_CUPS_WAIT_MS: ${PRINT_CUPS_WAIT_MS:-120000}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       - backend
 
