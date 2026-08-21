@@ -26,11 +26,13 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  orders          Order[]          @relation("OrderCreator")
-  deliveryOrders  Order[]          @relation("OrderRunner")
-  auditLogs       AuditLog[]
-  cashierSessions CashierSession[]
-  issuedVouchers  ProductVoucher[] @relation("VoucherIssuer")
+  orders            Order[]          @relation("OrderCreator")
+  deliveryOrders    Order[]          @relation("OrderRunner")
+  auditLogs         AuditLog[]
+  cashierSessions   CashierSession[]
+  issuedVouchers    ProductVoucher[] @relation("VoucherIssuer")
+  // Druckauftraege, deren unklarer Ausgang von dieser Person entschieden wurde
+  resolvedPrintJobs PrintJob[]       @relation("PrintJobResolver")
 }
 
 model AuthThrottle {
@@ -349,6 +351,34 @@ enum PrintJobStatus {
   PROCESSING
   PRINTED
   FAILED
+  // Ergebnis unklar: es gibt kein Zeugnis darueber, ob Papier vorliegt.
+  // Wartet auf eine ausdrueckliche Entscheidung eines Menschen, niemals auf
+  // einen automatischen Zweitdruck.
+  UNRESOLVED
+  // Endgueltig von der Administration verworfen.
+  CANCELLED
+}
+
+// Unterzustand eines Zustellversuchs, nur innerhalb von PROCESSING gesetzt.
+// Die Phase ist das einzige Kriterium fuer den Umgang mit einer abgelaufenen
+// Reservierung: CLAIMED bedeutet nachweislich kein gesendetes Byte und darf
+// zurueck nach PENDING; DELIVERING und SPOOLED bedeuten offenen Ausgang und
+// fuehren nach UNRESOLVED.
+enum PrintAttemptPhase {
+  CLAIMED
+  DELIVERING
+  // Nur bei CUPS_IPP: der Spooler hat den Auftrag angenommen. Annahme ist kein
+  // Druck; der Beweis haengt an cupsJobId und cupsJobState.
+  SPOOLED
+}
+
+// Fehlerklasse eines abgeschlossenen Zustellversuchs.
+// NOT_PRINTED gilt nur, wenn nachweisbar kein einziges Byte den Druckerport
+// erreicht hat. Alles ohne positives Abschlusszeugnis ist UNCLEAR.
+enum PrintOutcomeClass {
+  NOT_PRINTED
+  PRINTED
+  UNCLEAR
 }
 
 enum PrintJobType {
@@ -359,34 +389,140 @@ enum PrintJobType {
 }
 
 model Printer {
-  id         String     @id @default(uuid())
+  id         String  @id @default(uuid())
   name       String
-  type       String // 'CONSOLE' (Simulator) oder 'ESC_POS_NETWORK' (LAN/WLAN)
+  // 'CONSOLE' (Simulator), 'ESC_POS_NETWORK' (LAN/WLAN) oder 'CUPS_IPP'
+  // (CUPS-Warteschlange ueber IPP; ipAddress traegt den abweichenden CUPS-Host,
+  // port die Vorgabe 631, queueName den Warteschlangennamen).
+  type       String
   ipAddress  String?
   port       Int?
-  isActive   Boolean    @default(true)
-  paperWidth Int        @default(80) // 58 oder 80 Millimeter
-  codepage   String     @default("CP858") // Zeichensatz fuer Umlaute und Euro
-  cutMode    String     @default("PARTIAL") // NONE, PARTIAL oder FULL
-  copies     Int        @default(1)
-  timeoutMs  Int        @default(5000) // Zeitlimit des Netzwerktransports
-  jobs       PrintJob[]
-  stations   Station[]
-  createdAt  DateTime   @default(now())
-  updatedAt  DateTime   @updatedAt
+  isActive   Boolean @default(true)
+  paperWidth Int     @default(80) // 58 oder 80 Millimeter
+  codepage   String  @default("CP858") // Zeichensatz fuer Umlaute und Euro
+  cutMode    String  @default("PARTIAL") // NONE, PARTIAL oder FULL
+  copies     Int     @default(1)
+  timeoutMs  Int     @default(5000) // Zeitlimit des Netzwerktransports
+  // CUPS-Warteschlangenname; Pflicht bei 'CUPS_IPP', sonst null. Die Queue muss
+  // eine Raw-Queue sein, weil der Worker fertige ESC/POS-Bytes liefert.
+  queueName  String?
+
+  // Ersatzdrucker fuer das einmalige Failover. Bewusst global und nicht
+  // veranstaltungsbezogen (Entscheidung der Projektleitung zu Risiko R7).
+  //
+  // WAS DIE DATENBANK GARANTIERT: ausschliesslich die Selbstreferenzfreiheit
+  // ueber die Pruefbedingung "Printer_fallback_not_self_check"
+  // (fallbackPrinterId IS NULL OR fallbackPrinterId <> id) sowie die
+  // referenzielle Integritaet des Fremdschluessels.
+  //
+  // WAS DIE DATENBANK NICHT GARANTIERT und deshalb im Backend geprueft werden
+  // muss: (a) Kettenfreiheit - ein Zyklus A -> B -> A oder A -> B -> C -> A
+  // ist auf Datenbankebene nicht ausschliessbar; der Ersatz des Ersatzes wird
+  // nie verwendet, es findet genau ein Wechsel statt (failoverCount <= 1);
+  // (b) dass der Zieldrucker isActive ist; (c) dass ein Simulator ('CONSOLE')
+  // keinen Ersatzdrucker traegt.
+  fallbackPrinterId   String?
+  fallbackPrinter     Printer?  @relation("PrinterFallback", fields: [fallbackPrinterId], references: [id], onDelete: SetNull)
+  fallbackForPrinters Printer[] @relation("PrinterFallback")
+
+  // Betriebssicht auf den Drucker, damit ein weggeschalteter Drucker nicht
+  // unsichtbar defekt bleibt.
+  lastErrorCode String?
+  lastErrorAt   DateTime?
+  lastOkAt      DateTime? // letzter belegter Erfolg
+
+  jobs             PrintJob[] @relation("PrintJobPrinter")
+  activeJobs       PrintJob[] @relation("PrintJobActivePrinter")
+  failoverFromJobs PrintJob[] @relation("PrintJobFailoverFrom")
+  stations         Station[]
+  createdAt        DateTime   @default(now())
+  updatedAt        DateTime   @updatedAt
 }
 
+// Pruefbedingungen, die Prisma NICHT abbilden kann.
+//
+// Die Migration 20260821120000_add_print_lease_and_failover legt zwei
+// CHECK-Constraints auf dieser Tabelle an:
+//   "PrintJob_failoverCount_range_check"  failoverCount BETWEEN 0 AND 1
+//   "PrintJob_attemptPhase_status_check"  attemptPhase IS NULL OR status = 'PROCESSING'
+// und eine auf "Printer":
+//   "Printer_fallback_not_self_check"     fallbackPrinterId IS NULL OR fallbackPrinterId <> id
+//
+// Prisma kennt keine CHECK-Constraints und stellt sie im Schema nicht dar. Sie
+// tragen die Invariante "genau ein Ersatzdruckerwechsel" und die Bindung der
+// Versuchsphase an PROCESSING. Wer sie in einer spaeteren Migration entfernt,
+// entfernt die Doppeldruck-Sicherung. Nicht wegmigrieren, sondern bei einer
+// Aenderung ausdruecklich neu setzen.
 model PrintJob {
   id           String         @id @default(uuid())
+  // Urspruenglich vorgesehener Drucker. Bleibt beim Failover unveraendert.
   printerId    String
-  printer      Printer        @relation(fields: [printerId], references: [id])
+  printer      Printer        @relation("PrintJobPrinter", fields: [printerId], references: [id])
   jobType      PrintJobType   @default(STATION_TICKET)
   content      Json // The data payload for the printed ticket
   status       PrintJobStatus @default(PENDING)
   orderId      String? // Optional reference to the order; historic jobs may outlive the order.
-  errorMessage String?
-  createdAt    DateTime       @default(now())
-  updatedAt    DateTime       @updatedAt
+  errorMessage String? // Fliesstext zur Diagnose, niemals Bon-Inhalte
+
+  // --- Reservierung und Fencing (M2, M3) ---
+  // Unterzustand innerhalb PROCESSING; ausserhalb PROCESSING immer null.
+  attemptPhase    PrintAttemptPhase?
+  // Fencing-Token der laufenden Reservierung. Jede Worker-Operation
+  // (Phasenwechsel, Herzschlag, Ergebnismeldung) muss ihn mitfuehren und wird
+  // ueber WHERE id = ? AND leaseId = ? abgesichert. Ein Zombie-Worker mit altem
+  // Token wird abgewiesen.
+  leaseId         String?
+  // Ablauf der Reservierung, per Herzschlag verlaengert. Ersetzt die Nutzung
+  // von updatedAt als Lease-Uhr; updatedAt wird von jedem Schreibvorgang
+  // aufgefrischt und taugt dafuer nicht.
+  leaseExpiresAt  DateTime?
+  lastHeartbeatAt DateTime? // letztes Lebenszeichen des Workers
+  attemptCount    Int                @default(0) // Zahl der begonnenen Zustellversuche
+
+  // --- Ersatzdrucker (Uebergang 5) ---
+  // Drucker des aktuellen Versuchs. null bedeutet: printerId gilt.
+  activePrinterId String?
+  activePrinter   Printer?  @relation("PrintJobActivePrinter", fields: [activePrinterId], references: [id], onDelete: SetNull)
+  // Zahl der Ersatzdruckerwechsel. Invariante: 0 oder 1, projektweit, in jedem
+  // Zustand. Genau eine Codestelle im Backend erhoeht diesen Wert.
+  failoverCount   Int       @default(0)
+  failoverAt      DateTime?
+  failoverReason  String? // ausloesende Fehlerkennung
+
+  failoverFromPrinterId String?
+  failoverFromPrinter   Printer? @relation("PrintJobFailoverFrom", fields: [failoverFromPrinterId], references: [id], onDelete: SetNull)
+
+  // --- Ergebnis des letzten Versuchs ---
+  outcomeClass PrintOutcomeClass? // zuletzt ermittelte Fehlerklasse
+  // Stabile Kennung, z. B. DNS_ERROR, CONNECTION_LOST, CUPS_JOB_ABORTED,
+  // LEASE_EXPIRED, REPORT_LOST. Maschinenlesbare Ergaenzung zu errorMessage.
+  errorCode    String?
+  deliveredAt  DateTime? // Zeitpunkt des belegten Drucks
+
+  // --- Unklarer Ausgang und Admin-Entscheidung (Abschnitt 6.2) ---
+  unresolvedAt     DateTime?
+  // TRANSPORT | LEASE_EXPIRED | REPORT_LOST | CUPS_ABORTED | CUPS_CANCELED
+  unresolvedReason String?
+  resolvedAt       DateTime?
+  resolvedByUserId String?
+  resolvedBy       User?     @relation("PrintJobResolver", fields: [resolvedByUserId], references: [id], onDelete: SetNull)
+  // REPRINTED | CONFIRMED_PRINTED | DISCARDED
+  resolution       String?
+
+  // --- Nachweistraeger der Transporte ---
+  cupsJobId    Int? // Auftragsnummer im Spooler; ohne sie kein Cancel-Job-Beweis
+  cupsJobState String? // zuletzt beobachteter job-state (pending, processing, ...)
+  // socket.bytesWritten im Moment des Scheiterns. 0 ist der Beweis, dass kein
+  // Byte den Prozess verlassen hat; > 0 zerstoert diesen Gegenbeweis.
+  bytesWritten Int?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status, createdAt]) // Auswahl im Claim
+  @@index([status, leaseExpiresAt]) // Reaper sucht abgelaufene Reservierungen
+  @@index([activePrinterId])
+  @@index([status, unresolvedAt]) // Admin-Liste "Unklare Druckauftraege"
 }
 
 model AuditLog {
