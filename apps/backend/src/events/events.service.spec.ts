@@ -38,6 +38,7 @@ const configuration = {
       id: "category-1",
       name: "Getränke",
       sortOrder: 1,
+      targetStationId: "station-1",
       products: [
         {
           id: "product-1",
@@ -107,7 +108,9 @@ const configuration = {
       isActive: true,
     },
   ],
-  products: [],
+  // Issue #84: "categoryId" ist Pflicht, die Datenhaltung liefert nie mehr
+  // Produkte ohne Kategorie. Die Fixture spiegelt das wider und enthält
+  // absichtlich kein top-level "products" mehr.
   areas: [{ id: "area-1", name: "Zelt", sortOrder: 1 }],
 };
 
@@ -229,7 +232,12 @@ describe("EventsService – Wächtervertrag für Issue #53", () => {
     );
     expect(tx.productCategory.create).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: expect.objectContaining({ eventId: "event-copy" }),
+        data: expect.objectContaining({
+          eventId: "event-copy",
+          // Issue #84: die Zielstation der Kategorie läuft durch dieselbe
+          // Stationsabbildung wie die Ausnahme-Station der Produkte.
+          targetStationId: "station-copy",
+        }),
       }),
     );
     expect(tx.station.create).toHaveBeenCalledWith(
@@ -301,6 +309,15 @@ describe("EventsService – Wächtervertrag für Issue #53", () => {
       },
     );
 
+    expect(tx.productCategory.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          eventId: "event-target",
+          // Issue #84: dieselbe Stationsabbildung wie für Produkte.
+          targetStationId: "station-target",
+        }),
+      }),
+    );
     expect(tx.product.create).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
@@ -349,7 +366,7 @@ describe("EventsService – Wächtervertrag für Issue #53", () => {
     expect(exported).toEqual(
       expect.objectContaining({
         kind: "VEREINORDER_EVENT_CONFIG",
-        schemaVersion: 2,
+        schemaVersion: 3,
         exportedAt: expect.any(String),
         event: expect.objectContaining({ name: "Sommerfest" }),
         areas: expect.any(Array),
@@ -360,6 +377,17 @@ describe("EventsService – Wächtervertrag für Issue #53", () => {
     );
     expect(JSON.stringify(exported)).not.toMatch(
       /orders|payments|cashierSessions|audit|users|vouchers/i,
+    );
+    // Issue #84: die Kategorie führt ab Version 3 ihre Zielstation als
+    // Verweis, und der Kategorieverweis am Produkt ist nie leer.
+    expect(exported.categories[0]).toEqual(
+      expect.objectContaining({ stationRef: "station-1" }),
+    );
+    expect(exported.products[0]).toEqual(
+      expect.objectContaining({
+        categoryRef: expect.any(String),
+        stationRef: "station-1",
+      }),
     );
   });
 
@@ -429,6 +457,161 @@ describe("EventsService – Wächtervertrag für Issue #53", () => {
           action: "EVENT_CONFIG_IMPORTED",
           entityId: "event-import",
           userId: "admin-1",
+        }),
+      }),
+    );
+  });
+
+  it("ordnet Produkten ohne Kategorie aus einer Vorlage der Version 1 oder 2 beim Import dieselbe Auffangkategorie zu wie die Migration", async () => {
+    tx.$queryRaw.mockResolvedValue([]);
+    tx.configOperation.findUnique.mockResolvedValue(null);
+    tx.event.count.mockResolvedValue(0);
+    tx.event.create.mockResolvedValue({
+      id: "event-import-2",
+      name: "Importfest ohne Kategorie",
+      status: "DRAFT",
+      testMode: false,
+    });
+    tx.station.create.mockResolvedValue({ id: "station-import-2" });
+    tx.productCategory.create.mockResolvedValue({ id: "fallback-import" });
+    tx.product.create.mockResolvedValue({ id: "product-import-2" });
+
+    const payload = JSON.parse(JSON.stringify(importPayload));
+    payload.event.name = "Importfest ohne Kategorie";
+    payload.categories = [];
+    payload.products[0].categoryRef = null;
+
+    await contract.importConfig("admin-1", "import-key-2", payload);
+
+    // Dieselbe Regel wie die SQL-Migration
+    // 20260822120000_move_target_station_to_category: "Sonstige Artikel",
+    // ans Ende der Sortierung angehängt, ohne eigene Zielstation. So bleibt
+    // eine bereits exportierte Datei importierbar.
+    expect(tx.productCategory.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          name: "Sonstige Artikel",
+          sortOrder: 0,
+          targetStationId: null,
+        }),
+      }),
+    );
+    expect(tx.product.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ categoryId: "fallback-import" }),
+      }),
+    );
+  });
+
+  it("weicht bei Namenskollision mit der Auffangkategorie auf denselben zweiten Namen aus wie die Migration", async () => {
+    tx.$queryRaw.mockResolvedValue([]);
+    tx.configOperation.findUnique.mockResolvedValue(null);
+    tx.event.count.mockResolvedValue(0);
+    tx.event.create.mockResolvedValue({
+      id: "event-import-3",
+      name: "Importfest mit Namenskollision",
+      status: "DRAFT",
+      testMode: false,
+    });
+    tx.station.create.mockResolvedValue({ id: "station-import-3" });
+    tx.productCategory.create.mockResolvedValue({ id: "category-import-3" });
+    tx.product.create.mockResolvedValue({ id: "product-import-3" });
+
+    const payload = JSON.parse(JSON.stringify(importPayload));
+    payload.event.name = "Importfest mit Namenskollision";
+    payload.categories = [
+      { ref: "category-1", name: "Sonstige Artikel", sortOrder: 0 },
+    ];
+    payload.products[0].categoryRef = null;
+
+    await contract.importConfig("admin-1", "import-key-3", payload);
+
+    expect(tx.productCategory.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          name: "Sonstige Artikel (ohne Kategorie)",
+          sortOrder: 1,
+        }),
+      }),
+    );
+  });
+
+  it("nimmt Vorlagendateien der Version 3 mit Zielstation an der Kategorie an", async () => {
+    tx.$queryRaw.mockResolvedValue([]);
+    tx.configOperation.findUnique.mockResolvedValue(null);
+    tx.event.count.mockResolvedValue(0);
+    tx.event.create.mockResolvedValue({
+      id: "event-v3",
+      name: "Fest V3",
+      status: "DRAFT",
+      testMode: false,
+    });
+    tx.station.create.mockResolvedValue({ id: "station-v3" });
+    tx.productCategory.create.mockResolvedValue({ id: "category-v3" });
+    tx.product.create.mockResolvedValue({ id: "product-v3" });
+
+    const payloadV3 = {
+      kind: "VEREINORDER_EVENT_CONFIG",
+      schemaVersion: 3,
+      event: {
+        name: "Fest V3",
+        organizer: null,
+        location: null,
+        startTime: null,
+        endTime: null,
+        timezone: "Europe/Vienna",
+      },
+      areas: [],
+      stations: [
+        {
+          ref: "station-1",
+          name: "Bar",
+          shortName: null,
+          color: null,
+          sortOrder: 1,
+          isActive: true,
+          printerMapping: null,
+        },
+      ],
+      categories: [
+        {
+          ref: "category-1",
+          name: "Getränke",
+          sortOrder: 1,
+          stationRef: "station-1",
+        },
+      ],
+      products: [
+        {
+          ref: "product-1",
+          categoryRef: "category-1",
+          stationRef: null,
+          name: "Bier",
+          shortName: null,
+          description: null,
+          price: 350,
+          taxRate: 2000,
+          color: null,
+          sortOrder: 1,
+          imageUrl: null,
+          availability: "AVAILABLE",
+          optionGroups: [],
+        },
+      ],
+    };
+
+    await contract.importConfig("admin-1", "import-key-4", payloadV3);
+
+    expect(tx.productCategory.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ targetStationId: "station-v3" }),
+      }),
+    );
+    expect(tx.product.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          categoryId: "category-v3",
+          targetStationId: null,
         }),
       }),
     );

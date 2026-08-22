@@ -13,6 +13,7 @@ import {
 } from "@vereinorder/database";
 import { PRISMA_CLIENT } from "../prisma/prisma.module";
 import { createHash } from "crypto";
+import { planFallbackCategory } from "../common/fallback-category";
 
 @Injectable()
 export class EventsService {
@@ -487,6 +488,12 @@ export class EventsService {
           idempotencyKey,
           options,
           async () => {
+            // Issue #84: "categoryId" ist jetzt Pflicht, daher liefert die
+            // Datenhaltung nie mehr Produkte ohne Kategorie. Die frühere
+            // separate Abfrage "products: { where: { categoryId: null } }"
+            // entfaellt ersatzlos: sie war schon nicht mehr uebersetzbar,
+            // weil das Pflichtfeld keinen Gleichheitsvergleich mit NULL mehr
+            // zulaesst, und sie haette ohnehin nie Zeilen geliefert.
             const source = await tx.event.findUnique({
               where: { id: sourceId },
               include: {
@@ -498,10 +505,6 @@ export class EventsService {
                       },
                     },
                   },
-                },
-                products: {
-                  where: { categoryId: null },
-                  include: { optionGroups: { include: { options: true } } },
                 },
                 stations: true,
                 areas: true,
@@ -555,10 +558,7 @@ export class EventsService {
                   eventId: target.id,
                 },
               });
-            const copyProduct = async (
-              product: any,
-              categoryId: string | null,
-            ) =>
+            const copyProduct = async (product: any, categoryId: string) =>
               tx.product.create({
                 data: {
                   name: product.name,
@@ -597,19 +597,24 @@ export class EventsService {
                   },
                 },
               });
+            // Issue #84: die Kategorie traegt jetzt ihre eigene Vorgabe-
+            // Zielstation. Sie laeuft durch dieselbe Stationsabbildung wie
+            // bisher die Produktstationen, damit eine kopierte Kategorie auf
+            // die entsprechende Station der neuen Veranstaltung zeigt.
             for (const category of source.categories) {
               const targetCategory = await tx.productCategory.create({
                 data: {
                   name: category.name,
                   sortOrder: category.sortOrder,
                   eventId: target.id,
+                  targetStationId: category.targetStationId
+                    ? stationIds.get(category.targetStationId) || null
+                    : null,
                 },
               });
               for (const product of category.products)
                 await copyProduct(product, targetCategory.id);
             }
-            for (const product of source.products)
-              await copyProduct(product, null);
             const result = { eventId: target.id, name: target.name };
             await tx.auditLog.create({
               data: {
@@ -651,6 +656,8 @@ export class EventsService {
       );
     return this.prisma.$transaction(
       async (tx) => {
+        // Issue #84: "categoryId" ist Pflicht, die Datenhaltung liefert nie
+        // mehr Produkte ohne Kategorie. Siehe Begruendung bei duplicate().
         const source = await tx.event.findUnique({
           where: { id: sourceId },
           include: {
@@ -660,10 +667,6 @@ export class EventsService {
                   include: { optionGroups: { include: { options: true } } },
                 },
               },
-            },
-            products: {
-              where: { categoryId: null },
-              include: { optionGroups: { include: { options: true } } },
             },
             stations: true,
           },
@@ -709,10 +712,9 @@ export class EventsService {
             const categoryNames = source.categories.map(
               (category) => category.name,
             );
-            const productNames = [
-              ...source.categories.flatMap((category) => category.products),
-              ...source.products,
-            ].map((product) => product.name);
+            const productNames = source.categories
+              .flatMap((category) => category.products)
+              .map((product) => product.name);
             if (
               (await tx.productCategory.count({
                 where: { eventId: target.id, name: { in: categoryNames } },
@@ -724,10 +726,7 @@ export class EventsService {
               throw new ConflictException(
                 "Im Ziel bestehen Namenskonflikte bei Kategorien oder Produkten.",
               );
-            const copyProduct = async (
-              product: any,
-              categoryId: string | null,
-            ) =>
+            const copyProduct = async (product: any, categoryId: string) =>
               tx.product.create({
                 data: {
                   name: product.name,
@@ -768,12 +767,17 @@ export class EventsService {
               });
             let categoryCount = 0;
             let productCount = 0;
+            // Issue #84: die Zielstation der Kategorie laeuft ueber dieselbe
+            // Stationsabbildung wie die Ausnahme-Station der Produkte.
             for (const category of source.categories) {
               const copy = await tx.productCategory.create({
                 data: {
                   name: category.name,
                   sortOrder: category.sortOrder,
                   eventId: target.id,
+                  targetStationId: category.targetStationId
+                    ? body.stationMappings[category.targetStationId]
+                    : null,
                 },
               });
               categoryCount++;
@@ -781,10 +785,6 @@ export class EventsService {
                 await copyProduct(product, copy.id);
                 productCount++;
               }
-            }
-            for (const product of source.products) {
-              await copyProduct(product, null);
-              productCount++;
             }
             const result = {
               targetEventId: target.id,
@@ -809,6 +809,10 @@ export class EventsService {
   }
 
   async exportConfig(id: string) {
+    // Issue #84: "categoryId" ist Pflicht, es gibt keine Produkte ohne
+    // Kategorie mehr. Die frühere Abfrage "products: { where: { categoryId:
+    // null } }" ist deshalb entfallen; sie ist mit dem Pflichtfeld ohnehin
+    // nicht mehr uebersetzbar und haette nie Zeilen geliefert.
     const event = await this.prisma.event.findUnique({
       where: { id },
       include: {
@@ -818,10 +822,6 @@ export class EventsService {
               include: { optionGroups: { include: { options: true } } },
             },
           },
-        },
-        products: {
-          where: { categoryId: null },
-          include: { optionGroups: { include: { options: true } } },
         },
         stations: true,
         areas: true,
@@ -834,7 +834,7 @@ export class EventsService {
     const mapProduct = (
       p: (typeof event.categories)[number]["products"][number],
       ref: string,
-      categoryRef: string | null,
+      categoryRef: string,
     ) => ({
       ref,
       categoryRef,
@@ -870,14 +870,12 @@ export class EventsService {
         mapProduct(p, `product-${ci + 1}-${pi + 1}`, `category-${ci + 1}`),
       ),
     );
-    products.push(
-      ...event.products.map((p, index) =>
-        mapProduct(p, `product-none-${index + 1}`, null),
-      ),
-    );
     return {
       kind: "VEREINORDER_EVENT_CONFIG",
-      schemaVersion: 2,
+      // Issue #84: Version 3 fuehrt die Zielstation der Kategorie
+      // (categories[].stationRef) ein. Der Kategorieverweis am Produkt ist ab
+      // dieser Version nie leer, weil "categoryId" jetzt Pflicht ist.
+      schemaVersion: 3,
       exportedAt: new Date().toISOString(),
       event: {
         name: event.name,
@@ -904,6 +902,9 @@ export class EventsService {
         ref: `category-${index + 1}`,
         name: c.name,
         sortOrder: c.sortOrder,
+        stationRef: c.targetStationId
+          ? stationRef.get(c.targetStationId)
+          : null,
       })),
       products,
     };
@@ -971,9 +972,35 @@ export class EventsService {
                   name: category.name,
                   sortOrder: category.sortOrder,
                   eventId: target.id,
+                  targetStationId: category.stationRef
+                    ? stationIds.get(category.stationRef)
+                    : null,
                 },
               });
               categoryIds.set(category.ref, saved.id);
+            }
+            // Issue #84: "categoryId" ist am Produkt jetzt Pflicht. Vorlagen
+            // der Versionen 1 und 2 kannten Produkte ohne Kategorie
+            // (categoryRef === null); solche Produkte bekommen dieselbe
+            // Auffangkategorie wie die SQL-Migration
+            // 20260822120000_move_target_station_to_category und die
+            // Sicherungswiederherstellung (backup.service.ts) — Regel in
+            // ../common/fallback-category.ts, eine Stelle für alle drei. So
+            // bleibt eine bereits exportierte Datei importierbar, statt beim
+            // Import wertlos zu werden, und verhaelt sich wie eine migrierte
+            // Datenbank.
+            let fallbackCategoryId: string | undefined;
+            if (config.products.some((p) => p.categoryRef === null)) {
+              const plan = planFallbackCategory(config.categories);
+              const fallback = await tx.productCategory.create({
+                data: {
+                  name: plan.name,
+                  sortOrder: plan.sortOrder,
+                  eventId: target.id,
+                  targetStationId: null,
+                },
+              });
+              fallbackCategoryId = fallback.id;
             }
             for (const product of config.products)
               await tx.product.create({
@@ -990,7 +1017,7 @@ export class EventsService {
                   eventId: target.id,
                   categoryId: product.categoryRef
                     ? categoryIds.get(product.categoryRef)!
-                    : null,
+                    : fallbackCategoryId!,
                   targetStationId: product.stationRef
                     ? stationIds.get(product.stationRef)!
                     : null,
@@ -1301,12 +1328,17 @@ export class EventsService {
       ],
       "Import",
     );
+    // Issue #84: Version 3 fuehrt die Zielstation der Kategorie ein
+    // (categories[].stationRef). Versionen 1 und 2 werden weiterhin
+    // angenommen, ihre Produkte kannten noch keine Pflichtkategorie.
     if (
       root.kind !== "VEREINORDER_EVENT_CONFIG" ||
-      (root.schemaVersion !== 1 && root.schemaVersion !== 2)
+      (root.schemaVersion !== 1 &&
+        root.schemaVersion !== 2 &&
+        root.schemaVersion !== 3)
     )
       throw new BadRequestException("Unbekanntes Konfigurationsformat.");
-    const schemaVersion = root.schemaVersion as 1 | 2;
+    const schemaVersion = root.schemaVersion as 1 | 2 | 3;
     const eventRaw = object(
       root.event,
       ["name", "organizer", "location", "startTime", "endTime", "timezone"],
@@ -1393,17 +1425,29 @@ export class EventsService {
         isActive: x.isActive,
       };
     });
+    const stationRefs = refs(stations, "Stations");
+    // Issue #84: die Zielstation der Kategorie (stationRef) gibt es erst ab
+    // Version 3. Fruehere Vorlagendateien kennen dieses Feld nicht.
     const categories = array(root.categories, "Kategorien").map(
       (raw: unknown) => {
-        const x = object(raw, ["ref", "name", "sortOrder"], "Kategorie");
+        const keys =
+          schemaVersion === 3
+            ? ["ref", "name", "sortOrder", "stationRef"]
+            : ["ref", "name", "sortOrder"];
+        const x = object(raw, keys, "Kategorie");
+        const stationRef = schemaVersion === 3 ? x.stationRef : null;
+        if (stationRef !== null && !stationRefs.has(stationRef))
+          throw new BadRequestException(
+            "Kategorie verweist auf eine unbekannte Station.",
+          );
         return {
           ref: string(x.ref, "Kategorienreferenz"),
           name: string(x.name, "Kategoriename"),
           sortOrder: integer(x.sortOrder, "Sortierung"),
+          stationRef: stationRef as string | null,
         };
       },
     );
-    const stationRefs = refs(stations, "Stations");
     const categoryRefs = refs(categories, "Kategorien");
     const products = array(root.products, "Produkte").map(
       (raw: unknown, index: number) => {

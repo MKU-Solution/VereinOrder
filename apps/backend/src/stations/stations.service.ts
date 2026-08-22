@@ -2,6 +2,7 @@ import { Injectable, Inject, NotFoundException } from "@nestjs/common";
 import { PrismaClient } from "@vereinorder/database";
 import { PRISMA_CLIENT } from "../prisma/prisma.module";
 import { deriveFulfillmentStatus } from "../orders/fulfillment-status";
+import { productAtStationFilter } from "../common/target-station";
 
 @Injectable()
 export class StationsService {
@@ -37,7 +38,7 @@ export class StationsService {
     return this.prisma.orderItem.findMany({
       where: {
         status: { in: ["PENDING", "PREPARING"] },
-        product: { targetStationId: stationId },
+        product: productAtStationFilter(stationId),
       },
       include: {
         product: true,

@@ -328,6 +328,26 @@ export function EventConfigurationActions({
                     <legend className="px-2 text-sm font-bold text-slate-200">
                       Stationszuordnungen
                     </legend>
+                    {/*
+                      Issue #84: Die Zielstation sitzt jetzt an der
+                      Kategorie, das Produkt trägt nur noch eine Ausnahme.
+                      Diese Abbildung ist trotzdem unverändert Station-zu-
+                      Station (nicht produkt- oder warengruppenspezifisch)
+                      und deckt beide Fälle bereits vollständig ab: sie wird
+                      aus ALLEN Stationen der Quellveranstaltung aufgebaut
+                      (loadStations liefert /stations/admin/all, ungefiltert
+                      nach Verwendung), und das Backend wendet denselben
+                      "stationMappings"-Datensatz sowohl auf
+                      ProductCategory.targetStationId als auch auf
+                      Product.targetStationId an — siehe
+                      EventsService.copyAssortment in
+                      apps/backend/src/events/events.service.ts. Die
+                      Schnittstelle musste dafür nicht erweitert werden.
+                    */}
+                    <p className="text-xs text-slate-400">
+                      Gilt für die Zielstation jeder Kategorie und für
+                      abweichende Ausnahme-Stationen einzelner Produkte.
+                    </p>
                     {sourceStations.map((sourceStation) => (
                       <label
                         key={sourceStation.id}

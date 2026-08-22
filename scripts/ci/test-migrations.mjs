@@ -45,6 +45,47 @@ const LEGACY_SEED = {
   orderItemId: "a0000000-0000-4000-8000-000000000041",
 };
 
+// Kennungen des repraesentativen Altstands fuer die Uebernahmepruefung der
+// Migration "20260822120000_move_target_station_to_category" (Issue #84).
+// Eigene Veranstaltung, damit die Auffangkategorie und die Produktzaehlung
+// nicht mit dem Altstand der Produktoptionen vermengt werden.
+const STATION_SEED = {
+  eventId: "b0000000-0000-4000-8000-000000000001",
+  // "Kueche" hat die kleinere sortOrder und gewinnt damit jeden Gleichstand.
+  stationKitchen: "b0000000-0000-4000-8000-000000000002",
+  stationBar: "b0000000-0000-4000-8000-000000000003",
+  // Kategorie, deren Produkte alle dieselbe Station haben.
+  categoryUniform: "b0000000-0000-4000-8000-000000000010",
+  // Kategorie mit uneinheitlichen Stationen, ohne Produkt ohne Station.
+  categoryMixed: "b0000000-0000-4000-8000-000000000011",
+  // Kategorie, deren Produkte alle ohne Station sind.
+  categoryNone: "b0000000-0000-4000-8000-000000000012",
+  // Kategorie mit Gleichstand zwischen zwei Stationen.
+  categoryTie: "b0000000-0000-4000-8000-000000000013",
+  // Kategorie, in der eine Station mehrheitlich vorkommt, aber ein Produkt
+  // ohne Station steht. Sie darf keine Vorgabe erhalten.
+  categoryPartial: "b0000000-0000-4000-8000-000000000014",
+  productUniform1: "b0000000-0000-4000-8000-000000000020",
+  productUniform2: "b0000000-0000-4000-8000-000000000021",
+  productMixedBar1: "b0000000-0000-4000-8000-000000000022",
+  productMixedBar2: "b0000000-0000-4000-8000-000000000023",
+  productMixedKitchen: "b0000000-0000-4000-8000-000000000024",
+  productNone1: "b0000000-0000-4000-8000-000000000025",
+  productNone2: "b0000000-0000-4000-8000-000000000026",
+  productTieBar: "b0000000-0000-4000-8000-000000000027",
+  productTieKitchen: "b0000000-0000-4000-8000-000000000028",
+  productPartial1: "b0000000-0000-4000-8000-000000000029",
+  productPartial2: "b0000000-0000-4000-8000-00000000002a",
+  productPartialNone: "b0000000-0000-4000-8000-00000000002b",
+  // Produkte ohne Kategorie: eines mit, eines ohne Station.
+  productOrphanKitchen: "b0000000-0000-4000-8000-000000000030",
+  productOrphanNone: "b0000000-0000-4000-8000-000000000031",
+};
+
+// Anzahl der Produkte der Veranstaltung aus STATION_SEED. Fest verdrahtet,
+// damit ein versehentlich verlorenes oder doppeltes Produkt auffaellt.
+const STATION_SEED_PRODUCT_COUNT = 14;
+
 function fail(message) {
   throw new Error(message);
 }
@@ -362,6 +403,236 @@ END $$;
 `;
 }
 
+// Fuegt einen repraesentativen Altstand fuer die Verlagerung der Zielstation
+// an die Kategorie ein (Issue #84): eine Kategorie mit einheitlicher
+// Station, eine mit uneinheitlichen Stationen, eine ganz ohne Station, eine
+// mit Gleichstand, eine mit Mehrheit aber einem Produkt ohne Station, und zwei
+// Produkte ohne Kategorie. Muss vor "migrate deploy" der zugehoerigen
+// Migration laufen, sonst ist "Product"."categoryId" bereits Pflicht.
+function seedLegacyTargetStationsSql(ids) {
+  return `
+INSERT INTO "Event" (id, name, "createdAt", "updatedAt")
+VALUES ('${ids.eventId}', 'CI Migrationstest Stationen', now(), now());
+
+-- "Kueche" hat die kleinere sortOrder und gewinnt deshalb den Gleichstand in
+-- der Kategorie categoryTie.
+INSERT INTO "Station" (id, name, "sortOrder", "eventId", "createdAt", "updatedAt") VALUES
+('${ids.stationKitchen}', 'Kueche', 0, '${ids.eventId}', now(), now()),
+('${ids.stationBar}', 'Schank', 1, '${ids.eventId}', now(), now());
+
+INSERT INTO "ProductCategory" (id, name, "sortOrder", "eventId", "createdAt", "updatedAt") VALUES
+('${ids.categoryUniform}', 'Speisen (einheitlich)', 0, '${ids.eventId}', now(), now()),
+('${ids.categoryMixed}', 'Getraenke (uneinheitlich)', 1, '${ids.eventId}', now(), now()),
+('${ids.categoryNone}', 'Ohne Station', 2, '${ids.eventId}', now(), now()),
+('${ids.categoryTie}', 'Gleichstand', 3, '${ids.eventId}', now(), now()),
+('${ids.categoryPartial}', 'Mehrheit mit Luecke', 4, '${ids.eventId}', now(), now());
+
+INSERT INTO "Product" (id, name, price, "categoryId", "targetStationId", "eventId", "createdAt", "updatedAt") VALUES
+-- Alle Produkte der Kategorie zeigen auf dieselbe Station.
+('${ids.productUniform1}', 'Schnitzel', 1200, '${ids.categoryUniform}', '${ids.stationKitchen}', '${ids.eventId}', now(), now()),
+('${ids.productUniform2}', 'Pommes', 350, '${ids.categoryUniform}', '${ids.stationKitchen}', '${ids.eventId}', now(), now()),
+-- Zwei Produkte an der Schank, eines abweichend in der Kueche.
+('${ids.productMixedBar1}', 'Bier', 400, '${ids.categoryMixed}', '${ids.stationBar}', '${ids.eventId}', now(), now()),
+('${ids.productMixedBar2}', 'Wein', 450, '${ids.categoryMixed}', '${ids.stationBar}', '${ids.eventId}', now(), now()),
+('${ids.productMixedKitchen}', 'Punsch (aus der Kueche)', 500, '${ids.categoryMixed}', '${ids.stationKitchen}', '${ids.eventId}', now(), now()),
+-- Kategorie ganz ohne Station: beide Produkte gehen an die zentrale Ausgabe.
+('${ids.productNone1}', 'Sackerl', 50, '${ids.categoryNone}', NULL, '${ids.eventId}', now(), now()),
+('${ids.productNone2}', 'Pfandmarke', 200, '${ids.categoryNone}', NULL, '${ids.eventId}', now(), now()),
+-- Gleichstand: je ein Produkt an Schank und Kueche.
+('${ids.productTieBar}', 'Spritzer', 380, '${ids.categoryTie}', '${ids.stationBar}', '${ids.eventId}', now(), now()),
+('${ids.productTieKitchen}', 'Suppe', 420, '${ids.categoryTie}', '${ids.stationKitchen}', '${ids.eventId}', now(), now()),
+-- Mehrheit Kueche, aber ein Produkt ohne Station: die Kategorie darf keine
+-- Vorgabe erhalten, sonst wuerde productPartialNone umgeleitet.
+('${ids.productPartial1}', 'Gulasch', 900, '${ids.categoryPartial}', '${ids.stationKitchen}', '${ids.eventId}', now(), now()),
+('${ids.productPartial2}', 'Knoedel', 300, '${ids.categoryPartial}', '${ids.stationKitchen}', '${ids.eventId}', now(), now()),
+('${ids.productPartialNone}', 'Serviette', 0, '${ids.categoryPartial}', NULL, '${ids.eventId}', now(), now()),
+-- Produkte ohne Kategorie, eines mit und eines ohne Station.
+('${ids.productOrphanKitchen}', 'Tagesteller (ohne Kategorie)', 1100, NULL, '${ids.stationKitchen}', '${ids.eventId}', now(), now()),
+('${ids.productOrphanNone}', 'Trinkgeld (ohne Kategorie)', 100, NULL, NULL, '${ids.eventId}', now(), now());
+`;
+}
+
+// Prueft nach "migrate deploy", dass die Zielstation verlustfrei an die
+// Kategorie gewandert ist: jedes Produkt loest auf dieselbe Station auf wie
+// vorher, keine Zeile ging verloren, "categoryId" ist nirgends NULL. Zusaetzlich
+// werden die Einzelregeln geprueft (Mehrheit, Gleichstand, Luecke, Auffangkategorie).
+function verifyTargetStationMigrationSql(ids) {
+  return `
+-- 1. Kein Produkt hat seine Kategorie verloren, in keiner Veranstaltung.
+DO $$
+DECLARE
+  orphaned int;
+BEGIN
+  SELECT count(*) INTO orphaned FROM "Product" WHERE "categoryId" IS NULL;
+  IF orphaned <> 0 THEN
+    RAISE EXCEPTION 'Nach der Migration haben % Produkte keine Kategorie.', orphaned;
+  END IF;
+END $$;
+
+-- 2. Kein Produkt der Testveranstaltung ging verloren oder kam hinzu.
+DO $$
+DECLARE
+  actual int;
+BEGIN
+  SELECT count(*) INTO actual FROM "Product" WHERE "eventId" = '${ids.eventId}';
+  IF actual <> ${STATION_SEED_PRODUCT_COUNT} THEN
+    RAISE EXCEPTION 'Erwartete ${STATION_SEED_PRODUCT_COUNT} Produkte in der Stations-Testveranstaltung, gefunden %.', actual;
+  END IF;
+END $$;
+
+-- 3. Kernpruefung: jedes Produkt loest auf dieselbe Station auf wie vor der
+--    Migration. Die erwartete Station ist die, die im Altstand am Produkt
+--    stand; die neue Aufloesung ist Produktstation, sonst Kategoriestation.
+DO $$
+DECLARE
+  drifted int;
+  sample text;
+BEGIN
+  SELECT count(*), string_agg(q."productId", ', ' ORDER BY q."productId")
+  INTO drifted, sample
+  FROM (
+    SELECT e."productId"
+    FROM (
+      VALUES
+        ('${ids.productUniform1}'::text, '${ids.stationKitchen}'::text),
+        ('${ids.productUniform2}', '${ids.stationKitchen}'),
+        ('${ids.productMixedBar1}', '${ids.stationBar}'),
+        ('${ids.productMixedBar2}', '${ids.stationBar}'),
+        ('${ids.productMixedKitchen}', '${ids.stationKitchen}'),
+        ('${ids.productNone1}', NULL),
+        ('${ids.productNone2}', NULL),
+        ('${ids.productTieBar}', '${ids.stationBar}'),
+        ('${ids.productTieKitchen}', '${ids.stationKitchen}'),
+        ('${ids.productPartial1}', '${ids.stationKitchen}'),
+        ('${ids.productPartial2}', '${ids.stationKitchen}'),
+        ('${ids.productPartialNone}', NULL),
+        ('${ids.productOrphanKitchen}', '${ids.stationKitchen}'),
+        ('${ids.productOrphanNone}', NULL)
+    ) AS e("productId", "stationId")
+    LEFT JOIN "Product" p ON p."id" = e."productId"
+    LEFT JOIN "ProductCategory" c ON c."id" = p."categoryId"
+    WHERE p."id" IS NULL
+       OR COALESCE(p."targetStationId", c."targetStationId") IS DISTINCT FROM e."stationId"
+  ) AS q;
+
+  IF drifted <> 0 THEN
+    RAISE EXCEPTION 'Nach der Migration loesen % Produkte auf eine andere Station auf als vorher: %.', drifted, sample;
+  END IF;
+END $$;
+
+-- 4. Einheitliche Kategorie: die Station wandert an die Kategorie, die
+--    Produkte verlieren ihren Eintrag.
+DO $$
+BEGIN
+  IF (SELECT "targetStationId" FROM "ProductCategory" WHERE id = '${ids.categoryUniform}')
+     IS DISTINCT FROM '${ids.stationKitchen}' THEN
+    RAISE EXCEPTION 'Die einheitliche Kategorie hat nicht die Station ihrer Produkte uebernommen.';
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM "Product"
+    WHERE id IN ('${ids.productUniform1}', '${ids.productUniform2}')
+      AND "targetStationId" IS NOT NULL
+  ) THEN
+    RAISE EXCEPTION 'Produkte der einheitlichen Kategorie tragen weiterhin einen eigenen Stationseintrag.';
+  END IF;
+END $$;
+
+-- 5. Uneinheitliche Kategorie: die haeufigste Station gewinnt, das abweichende
+--    Produkt behaelt seinen Eintrag als Ausnahme.
+DO $$
+BEGIN
+  IF (SELECT "targetStationId" FROM "ProductCategory" WHERE id = '${ids.categoryMixed}')
+     IS DISTINCT FROM '${ids.stationBar}' THEN
+    RAISE EXCEPTION 'Die uneinheitliche Kategorie hat nicht die haeufigste Station uebernommen.';
+  END IF;
+  IF (SELECT "targetStationId" FROM "Product" WHERE id = '${ids.productMixedKitchen}')
+     IS DISTINCT FROM '${ids.stationKitchen}' THEN
+    RAISE EXCEPTION 'Das abweichende Produkt hat seine Ausnahme verloren.';
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM "Product"
+    WHERE id IN ('${ids.productMixedBar1}', '${ids.productMixedBar2}')
+      AND "targetStationId" IS NOT NULL
+  ) THEN
+    RAISE EXCEPTION 'Produkte der Mehrheitsstation tragen weiterhin einen eigenen Stationseintrag.';
+  END IF;
+END $$;
+
+-- 6. Kategorie ohne jede Station bleibt ohne Vorgabe.
+DO $$
+BEGIN
+  IF (SELECT "targetStationId" FROM "ProductCategory" WHERE id = '${ids.categoryNone}') IS NOT NULL THEN
+    RAISE EXCEPTION 'Die Kategorie ohne Station hat eine Vorgabe erhalten.';
+  END IF;
+END $$;
+
+-- 7. Gleichstand: es entscheidet sortOrder der Station, "Kueche" vor "Schank".
+DO $$
+BEGIN
+  IF (SELECT "targetStationId" FROM "ProductCategory" WHERE id = '${ids.categoryTie}')
+     IS DISTINCT FROM '${ids.stationKitchen}' THEN
+    RAISE EXCEPTION 'Der Gleichstand wurde nicht nach sortOrder der Station aufgeloest.';
+  END IF;
+END $$;
+
+-- 8. Mehrheit mit Luecke: eine Vorgabe wuerde das Produkt ohne Station
+--    umleiten, deshalb bleibt die Kategorie ohne Vorgabe und alle Produkte
+--    behalten ihren Eintrag.
+DO $$
+BEGIN
+  IF (SELECT "targetStationId" FROM "ProductCategory" WHERE id = '${ids.categoryPartial}') IS NOT NULL THEN
+    RAISE EXCEPTION 'Eine Kategorie mit einem Produkt ohne Station hat eine Vorgabe erhalten.';
+  END IF;
+  IF (SELECT count(*) FROM "Product"
+      WHERE id IN ('${ids.productPartial1}', '${ids.productPartial2}')
+        AND "targetStationId" = '${ids.stationKitchen}') <> 2 THEN
+    RAISE EXCEPTION 'Produkte einer Kategorie ohne Vorgabe haben ihren Stationseintrag verloren.';
+  END IF;
+END $$;
+
+-- 9. Auffangkategorie: beide Produkte ohne Kategorie liegen in derselben,
+--    neuen Kategorie ihrer Veranstaltung, diese hat keine Vorgabe, und das
+--    Produkt mit Station behaelt sie als Ausnahme.
+DO $$
+DECLARE
+  fallback_id text;
+BEGIN
+  SELECT "categoryId" INTO fallback_id FROM "Product" WHERE id = '${ids.productOrphanKitchen}';
+  IF fallback_id IS NULL THEN
+    RAISE EXCEPTION 'Das Produkt ohne Kategorie wurde keiner Auffangkategorie zugeordnet.';
+  END IF;
+  IF fallback_id IN (
+    '${ids.categoryUniform}', '${ids.categoryMixed}', '${ids.categoryNone}',
+    '${ids.categoryTie}', '${ids.categoryPartial}'
+  ) THEN
+    RAISE EXCEPTION 'Das Produkt ohne Kategorie wurde einer bestehenden Kategorie zugeordnet statt der Auffangkategorie.';
+  END IF;
+  IF (SELECT "categoryId" FROM "Product" WHERE id = '${ids.productOrphanNone}') IS DISTINCT FROM fallback_id THEN
+    RAISE EXCEPTION 'Die Produkte ohne Kategorie liegen in verschiedenen Auffangkategorien.';
+  END IF;
+  IF (SELECT "eventId" FROM "ProductCategory" WHERE id = fallback_id) IS DISTINCT FROM '${ids.eventId}' THEN
+    RAISE EXCEPTION 'Die Auffangkategorie gehoert nicht zur Veranstaltung ihrer Produkte.';
+  END IF;
+  IF (SELECT "targetStationId" FROM "ProductCategory" WHERE id = fallback_id) IS NOT NULL THEN
+    RAISE EXCEPTION 'Die Auffangkategorie hat eine Vorgabe erhalten.';
+  END IF;
+  IF (SELECT "targetStationId" FROM "Product" WHERE id = '${ids.productOrphanKitchen}')
+     IS DISTINCT FROM '${ids.stationKitchen}' THEN
+    RAISE EXCEPTION 'Das Produkt ohne Kategorie hat seine Station verloren.';
+  END IF;
+END $$;
+
+-- 10. Die Kategorie des Altstands der Produktoptionen hatte keine Station und
+--     darf auch keine erhalten haben; ihre Produkte bleiben ohne Eintrag.
+DO $$
+BEGIN
+  IF (SELECT "targetStationId" FROM "ProductCategory" WHERE id = '${LEGACY_SEED.categoryId}') IS NOT NULL THEN
+    RAISE EXCEPTION 'Die Kategorie des Produktoptionen-Altstands hat eine Vorgabe erhalten.';
+  END IF;
+END $$;
+`;
+}
+
 function dropDatabase(target, database) {
   const literal = database.replaceAll("'", "''");
   psql(
@@ -381,6 +652,42 @@ const migrationNames = readdirSync(migrationsDir, { withFileTypes: true })
 if (migrationNames.length < 2)
   fail("Mindestens zwei Migrationen werden für den Upgrade-Test benötigt.");
 
+// Datenuebernehmende Migrationen und der zu ihnen gehoerende Altstand. Der
+// Seed wird jeweils unmittelbar VOR der genannten Migration eingespielt, sonst
+// laeuft er gegen bereits umgebaute Tabellen. Diese Bindung an den
+// Migrationsnamen ersetzt die frueher noetige Annahme, die zu pruefende
+// Migration sei die letzte im Verzeichnis: eine nachrueckende Migration
+// verschiebt den Einspielpunkt jetzt automatisch nicht mehr.
+const DATA_MIGRATION_CHECKS = [
+  {
+    migration: "20260821140000_add_product_option_groups",
+    seedLabel: "repräsentativen Altstand für Produktoptionen einspielen",
+    seed: () => seedLegacyProductOptionsSql(LEGACY_SEED),
+    verifyLabel: "Datenübernahme der Produktoptionen prüfen",
+    verify: () => verifyProductOptionMigrationSql(LEGACY_SEED),
+  },
+  {
+    migration: "20260822120000_move_target_station_to_category",
+    seedLabel: "repräsentativen Altstand für Zielstationen einspielen",
+    seed: () => seedLegacyTargetStationsSql(STATION_SEED),
+    verifyLabel: "Verlustfreiheit der Zielstationen prüfen",
+    verify: () => verifyTargetStationMigrationSql(STATION_SEED),
+  },
+];
+
+for (const check of DATA_MIGRATION_CHECKS) {
+  if (!migrationNames.includes(check.migration)) {
+    fail(
+      `Die Datenübernahmeprüfung ist an die Migration "${check.migration}" gebunden, ` +
+        `diese existiert aber nicht mehr. Seed-/Verifikationslogik in scripts/ci/test-migrations.mjs muss angepasst werden.`,
+    );
+  }
+}
+
+const seedsByMigration = new Map(
+  DATA_MIGRATION_CHECKS.map((check) => [check.migration, check]),
+);
+
 try {
   console.log(`Migrationstest auf ${target.hostname}: leere Datenbank`);
   recreateDatabase(target, EMPTY_DATABASE);
@@ -393,7 +700,22 @@ try {
   );
   recreateDatabase(target, UPGRADE_DATABASE);
   const upgradeUrl = databaseUrl(target, UPGRADE_DATABASE);
+
+  // Die datenuebernehmenden Migrationen verlieren in einem Testlauf sonst nie
+  // Daten, weil die Datenbank bis zu ihnen leer ist. Der jeweils passende
+  // Altstand wird deshalb unmittelbar vor der betroffenen Migration
+  // eingespielt. Alle Migrationen bis auf die letzte werden dafuer einzeln
+  // ueber psql eingespielt und als angewendet vermerkt; die letzte laeuft
+  // ueber "migrate deploy", damit auch dieser Weg im Test vorkommt.
+  const seedBefore = (migrationName) => {
+    const check = seedsByMigration.get(migrationName);
+    if (!check) return;
+    console.log(`Migrationstest: ${check.seedLabel}`);
+    psql(target, UPGRADE_DATABASE, check.seed());
+  };
+
   for (const migrationName of migrationNames.slice(0, -1)) {
+    seedBefore(migrationName);
     const sql = readFileSync(
       resolve(migrationsDir, migrationName, "migration.sql"),
       "utf8",
@@ -401,32 +723,15 @@ try {
     psql(target, UPGRADE_DATABASE, sql);
     prisma(["migrate", "resolve", "--applied", migrationName], upgradeUrl);
   }
-
-  // Die letzte Migration ("20260821140000_add_product_option_groups")
-  // uebernimmt "ProductVariant"/"ProductExtra" nach
-  // "ProductOptionGroup"/"ProductOption". Dieser Pfad verliert sonst nie
-  // Daten in einem Testlauf, weil die Datenbank bis hierher leer ist. Der
-  // repraesentative Altstand wird deshalb genau hier eingespielt: nach der
-  // vorletzten Migration, vor "migrate deploy" der letzten. Rueckt eine
-  // weitere Migration nach, muss diese Seed-/Verifikationslogik mit ihr
-  // wandern, sonst laeuft die Einfuegung gegen bereits entfernte Tabellen.
-  const lastMigrationName = migrationNames[migrationNames.length - 1];
-  if (lastMigrationName !== "20260821140000_add_product_option_groups") {
-    fail(
-      `Die Datenuebernahmepruefung ist an die Migration "20260821140000_add_product_option_groups" gebunden, ` +
-        `letzte Migration ist aber "${lastMigrationName}". Seed-/Verifikationslogik in scripts/ci/test-migrations.mjs muss migriert werden.`,
-    );
-  }
-  console.log(
-    "Migrationstest: repräsentativen Altstand für Produktoptionen einspielen",
-  );
-  psql(target, UPGRADE_DATABASE, seedLegacyProductOptionsSql(LEGACY_SEED));
+  seedBefore(migrationNames[migrationNames.length - 1]);
 
   prisma(["migrate", "deploy"], upgradeUrl);
   prisma(["migrate", "status"], upgradeUrl);
 
-  console.log("Migrationstest: Datenübernahme der Produktoptionen prüfen");
-  psql(target, UPGRADE_DATABASE, verifyProductOptionMigrationSql(LEGACY_SEED));
+  for (const check of DATA_MIGRATION_CHECKS) {
+    console.log(`Migrationstest: ${check.verifyLabel}`);
+    psql(target, UPGRADE_DATABASE, check.verify());
+  }
 
   console.log(
     "Migrationstest erfolgreich: leerer Stand und Upgrade-Stand sind aktuell.",

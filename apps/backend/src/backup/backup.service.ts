@@ -10,6 +10,7 @@ import { PRISMA_CLIENT } from "../prisma/prisma.module";
 import * as fs from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
+import { planFallbackCategory } from "../common/fallback-category";
 
 export interface BackupMetadata {
   filename: string;
@@ -236,7 +237,12 @@ export class BackupService implements OnModuleInit {
 
     // 2. Perform restoration in transactional sequence
     return await this.prisma.$transaction(async (tx) => {
-      // Clear current operational data (in reverse foreign key order)
+      // Clear current operational data (in reverse foreign key order).
+      // Issue #84: "Product"."categoryId" -> "ProductCategory"."id" is now
+      // ON DELETE RESTRICT (was SetNull), so every product referencing a
+      // category must be gone before that category is deleted. "product" is
+      // therefore cleared before "productCategory" below; do not reorder
+      // these two without checking the FK direction again.
       await tx.printJob.deleteMany();
       await tx.payment.deleteMany();
       await tx.orderItem.deleteMany();
@@ -262,10 +268,53 @@ export class BackupService implements OnModuleInit {
       if (data.areas?.length) await tx.area.createMany({ data: data.areas });
       if (data.stations?.length)
         await tx.station.createMany({ data: data.stations });
-      if (data.categories?.length)
-        await tx.productCategory.createMany({ data: data.categories });
-      if (data.products?.length)
-        await tx.product.createMany({ data: data.products });
+      // Issue #84: categories must be inserted before products, because
+      // "Product"."categoryId" is now a required, RESTRICT-guarded foreign
+      // key ("productCategory" is created here, before "product", to match).
+      //
+      // This backup format carries no schema/data version of its own —
+      // "version" above is the application version, not a data-shape version
+      // like the event template's "schemaVersion". A backup taken before
+      // this migration can still contain products with no category at all,
+      // which the (now required) "categoryId" column would reject at insert
+      // time — a raw database error in the middle of restoring, i.e. exactly
+      // when something has already gone wrong. There is no version field to
+      // gate a fix on, but the data itself is the discriminator: a product
+      // with no "categoryId" can only predate this migration. Such products
+      // get the same fallback category as the SQL migration
+      // 20260822120000_move_target_station_to_category and the event
+      // template importer (events.service.ts) — one rule in
+      // ../common/fallback-category.ts for all three.
+      const categories: any[] = data.categories ? [...data.categories] : [];
+      const products: any[] = data.products ?? [];
+      const orphanedByEvent = new Map<string, any[]>();
+      for (const product of products) {
+        if (!product.categoryId) {
+          const list = orphanedByEvent.get(product.eventId) ?? [];
+          list.push(product);
+          orphanedByEvent.set(product.eventId, list);
+        }
+      }
+      const fallbackCreatedAt = new Date();
+      for (const [eventId, orphaned] of orphanedByEvent) {
+        const plan = planFallbackCategory(
+          categories.filter((c) => c.eventId === eventId),
+        );
+        const fallbackId = crypto.randomUUID();
+        categories.push({
+          id: fallbackId,
+          name: plan.name,
+          sortOrder: plan.sortOrder,
+          eventId,
+          targetStationId: null,
+          createdAt: fallbackCreatedAt,
+          updatedAt: fallbackCreatedAt,
+        });
+        for (const product of orphaned) product.categoryId = fallbackId;
+      }
+      if (categories.length)
+        await tx.productCategory.createMany({ data: categories });
+      if (products.length) await tx.product.createMany({ data: products });
       if (data.optionGroups?.length)
         await tx.productOptionGroup.createMany({ data: data.optionGroups });
       if (data.options?.length)
