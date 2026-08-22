@@ -1,5 +1,6 @@
 import { BadRequestException } from "@nestjs/common";
 import { OrdersService } from "./orders.service";
+import { createAuditServiceStub } from "./test-support/audit-service.stub";
 
 // Regressionstests fuer Issue #86: der Idempotenz-Kurzschluss von
 // createOrder darf eine vorhandene Bestellung nur zurueckgeben, wenn
@@ -90,7 +91,7 @@ describe("OrdersService – Idempotenzpruefung von createOrder für Issue #86", 
   // vorhandene Bestellung und legt keine zweite an.
   it("liefert bei einer echten Wiederholung derselben Anfrage die vorhandene Bestellung zurück", async () => {
     const prisma = createPrisma(existingOrderBase);
-    const service = new OrdersService(prisma);
+    const service = new OrdersService(prisma, createAuditServiceStub() as any);
 
     const result = await service.createOrder("waiter-1", {
       eventId: "event-1",
@@ -117,7 +118,7 @@ describe("OrdersService – Idempotenzpruefung von createOrder für Issue #86", 
   // Position, darf die Wiedererkennung nicht verhindern.
   it("erkennt dieselben Positionen unabhängig von deren Reihenfolge als dieselbe Anfrage", async () => {
     const prisma = createPrisma(existingOrderBase);
-    const service = new OrdersService(prisma);
+    const service = new OrdersService(prisma, createAuditServiceStub() as any);
 
     const result = await service.createOrder("waiter-1", {
       eventId: "event-1",
@@ -142,7 +143,7 @@ describe("OrdersService – Idempotenzpruefung von createOrder für Issue #86", 
 
   it("weist eine Anfrage mit demselben Schlüssel, aber fremdem Benutzer zurück", async () => {
     const prisma = createPrisma(existingOrderBase);
-    const service = new OrdersService(prisma);
+    const service = new OrdersService(prisma, createAuditServiceStub() as any);
 
     await expect(
       service.createOrder("other-user", {
@@ -167,7 +168,7 @@ describe("OrdersService – Idempotenzpruefung von createOrder für Issue #86", 
 
   it("weist eine Anfrage mit demselben Schlüssel, aber abweichender Veranstaltung zurück", async () => {
     const prisma = createPrisma(existingOrderBase);
-    const service = new OrdersService(prisma);
+    const service = new OrdersService(prisma, createAuditServiceStub() as any);
 
     await expect(
       service.createOrder("waiter-1", {
@@ -192,7 +193,7 @@ describe("OrdersService – Idempotenzpruefung von createOrder für Issue #86", 
 
   it("weist eine Anfrage mit demselben Schlüssel, aber abweichenden Positionen zurück", async () => {
     const prisma = createPrisma(existingOrderBase);
-    const service = new OrdersService(prisma);
+    const service = new OrdersService(prisma, createAuditServiceStub() as any);
 
     await expect(
       service.createOrder("waiter-1", {
@@ -210,7 +211,7 @@ describe("OrdersService – Idempotenzpruefung von createOrder für Issue #86", 
 
   it("weist eine Anfrage mit demselben Schlüssel, aber abweichenden Zahlungen zurück", async () => {
     const prisma = createPrisma(existingOrderBase);
-    const service = new OrdersService(prisma);
+    const service = new OrdersService(prisma, createAuditServiceStub() as any);
 
     await expect(
       service.createOrder("waiter-1", {
@@ -234,7 +235,7 @@ describe("OrdersService – Idempotenzpruefung von createOrder für Issue #86", 
   // Betrag, noch Produktname, noch Benutzer.
   it("nennt bei Ablehnung keinen Inhalt der fremden Bestellung", async () => {
     const prisma = createPrisma(existingOrderBase);
-    const service = new OrdersService(prisma);
+    const service = new OrdersService(prisma, createAuditServiceStub() as any);
 
     await expect(
       service.createOrder("other-user", {

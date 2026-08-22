@@ -1,5 +1,6 @@
 import { BadRequestException } from "@nestjs/common";
 import { OrdersService } from "./orders.service";
+import { createAuditServiceStub } from "./test-support/audit-service.stub";
 
 describe("OrdersService – Bonkassen-Schnellverkauf für Issue #52", () => {
   let prisma: any;
@@ -112,7 +113,7 @@ describe("OrdersService – Bonkassen-Schnellverkauf für Issue #52", () => {
         create: jest.fn().mockResolvedValue({}),
       },
     };
-    service = new OrdersService(prisma);
+    service = new OrdersService(prisma, createAuditServiceStub() as any);
   });
 
   it("berechnet Preise und Rückgeld ausschließlich serverseitig und speichert nur den Umsatz als Zahlung", async () => {

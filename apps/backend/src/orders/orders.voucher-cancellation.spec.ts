@@ -1,4 +1,5 @@
 import { OrdersService } from "./orders.service";
+import { createAuditServiceStub } from "./test-support/audit-service.stub";
 
 describe("OrdersService – Produktbons bei Storno", () => {
   let prisma: any;
@@ -24,7 +25,7 @@ describe("OrdersService – Produktbons bei Storno", () => {
       },
       auditLog: { create: jest.fn().mockResolvedValue({}) },
     };
-    service = new OrdersService(prisma);
+    service = new OrdersService(prisma, createAuditServiceStub() as any);
   });
 
   it("annulliert nur noch nicht eingelöste Bons und protokolliert ihre Anzahl", async () => {

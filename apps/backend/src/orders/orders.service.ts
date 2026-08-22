@@ -3,12 +3,14 @@ import {
   Inject,
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   NotFoundException,
 } from "@nestjs/common";
 import { PrismaClient, Prisma } from "@vereinorder/database";
 import { PRISMA_CLIENT } from "../prisma/prisma.module";
 import { randomBytes } from "crypto";
 import { resolveTargetStationId } from "../common/target-station";
+import { AuditService } from "../audit/audit.service";
 
 interface CreateOrderDto {
   eventId: string;
@@ -21,6 +23,26 @@ interface CreateOrderDto {
   idempotencyKey?: string;
   tableName?: string;
   areaId?: string;
+  // Issue #65, Abschnitt 8 Punkt 5: von der Bedienmaske erfasste
+  // Kassensitzung. Optional, damit heutige Online-Bestellungen ohne
+  // Sitzung unveraendert weiterlaufen (siehe createOrder weiter unten).
+  cashierSessionId?: string;
+}
+
+// Issue #65, Abschnitt 8 Punkt 2: Eingabe fuer das Verwerfen einer
+// lokalen Vormerkung, nachdem der Server bestaetigt hat, dass er die
+// Bestellung nicht kennt. capturedByUserId und legacy stammen aus dem in
+// IndexedDB gehaltenen Kontext des Eintrags (Abschnitt 4/6 des Entwurfs)
+// und werden hier ausschliesslich zur Autorisierung und fuer das
+// Audit-Ereignis verwendet, nie zur Auswahl einer Bestellung.
+interface DiscardOfflineQueueDto {
+  idempotencyKey: string;
+  reason: string;
+  capturedByUserId?: string | null;
+  legacy?: boolean;
+  eventId?: string;
+  payments?: { amount: number; method: "CASH" | "CARD" | "VOUCHER" }[];
+  totalAtCapture?: number;
 }
 
 interface QuickSaleDto {
@@ -88,7 +110,17 @@ interface PrintOptions {
 
 @Injectable()
 export class OrdersService {
-  constructor(@Inject(PRISMA_CLIENT) private prisma: PrismaClient) {}
+  constructor(
+    @Inject(PRISMA_CLIENT) private prisma: PrismaClient,
+    // Verpflichtend, nicht optional: discardOfflineQueueEntry (Issue #65,
+    // Abschnitt 8 Punkt 2) darf ein Verwerfen nicht erfolgreich abschliessen
+    // koennen, ohne dass das Audit-Ereignis tatsaechlich geschrieben wurde.
+    // Ein optionales `?.log(...)` liesse das Verwerfen lautlos ohne Spur
+    // durchlaufen, wenn die Einbindung fehlt - das widerspricht sowohl dem
+    // Issue (Audit-Ereignis nach Serverkontakt) als auch den
+    // unverhandelbaren Projektregeln zu auditierbaren Aktionen mit Geldbezug.
+    private readonly auditService: AuditService,
+  ) {}
 
   async getQuickSaleContext(userId: string) {
     const [events, sessions, activePrinter] = await Promise.all([
@@ -761,92 +793,105 @@ export class OrdersService {
     }
   }
 
+  /**
+   * Idempotenzkurzschluss von createOrder (Issue #86, siehe
+   * orders.idempotency.spec.ts). Gibt eine vorhandene Bestellung nur dann
+   * zurueck, wenn Benutzer, Veranstaltung, Positionen und Zahlungen
+   * tatsaechlich der Anfrage entsprechen; sonst wird abgelehnt, ohne
+   * Inhalt der fremden Bestellung preiszugeben. Reihenfolgen (Positionen
+   * wie darin enthaltene Auswahlkennungen, sowie Zahlungen) sind dabei
+   * irrelevant.
+   *
+   * Wird sowohl vor der Transaktion (regulaerer Kurzschluss) als auch aus
+   * dem P2002-Auffangen heraus verwendet (Issue #65, Abschnitt 8 Punkt 4),
+   * damit in beiden Faellen dieselbe Pruefung entscheidet, statt eine der
+   * beiden Stellen ungeprueft zurueckzugeben.
+   */
+  private async resolveIdempotentOrder(userId: string, dto: CreateOrderDto) {
+    if (!dto.idempotencyKey) return null;
+
+    const existingOrder = await this.prisma.order.findUnique({
+      where: { idempotencyKey: dto.idempotencyKey },
+      include: {
+        items: { include: { product: true } },
+        payments: true,
+      },
+    });
+    if (!existingOrder) return null;
+
+    const normalizeItems = (
+      items: { productId: string; quantity: number; optionIds: string[] }[],
+    ) =>
+      items
+        .map((item) => {
+          const optionIds = [...item.optionIds].sort();
+          return `${item.productId}:${item.quantity}:${optionIds.join(",")}`;
+        })
+        .sort();
+
+    const requestedItems = normalizeItems(
+      dto.items.map((item) => ({
+        productId: item.productId,
+        quantity: item.quantity,
+        optionIds: item.optionIds ?? [],
+      })),
+    );
+    // Die gespeicherte Bestellposition haelt die getroffene Auswahl als
+    // Momentaufnahme in variantId (ABSOLUTE-Gruppe) und im JSON-Feld
+    // extras (uebrige Gruppen). Beides zusammen entspricht den
+    // optionIds der Anfrage, siehe requestedItems oben in
+    // createQuickSale.
+    const storedItems = normalizeItems(
+      existingOrder.items.map((item) => {
+        const extras = Array.isArray(item.extras)
+          ? (item.extras as { id: string }[])
+          : [];
+        const optionIds = [
+          ...(item.variantId ? [item.variantId] : []),
+          ...extras.map((extra) => extra.id),
+        ];
+        return {
+          productId: item.productId,
+          quantity: item.quantity,
+          optionIds,
+        };
+      }),
+    );
+
+    const normalizePayments = (
+      payments: { amount: number; method: string }[],
+    ) => payments.map((p) => `${p.amount}:${p.method}`).sort();
+
+    const requestedPayments = normalizePayments(dto.payments ?? []);
+    const storedPayments = normalizePayments(existingOrder.payments);
+
+    const sameItems =
+      requestedItems.length === storedItems.length &&
+      requestedItems.every((item, index) => item === storedItems[index]);
+    const samePayments =
+      requestedPayments.length === storedPayments.length &&
+      requestedPayments.every(
+        (payment, index) => payment === storedPayments[index],
+      );
+
+    if (
+      existingOrder.userId !== userId ||
+      existingOrder.eventId !== dto.eventId ||
+      !sameItems ||
+      !samePayments
+    ) {
+      throw new BadRequestException("idempotencyKey is already in use");
+    }
+    return existingOrder;
+  }
+
   async createOrder(userId: string, dto: CreateOrderDto) {
     if (!dto.items || dto.items.length === 0) {
       throw new BadRequestException("Order must contain at least one item");
     }
 
-    if (dto.idempotencyKey) {
-      const existingOrder = await this.prisma.order.findUnique({
-        where: { idempotencyKey: dto.idempotencyKey },
-        include: {
-          items: { include: { product: true } },
-          payments: true,
-        },
-      });
-      if (existingOrder) {
-        // Idempotenzpruefung nach Issue #86, nach dem Muster von
-        // createQuickSale: der Kurzschluss darf eine vorhandene Bestellung
-        // nur zurueckgeben, wenn Benutzer, Veranstaltung, Positionen und
-        // Zahlungen tatsaechlich der Anfrage entsprechen. Reihenfolgen
-        // (Positionen wie darin enthaltene Auswahlkennungen, sowie
-        // Zahlungen) sind dabei irrelevant.
-        const normalizeItems = (
-          items: { productId: string; quantity: number; optionIds: string[] }[],
-        ) =>
-          items
-            .map((item) => {
-              const optionIds = [...item.optionIds].sort();
-              return `${item.productId}:${item.quantity}:${optionIds.join(",")}`;
-            })
-            .sort();
-
-        const requestedItems = normalizeItems(
-          dto.items.map((item) => ({
-            productId: item.productId,
-            quantity: item.quantity,
-            optionIds: item.optionIds ?? [],
-          })),
-        );
-        // Die gespeicherte Bestellposition haelt die getroffene Auswahl als
-        // Momentaufnahme in variantId (ABSOLUTE-Gruppe) und im JSON-Feld
-        // extras (uebrige Gruppen). Beides zusammen entspricht den
-        // optionIds der Anfrage, siehe requestedItems oben in
-        // createQuickSale.
-        const storedItems = normalizeItems(
-          existingOrder.items.map((item) => {
-            const extras = Array.isArray(item.extras)
-              ? (item.extras as { id: string }[])
-              : [];
-            const optionIds = [
-              ...(item.variantId ? [item.variantId] : []),
-              ...extras.map((extra) => extra.id),
-            ];
-            return {
-              productId: item.productId,
-              quantity: item.quantity,
-              optionIds,
-            };
-          }),
-        );
-
-        const normalizePayments = (
-          payments: { amount: number; method: string }[],
-        ) => payments.map((p) => `${p.amount}:${p.method}`).sort();
-
-        const requestedPayments = normalizePayments(dto.payments ?? []);
-        const storedPayments = normalizePayments(existingOrder.payments);
-
-        const sameItems =
-          requestedItems.length === storedItems.length &&
-          requestedItems.every((item, index) => item === storedItems[index]);
-        const samePayments =
-          requestedPayments.length === storedPayments.length &&
-          requestedPayments.every(
-            (payment, index) => payment === storedPayments[index],
-          );
-
-        if (
-          existingOrder.userId !== userId ||
-          existingOrder.eventId !== dto.eventId ||
-          !sameItems ||
-          !samePayments
-        ) {
-          throw new BadRequestException("idempotencyKey is already in use");
-        }
-        return existingOrder;
-      }
-    }
+    const idempotentOrder = await this.resolveIdempotentOrder(userId, dto);
+    if (idempotentOrder) return idempotentOrder;
 
     const productIds = dto.items.map((i) => i.productId);
     const products = await this.prisma.product.findMany({
@@ -904,80 +949,287 @@ export class OrdersService {
         );
     }
 
-    return await this.prisma.$transaction(async (prisma) => {
-      const eventRows = await prisma.$queryRaw<
-        { status: string; testMode: boolean }[]
-      >(
-        Prisma.sql`SELECT "status", "testMode" FROM "Event" WHERE "id" = ${dto.eventId} FOR UPDATE`,
-      );
-      const event = eventRows[0];
-      const orderDataMode =
-        event?.status === "ACTIVE" && !event.testMode
-          ? "LIVE"
-          : event?.status === "TEST_MODE" && event.testMode
-            ? "TEST"
-            : null;
-      if (!orderDataMode)
-        throw new BadRequestException("Event is not active for orders");
-      const activeSession = userId
-        ? await prisma.cashierSession.findFirst({
-            where: { userId, eventId: dto.eventId, status: "ACTIVE" },
-          })
-        : null;
-      if (activeSession && activeSession.dataMode !== orderDataMode)
-        throw new ConflictException(
-          "Die aktive Kassensitzung gehört zu einem anderen Betriebsmodus.",
+    try {
+      return await this.prisma.$transaction(async (prisma) => {
+        const eventRows = await prisma.$queryRaw<
+          { status: string; testMode: boolean }[]
+        >(
+          Prisma.sql`SELECT "status", "testMode" FROM "Event" WHERE "id" = ${dto.eventId} FOR UPDATE`,
         );
-      const cashierSessionId = activeSession?.id || null;
-      const user = userId
-        ? await prisma.user.findUnique({ where: { id: userId } })
-        : null;
-      if (!user?.isActive) {
-        throw new BadRequestException("User is not active");
-      }
-      const order = await prisma.order.create({
-        data: {
-          totalAmount,
-          lifecycleStatus: "SUBMITTED",
-          paymentStatus: initialPaymentStatus,
-          fulfillmentStatus: "PENDING",
-          userId,
-          eventId: dto.eventId,
-          dataMode: orderDataMode,
-          idempotencyKey: dto.idempotencyKey,
-          tableName: dto.tableName,
-          areaId: dto.areaId,
-          cashierSessionId,
-          items: {
-            create: orderItemsData,
-          },
-          payments:
-            dto.payments && dto.payments.length > 0
-              ? {
-                  create: dto.payments.map((p) => ({
-                    amount: p.amount,
-                    method: p.method,
-                    status: "COMPLETED",
-                    cashierSessionId,
-                  })),
-                }
-              : undefined,
-        },
-        include: {
-          items: {
-            include: {
-              product: { include: { category: true } },
+        const event = eventRows[0];
+        const orderDataMode =
+          event?.status === "ACTIVE" && !event.testMode
+            ? "LIVE"
+            : event?.status === "TEST_MODE" && event.testMode
+              ? "TEST"
+              : null;
+        if (!orderDataMode)
+          throw new BadRequestException("Event is not active for orders");
+        const activeSession = userId
+          ? await prisma.cashierSession.findFirst({
+              where: { userId, eventId: dto.eventId, status: "ACTIVE" },
+            })
+          : null;
+        if (activeSession && activeSession.dataMode !== orderDataMode)
+          throw new ConflictException(
+            "Die aktive Kassensitzung gehört zu einem anderen Betriebsmodus.",
+          );
+        // Issue #65, Abschnitt 8 Punkt 5 (Befund B7): ist eine erfasste
+        // Kassensitzung angegeben, muss sie der heute aktiven Sitzung
+        // dieses Benutzers fuer diese Veranstaltung entsprechen. Fehlt das
+        // Feld, bleibt das Verhalten unveraendert - heutige
+        // Online-Bestellungen ohne Sitzung laufen weiter ohne Sitzung.
+        if (
+          dto.cashierSessionId &&
+          dto.cashierSessionId !== activeSession?.id
+        ) {
+          throw new ConflictException(
+            "Die erfasste Kassensitzung ist nicht mehr aktiv.",
+          );
+        }
+        const cashierSessionId = activeSession?.id || null;
+        const user = userId
+          ? await prisma.user.findUnique({ where: { id: userId } })
+          : null;
+        if (!user?.isActive) {
+          throw new BadRequestException("User is not active");
+        }
+        const order = await prisma.order.create({
+          data: {
+            totalAmount,
+            lifecycleStatus: "SUBMITTED",
+            paymentStatus: initialPaymentStatus,
+            fulfillmentStatus: "PENDING",
+            userId,
+            eventId: dto.eventId,
+            dataMode: orderDataMode,
+            idempotencyKey: dto.idempotencyKey,
+            tableName: dto.tableName,
+            areaId: dto.areaId,
+            cashierSessionId,
+            items: {
+              create: orderItemsData,
             },
+            payments:
+              dto.payments && dto.payments.length > 0
+                ? {
+                    create: dto.payments.map((p) => ({
+                      amount: p.amount,
+                      method: p.method,
+                      status: "COMPLETED",
+                      cashierSessionId,
+                    })),
+                  }
+                : undefined,
           },
-          payments: true,
-        },
+          include: {
+            items: {
+              include: {
+                product: { include: { category: true } },
+              },
+            },
+            payments: true,
+          },
+        });
+
+        // Dispatch smart PrintJobs
+        await this.dispatchPrintJobs(prisma, order, user);
+
+        return order;
       });
+    } catch (error) {
+      // Issue #65, Abschnitt 8 Punkt 4 (Befund B5): die Idempotenzpruefung
+      // liegt vor der Transaktion, zwei gleichzeitige Versuche mit
+      // demselben Schluessel koennen beide daran vorbeikommen. Die
+      // eindeutige Spalte auf "idempotencyKey" (schema.prisma) verhindert
+      // die Doppelbestellung, meldet den unterlegenen Versuch aber als
+      // P2002. Nur dieser konkrete Verstoss wird als Wiederholung
+      // behandelt - jeder andere Prisma-Fehler (Fremdschluessel,
+      // sonstige eindeutige Spalten) wird unveraendert weitergereicht,
+      // damit ein zu weit gefasstes Auffangen keine echten Fehler
+      // verschluckt.
+      if (
+        dto.idempotencyKey &&
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === "P2002" &&
+        this.isIdempotencyKeyViolation(error)
+      ) {
+        const idempotentOrder = await this.resolveIdempotentOrder(userId, dto);
+        if (idempotentOrder) return idempotentOrder;
+      }
+      throw error;
+    }
+  }
 
-      // Dispatch smart PrintJobs
-      await this.dispatchPrintJobs(prisma, order, user);
+  /**
+   * Prueft, ob ein P2002-Fehler tatsaechlich die eindeutige Spalte
+   * "idempotencyKey" auf Order betrifft (Issue #65, Abschnitt 8 Punkt 4).
+   * Prisma liefert den betroffenen Spaltennamen in error.meta.target,
+   * abhaengig vom Datenbanktreiber entweder als Array oder als
+   * zusammengesetzte Zeichenkette (z. B. Indexname). Beide Formen werden
+   * beruecksichtigt, damit weder ein Fremdschluesselverstoss (P2003) noch
+   * ein Verstoss gegen eine andere eindeutige Spalte hier faelschlich als
+   * Wiederholung durchgeht.
+   */
+  private isIdempotencyKeyViolation(
+    error: Prisma.PrismaClientKnownRequestError,
+  ): boolean {
+    const target = error.meta?.target;
+    if (Array.isArray(target)) {
+      return target.includes("idempotencyKey");
+    }
+    if (typeof target === "string") {
+      return target.includes("idempotencyKey");
+    }
+    return false;
+  }
 
-      return order;
+  /**
+   * Issue #65, Abschnitt 8 Punkt 1: schmale Auskunft ueber eine Bestellung
+   * anhand ihres idempotencyKey, fuer den Verwerfen-Ablauf (Abschnitt 7)
+   * der Offline-Warteschlange. Liefert absichtlich nicht die vollstaendige
+   * Bestellung.
+   *
+   * Ein fremder Schluessel (existiert, gehoert aber einem anderen
+   * Benutzer, der nicht ADMINISTRATOR oder EVENT_MANAGER ist) muss sich
+   * fuer den Aufrufer nicht von einem unbekannten Schluessel
+   * unterscheiden - deshalb in beiden Faellen NotFoundException (404),
+   * nie ForbiddenException (403). Ein 403 wuerde bereits verraten, dass
+   * der Schluessel existiert.
+   */
+  async getOrderByIdempotencyKey(
+    userId: string,
+    role: string,
+    idempotencyKey: string,
+  ) {
+    const order = await this.prisma.order.findUnique({
+      where: { idempotencyKey },
+      select: {
+        id: true,
+        orderNumber: true,
+        createdAt: true,
+        totalAmount: true,
+        eventId: true,
+        dataMode: true,
+        paymentStatus: true,
+        userId: true,
+      },
     });
+
+    const canSeeForeignOrders =
+      role === "ADMINISTRATOR" || role === "EVENT_MANAGER";
+    if (!order || (order.userId !== userId && !canSeeForeignOrders)) {
+      throw new NotFoundException("Order not found");
+    }
+
+    const { userId: _ownerUserId, ...result } = order;
+    return result;
+  }
+
+  /**
+   * Issue #65, Abschnitt 8 Punkt 2 und Abschnitt 7 ("Verwerfen"): nimmt
+   * das Verwerfen einer lokalen Vormerkung entgegen, nachdem der Client
+   * ueber GET .../by-idempotency-key/:key bereits bestaetigt bekommen hat,
+   * dass der Server die Bestellung nicht kennt. Prueft das hier
+   * unabhaengig erneut (sonst 409) und schreibt danach das
+   * Audit-Ereignis. Loescht selbst nichts - das Loeschen des lokalen
+   * Datensatzes erfolgt erst clientseitig nach der 2xx-Antwort.
+   *
+   * Autorisierung nach den Entscheidungen der Projektleitung
+   * (Abschnitt 11, Punkte 2, 5 und 6):
+   * - Eine Vormerkung mit Zahlungen darf ausschliesslich ADMINISTRATOR
+   *   verwerfen, unabhaengig von Herkunft oder erfassendem Benutzer.
+   * - Ein uebernommener Altbestand (legacy) darf sonst nur von
+   *   ADMINISTRATOR oder EVENT_MANAGER verworfen werden.
+   * - Alles Uebrige darf der erfassende Benutzer oder ADMINISTRATOR
+   *   verwerfen.
+   */
+  async discardOfflineQueueEntry(
+    userId: string,
+    role: string,
+    dto: DiscardOfflineQueueDto,
+  ) {
+    if (
+      typeof dto?.idempotencyKey !== "string" ||
+      dto.idempotencyKey.length < 8 ||
+      dto.idempotencyKey.length > 128
+    ) {
+      throw new BadRequestException("A valid idempotencyKey is required");
+    }
+    if (
+      typeof dto.reason !== "string" ||
+      dto.reason.trim().length === 0 ||
+      dto.reason.length > 500
+    ) {
+      throw new BadRequestException("A reason is required");
+    }
+    const payments = Array.isArray(dto.payments) ? dto.payments : [];
+    for (const payment of payments) {
+      if (
+        !payment ||
+        typeof payment.amount !== "number" ||
+        !["CASH", "CARD", "VOUCHER"].includes(payment.method)
+      ) {
+        throw new BadRequestException("Invalid payment in discard request");
+      }
+    }
+
+    // Serverkontakt zuerst, aber auch hier erneut geprueft: existiert die
+    // Bestellung bereits, wird nichts geloescht (Abschnitt 7 "Verwerfen").
+    const existingOrder = await this.prisma.order.findUnique({
+      where: { idempotencyKey: dto.idempotencyKey },
+      select: { id: true },
+    });
+    if (existingOrder) {
+      throw new ConflictException(
+        "Diese Vormerkung liegt bereits als Bestellung beim Server vor und wurde nicht verworfen.",
+      );
+    }
+
+    const hasPayments = payments.length > 0;
+    const isLegacy = dto.legacy === true;
+    const isAdmin = role === "ADMINISTRATOR";
+    const isEventManager = role === "EVENT_MANAGER";
+    const isCapturingUser =
+      !!dto.capturedByUserId && dto.capturedByUserId === userId;
+
+    let allowed: boolean;
+    if (hasPayments) {
+      allowed = isAdmin;
+    } else if (isLegacy) {
+      allowed = isAdmin || isEventManager;
+    } else {
+      allowed = isAdmin || isCapturingUser;
+    }
+
+    if (!allowed) {
+      throw new ForbiddenException(
+        "Diese Vormerkung darf von Ihnen nicht verworfen werden.",
+      );
+    }
+
+    // Audit zuerst, Loeschen danach (Abschnitt 7 "Verwerfen"): das
+    // Loeschen des lokalen Datensatzes erfolgt erst clientseitig nach
+    // einer 2xx-Antwort. Scheitert das Schreiben des Audit-Ereignisses,
+    // muss deshalb auch diese Anfrage scheitern - sonst saehe es fuer den
+    // Client wie ein erfolgreiches Verwerfen aus, waehrend die Spur fehlt.
+    // Kein try/catch: der Fehler soll unveraendert nach oben durchschlagen.
+    await this.auditService.log({
+      action: "OFFLINE_QUEUE_DISCARDED",
+      entityId: dto.idempotencyKey,
+      entityType: "Order",
+      userId,
+      details: {
+        reason: dto.reason,
+        capturedByUserId: dto.capturedByUserId ?? null,
+        legacy: isLegacy,
+        eventId: dto.eventId ?? null,
+        totalAtCapture: dto.totalAtCapture ?? null,
+        payments,
+      },
+    });
+
+    return { success: true };
   }
 
   async reprintOrder(orderId: string, userId?: string) {

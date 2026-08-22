@@ -1,5 +1,6 @@
 import { BadRequestException } from "@nestjs/common";
 import { OrdersService } from "./orders.service";
+import { createAuditServiceStub } from "./test-support/audit-service.stub";
 
 describe("OrdersService – eventgebundener Betriebsmodus", () => {
   const product = {
@@ -59,7 +60,10 @@ describe("OrdersService – eventgebundener Betriebsmodus", () => {
     "setzt für $status explizit $expected",
     async ({ status, testMode, expected }) => {
       const prisma = createPrisma({ status, testMode });
-      const service = new OrdersService(prisma);
+      const service = new OrdersService(
+        prisma,
+        createAuditServiceStub() as any,
+      );
 
       await service.createOrder("waiter-1", {
         eventId: "event-1",
@@ -85,7 +89,7 @@ describe("OrdersService – eventgebundener Betriebsmodus", () => {
   it("weist Produkte eines anderen Events vor der Transaktion zurück", async () => {
     const prisma = createPrisma({ status: "TEST_MODE", testMode: true });
     prisma.product.findMany.mockResolvedValue([]);
-    const service = new OrdersService(prisma);
+    const service = new OrdersService(prisma, createAuditServiceStub() as any);
 
     await expect(
       service.createOrder("waiter-1", {
@@ -125,7 +129,7 @@ describe("OrdersService – eventgebundener Betriebsmodus", () => {
     };
     const prisma = createPrisma({ status: "TEST_MODE", testMode: true });
     prisma.product.findMany.mockResolvedValue([productWithToppings]);
-    const service = new OrdersService(prisma);
+    const service = new OrdersService(prisma, createAuditServiceStub() as any);
 
     await expect(
       service.createOrder("waiter-1", {
