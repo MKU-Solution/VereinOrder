@@ -8,6 +8,7 @@ import {
 import { PrismaClient, Prisma } from "@vereinorder/database";
 import { PRISMA_CLIENT } from "../prisma/prisma.module";
 import { randomBytes } from "crypto";
+import { resolveTargetStationId } from "../common/target-station";
 
 interface CreateOrderDto {
   eventId: string;
@@ -547,7 +548,11 @@ export class OrdersService {
           },
         },
         include: {
-          items: { include: { product: true } },
+          items: {
+            include: {
+              product: { include: { category: true } },
+            },
+          },
           payments: true,
         },
       });
@@ -572,7 +577,7 @@ export class OrdersService {
             productId: item.productId,
             productName: item.product.name,
             variantName: item.variantName,
-            stationId: item.product.targetStationId,
+            stationId: resolveTargetStationId(item.product),
             issuedAt: voucher.issuedAt,
           });
         }
@@ -641,7 +646,8 @@ export class OrdersService {
     // 1. Group items by targetStation for STATION_TICKETS
     const itemsByStation = new Map<string, any[]>();
     for (const item of order.items) {
-      const stationId = item.product?.targetStationId || "NO_STATION";
+      const stationId =
+        (item.product && resolveTargetStationId(item.product)) || "NO_STATION";
       if (!itemsByStation.has(stationId)) {
         itemsByStation.set(stationId, []);
       }
@@ -891,7 +897,7 @@ export class OrdersService {
         include: {
           items: {
             include: {
-              product: true,
+              product: { include: { category: true } },
             },
           },
           payments: true,
@@ -909,7 +915,7 @@ export class OrdersService {
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },
       include: {
-        items: { include: { product: true } },
+        items: { include: { product: { include: { category: true } } } },
         payments: true,
       },
     });

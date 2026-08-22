@@ -10,6 +10,12 @@ describe("OrdersService – Bonkassen-Schnellverkauf für Issue #52", () => {
     name: "Bier",
     price: 450,
     eventId: "event-1",
+    categoryId: "category-drinks",
+    category: {
+      id: "category-drinks",
+      name: "Getränke",
+      targetStationId: null,
+    },
     targetStationId: null,
     availability: "AVAILABLE",
     optionGroups: [],

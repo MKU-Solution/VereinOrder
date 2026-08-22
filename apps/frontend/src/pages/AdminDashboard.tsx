@@ -280,7 +280,16 @@ export const AdminDashboard = () => {
     shortName?: string;
     sortOrder: number;
     printerId?: string;
-  }>({ name: "", shortName: "", sortOrder: 0, printerId: "" });
+    // Zielstation der Kategorie (Issue #84) - gilt für alle Produkte der
+    // Kategorie ohne eigene Ausnahme. Nur für activeTab === "categories".
+    targetStationId?: string;
+  }>({
+    name: "",
+    shortName: "",
+    sortOrder: 0,
+    printerId: "",
+    targetStationId: "",
+  });
   const [modalError, setModalError] = useState("");
   const [isSavingModal, setIsSavingModal] = useState(false);
 
@@ -352,6 +361,22 @@ export const AdminDashboard = () => {
     for (const p of printersList) map[p.id] = p;
     return map;
   }, [printersList]);
+
+  // Issue #84: Anzeige im Produktmodal, welche Station ohne eigene
+  // Ausnahme gilt - die Zielstation der gewählten Kategorie, sonst die
+  // zentrale Ausgabe. Berechnet aus den ohnehin geladenen Listen
+  // (productCategories, productStations), siehe handleOpenModal.
+  const inheritedStationLabel = useMemo(() => {
+    const selectedCategory = productCategories.find(
+      (c: any) => c.id === productFormData.categoryId,
+    );
+    if (!selectedCategory) return null;
+    if (!selectedCategory.targetStationId) return "Zentrale Ausgabe";
+    const station = productStations.find(
+      (s: any) => s.id === selectedCategory.targetStationId,
+    );
+    return station?.name || "Zentrale Ausgabe";
+  }, [productCategories, productStations, productFormData.categoryId]);
 
   // Event Modal State
   const [isEventModalOpen, setIsEventModalOpen] = useState(false);
@@ -619,6 +644,32 @@ export const AdminDashboard = () => {
           "Kategorien oder Stationen konnten nicht geladen werden. Bitte erneut versuchen.",
         );
       }
+    } else if (activeTab === "categories") {
+      setModalError("");
+      setEditingItem(item || null);
+      setFormData({
+        name: item?.name || "",
+        shortName: "",
+        sortOrder: item?.sortOrder ?? 0,
+        printerId: "",
+        targetStationId: item?.targetStationId || "",
+      });
+      setIsModalOpen(true);
+      if (!eventId) {
+        setModalError("Bitte wähle zuerst eine Veranstaltung aus.");
+        return;
+      }
+      try {
+        const stationsRes = await api.get(
+          `/stations/admin/all?eventId=${eventId}`,
+        );
+        setProductStations(stationsRes.data || []);
+      } catch (err) {
+        console.error("Failed to load stations for category modal", err);
+        setModalError(
+          "Stationen konnten nicht geladen werden. Bitte erneut versuchen.",
+        );
+      }
     } else {
       setModalError("");
       if (item) {
@@ -628,10 +679,17 @@ export const AdminDashboard = () => {
           shortName: item.shortName || "",
           sortOrder: item.sortOrder ?? 0,
           printerId: item.printerId || "",
+          targetStationId: "",
         });
       } else {
         setEditingItem(null);
-        setFormData({ name: "", shortName: "", sortOrder: 0, printerId: "" });
+        setFormData({
+          name: "",
+          shortName: "",
+          sortOrder: 0,
+          printerId: "",
+          targetStationId: "",
+        });
       }
       setIsModalOpen(true);
     }
@@ -737,7 +795,18 @@ export const AdminDashboard = () => {
           } else {
             await api.post(endpoint, { ...payload, eventId });
           }
-        } else if (activeTab === "areas" || activeTab === "categories") {
+        } else if (activeTab === "categories") {
+          const payload = {
+            name: formData.name,
+            sortOrder: formData.sortOrder,
+            targetStationId: formData.targetStationId || null,
+          };
+          if (editingItem) {
+            await api.patch(`${endpoint}/${editingItem.id}`, payload);
+          } else {
+            await api.post(endpoint, { ...payload, eventId });
+          }
+        } else if (activeTab === "areas") {
           const payload = {
             name: formData.name,
             sortOrder: formData.sortOrder,
@@ -807,6 +876,15 @@ export const AdminDashboard = () => {
       setModalError("Bitte gib einen Produktnamen ein.");
       return;
     }
+    if (!productFormData.categoryId) {
+      // Wortlaut deckungsgleich mit der Backend-Ablehnung
+      // (PRODUCT_CATEGORY_REQUIRED_MESSAGE in products.service.ts), damit
+      // dieselbe Regel nicht mit zwei verschiedenen Texten auftritt.
+      setModalError(
+        "Jedes Produkt braucht eine Kategorie. Bitte eine Kategorie auswählen.",
+      );
+      return;
+    }
     if (
       !/^\d+$/.test(euroInput) ||
       !/^\d+$/.test(centInput) ||
@@ -857,7 +935,7 @@ export const AdminDashboard = () => {
       const payload = {
         name,
         price,
-        categoryId: productFormData.categoryId || null,
+        categoryId: productFormData.categoryId,
         targetStationId: productFormData.targetStationId || null,
         sortOrder,
         optionGroups: buildOptionGroupsPayload(optionGroups),
@@ -3307,10 +3385,12 @@ export const AdminDashboard = () => {
                   htmlFor="product-category"
                   className="text-xs font-bold text-slate-400 block mb-1"
                 >
-                  Kategorie
+                  Kategorie (Pflichtfeld)
                 </label>
                 <select
                   id="product-category"
+                  required
+                  aria-required="true"
                   value={productFormData.categoryId}
                   onChange={(e) =>
                     setProductFormData({
@@ -3320,7 +3400,9 @@ export const AdminDashboard = () => {
                   }
                   className="w-full min-h-11 bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 text-white"
                 >
-                  <option value="">Keine Kategorie</option>
+                  <option value="" disabled>
+                    Bitte Kategorie wählen …
+                  </option>
                   {productCategories.map((category: any) => (
                     <option key={category.id} value={category.id}>
                       {category.name}
@@ -3333,7 +3415,7 @@ export const AdminDashboard = () => {
                   htmlFor="product-station"
                   className="text-xs font-bold text-slate-400 block mb-1"
                 >
-                  Zielstation
+                  Ausnahme-Zielstation (abweichend von der Kategorie)
                 </label>
                 <select
                   id="product-station"
@@ -3346,13 +3428,18 @@ export const AdminDashboard = () => {
                   }
                   className="w-full min-h-11 bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 text-white"
                 >
-                  <option value="">Keine Zielstation</option>
+                  <option value="">Keine Ausnahme</option>
                   {productStations.map((station: any) => (
                     <option key={station.id} value={station.id}>
                       {station.name}
                     </option>
                   ))}
                 </select>
+                <p className="text-xs text-slate-500 mt-1">
+                  {inheritedStationLabel
+                    ? `Ohne eigene Auswahl gilt die Station der Kategorie: ${inheritedStationLabel}.`
+                    : "Bitte zuerst eine Kategorie wählen, um die geltende Station zu sehen."}
+                </p>
               </div>
               <div>
                 <label
@@ -3495,6 +3582,40 @@ export const AdminDashboard = () => {
                     </select>
                   </div>
                 </>
+              )}
+
+              {activeTab === "categories" && (
+                <div>
+                  <label
+                    htmlFor="category-target-station"
+                    className="text-xs font-bold text-slate-400 block mb-1"
+                  >
+                    Zielstation der Kategorie
+                  </label>
+                  <select
+                    id="category-target-station"
+                    value={formData.targetStationId || ""}
+                    onChange={(e) =>
+                      setFormData({
+                        ...formData,
+                        targetStationId: e.target.value,
+                      })
+                    }
+                    className="w-full min-h-11 bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 text-white text-sm"
+                  >
+                    <option value="">Keine Zielstation</option>
+                    {productStations.map((station: any) => (
+                      <option key={station.id} value={station.id}>
+                        {station.name}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-xs text-slate-500 mt-1">
+                    Gilt für alle Produkte dieser Kategorie, sofern ein Produkt
+                    keine eigene abweichende Station hat. Ohne Auswahl leiten
+                    Bons dieser Kategorie an die zentrale Ausgabe.
+                  </p>
+                </div>
               )}
 
               <div>

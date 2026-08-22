@@ -113,16 +113,28 @@ model Station {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  // Produkte, die abweichend von ihrer Kategorie an diese Station gehen.
   products         Product[]
-  redeemedVouchers ProductVoucher[] @relation("VoucherRedemptionStation")
+  // Warengruppen, deren Vorgabe diese Station ist.
+  categories       ProductCategory[]
+  redeemedVouchers ProductVoucher[]  @relation("VoucherRedemptionStation")
 }
 
+// Die Warengruppe traegt die Zielstation ihrer Produkte (Issue #84). Speisen
+// gehen in die Kueche, Getraenke an die Schank; die Angabe wird einmal je
+// Gruppe gepflegt statt an jedem Artikel wiederholt.
 model ProductCategory {
-  id        String   @id @default(uuid())
+  id        String @id @default(uuid())
   name      String
-  sortOrder Int      @default(0)
+  sortOrder Int    @default(0)
   eventId   String
-  event     Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  event     Event  @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  // Vorgabe-Zielstation der Warengruppe. Gilt fuer jedes Produkt der Gruppe,
+  // das keine eigene Ausnahme traegt. NULL bedeutet zentrale Ausgabe.
+  targetStationId String?
+  targetStation   Station? @relation(fields: [targetStationId], references: [id], onDelete: SetNull)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -136,6 +148,9 @@ enum ProductAvailability {
   DISABLED
 }
 
+// Die Zielstation eines Produkts wird an genau einer Stelle aufgeloest
+// (Issue #84): Station des Produkts, sonst Station der Kategorie, sonst
+// zentrale Ausgabe. Das Backend darf diese Regel nicht mehrfach nachbauen.
 model Product {
   id           String              @id @default(uuid())
   name         String
@@ -148,9 +163,15 @@ model Product {
   imageUrl     String?
   availability ProductAvailability @default(AVAILABLE)
 
-  categoryId String?
-  category   ProductCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  // Pflicht: ohne Warengruppe waere die Zielstation unbestimmt. Restrict statt
+  // SetNull, weil eine Pflichtspalte nicht auf NULL gesetzt werden kann. Eine
+  // Kategorie mit Produkten laesst sich damit erst nach dem Umhaengen loeschen.
+  categoryId String
+  category   ProductCategory @relation(fields: [categoryId], references: [id], onDelete: Restrict)
 
+  // Ausnahme von der Zielstation der Kategorie, nicht die Regel. NULL ist der
+  // Normalfall und bedeutet: es gilt die Station der Kategorie. Ein Eintrag
+  // hier weicht bewusst davon ab und ueberstimmt die Kategorie.
   targetStationId String?
   targetStation   Station? @relation(fields: [targetStationId], references: [id], onDelete: SetNull)
 

@@ -9,6 +9,8 @@ describe("OrdersService – eventgebundener Betriebsmodus", () => {
     price: 350,
     availability: "AVAILABLE",
     optionGroups: [],
+    categoryId: "category-1",
+    category: { id: "category-1", name: "Getränke", targetStationId: null },
     targetStationId: null,
   };
 
