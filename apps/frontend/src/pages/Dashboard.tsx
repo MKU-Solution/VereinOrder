@@ -5,8 +5,63 @@ import { Trash2, Check, LayoutGrid, List, Minus, Bell } from "lucide-react";
 import { CheckoutModal } from "../components/CheckoutModal";
 import { ProductOptionsModal } from "../components/ProductOptionsModal";
 import { TableSelectionModal } from "../components/TableSelectionModal";
+import { OfflineQueueIndicator } from "../components/OfflineQueueIndicator";
+import { OfflineQueuePanel } from "../components/OfflineQueuePanel";
+import { useAuthStore } from "../store/useAuthStore";
+import {
+  countOpenOfflineOrders,
+  enqueueOfflineOrder,
+  OfflineQueueFullError,
+  OfflineQueueUnavailableError,
+  recoverInterruptedOfflineSends,
+  runOfflineQueueSync,
+  type OfflineCaptureContext,
+  type OfflineOrderItemInput,
+} from "../lib/offlineSync";
 
 const formatPrice = (cents: number) => `€ ${(cents / 100).toFixed(2)}`;
+
+// Der heute geltende Kontext einer Veranstaltung, wie ihn `GET
+// /sessions/context` liefert (siehe CashierDashboard.tsx für dasselbe
+// Muster). Wird lokal zwischengespeichert, weil `dataMode` und
+// `cashierSessionId` offline nicht abfragbar sind (Entwurf Abschnitt 4).
+interface EventContextEntry {
+  id: string;
+  name: string;
+  status: string;
+  testMode: boolean;
+  activeSession: { id: string } | null;
+}
+
+// Bildet Veranstaltungsstatus und Testmodus exakt so auf die Betriebsart ab
+// wie der Server es beim Anlegen einer Bestellung tut (siehe
+// offlineQueueContext.ts, `deriveDataModeFromEventStatus`). Absichtlich hier
+// noch einmal definiert statt von dort importiert: Dashboard.tsx bindet
+// ausschließlich an `offlineSync.ts`, die öffentliche Fassade der
+// Warteschlangen-Bibliothek.
+const deriveDataMode = (
+  status: unknown,
+  testMode: unknown,
+): "TEST" | "LIVE" | null => {
+  if (status === "ACTIVE" && !testMode) return "LIVE";
+  if (status === "TEST_MODE" && testMode) return "TEST";
+  return null;
+};
+
+// Antworten, bei denen unklar ist, ob der Server die Bestellung bereits
+// angelegt hat, gehören vorgemerkt statt in eine Fehlermeldung (Befund B9):
+// kein Netz, Zeitüberschreitung, sowie 408/425/429 und jedes 5xx.
+const QUEUEABLE_RETRY_STATUSES = new Set([408, 425, 429]);
+
+const shouldQueueOffline = (err: any): boolean => {
+  if (!navigator.onLine) return true;
+  const code = err?.code;
+  if (code === "ERR_NETWORK" || code === "ECONNABORTED") return true;
+  const status = err?.response?.status;
+  if (typeof status !== "number") return true;
+  if (status >= 500) return true;
+  return QUEUEABLE_RETRY_STATUSES.has(status);
+};
 
 // Hat ein Produkt eine Pflichtgruppe mit Endpreis (ABSOLUTE), zeigt die Kachel
 // den kleinsten Antwortpreis mit dem Zusatz "ab" (Entscheidung 2 der
@@ -247,6 +302,15 @@ export const Dashboard = () => {
     type: "warning" | "info";
   } | null>(null);
 
+  // Offline-Warteschlange (Issue #65): der zuletzt bekannte Betriebskontext
+  // je Veranstaltung, sichtbarer Verbindungszustand und Anzahl offener
+  // Vormerkungen, sowie die Warteschlangenansicht selbst.
+  const { user } = useAuthStore();
+  const [eventContexts, setEventContexts] = useState<EventContextEntry[]>([]);
+  const [openQueueCount, setOpenQueueCount] = useState(0);
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [isQueuePanelOpen, setIsQueuePanelOpen] = useState(false);
+
   const {
     items,
     addItem,
@@ -268,38 +332,68 @@ export const Dashboard = () => {
     }
   };
 
+  // Aktualisiert den zwischengespeicherten Betriebskontext je Veranstaltung
+  // über `GET /sessions/context` (Entwurf Abschnitt 4, Muster aus
+  // CashierDashboard.tsx). Das ist die einzige Stelle, an der Dashboard.tsx
+  // diesen Endpunkt selbst abfragt — die Warteschlangen-Bibliothek fragt ihn
+  // für ihre eigene Kontextprüfung unabhängig davon noch einmal ab.
+  const fetchSessionContexts = async () => {
+    try {
+      const res = await api.get("/sessions/context");
+      if (Array.isArray(res.data)) setEventContexts(res.data);
+    } catch (err) {
+      console.error("Failed to load session context", err);
+    }
+  };
+
+  const refreshOpenQueueCount = async () => {
+    try {
+      setOpenQueueCount(await countOpenOfflineOrders());
+    } catch (err) {
+      console.error("Failed to count offline queue", err);
+    }
+  };
+
   useEffect(() => {
     fetchProducts();
+    fetchSessionContexts();
+    refreshOpenQueueCount();
 
-    const syncOffline = async () => {
-      try {
-        const { getOfflineOrders, removeOfflineOrder } = await import(
-          "../lib/offlineSync"
-        );
-        const offlineOrders = await getOfflineOrders();
-        for (const order of offlineOrders) {
-          try {
-            await api.post("/orders", {
-              eventId: order.eventId,
-              items: order.items,
-              payments: order.payments,
-              idempotencyKey: order.idempotencyKey,
-              tableName: order.tableName,
-              areaId: order.areaId,
-            });
-            await removeOfflineOrder(order.idempotencyKey);
-          } catch (e) {
-            console.error("Failed to sync offline order", e);
-          }
-        }
-      } catch (err) {
-        console.error("Offline sync error", err);
-      }
+    // Ein vollständiger Sendeschleifen-Lauf (Abschnitt 7): Wiederherstellung
+    // unterbrochener Übertragungen, aktuellen Betriebskontext laden, dann
+    // `runOfflineQueueSync`. Die Bibliothek selbst sorgt für die
+    // anwendungsweite Sperre (Antwort auf B5) — mehrere Aufrufe hier
+    // (Start, "online", Intervall) überlappen sich also nie.
+    const runSync = async () => {
+      await recoverInterruptedOfflineSends();
+      await fetchSessionContexts();
+      await runOfflineQueueSync({
+        httpClient: api,
+        currentUserId: useAuthStore.getState().user?.userId ?? null,
+      });
+      await refreshOpenQueueCount();
     };
 
-    syncOffline();
-    window.addEventListener("online", syncOffline);
-    return () => window.removeEventListener("online", syncOffline);
+    void runSync();
+
+    const handleOnline = () => {
+      setIsOnline(true);
+      void runSync();
+    };
+    const handleOffline = () => setIsOnline(false);
+    window.addEventListener("online", handleOnline);
+    window.addEventListener("offline", handleOffline);
+
+    // Zusätzlich zu "online": abgelaufene Wartezeiten (`nextAttemptAt`)
+    // werden nur erreicht, wenn überhaupt erneut versucht wird, während die
+    // Anwendung offen bleibt (Entwurf Abschnitt 7, Auslöser).
+    const intervalId = window.setInterval(runSync, 60_000);
+
+    return () => {
+      window.removeEventListener("online", handleOnline);
+      window.removeEventListener("offline", handleOffline);
+      window.clearInterval(intervalId);
+    };
   }, []);
 
   // Realtime SSE Connection for Stock & Availability Updates
@@ -486,40 +580,84 @@ export const Dashboard = () => {
       setAreaId(undefined);
       setTimeout(() => setSuccessMsg(""), 2000);
     } catch (err: any) {
-      console.error("Order submission failed, saving offline", err);
+      console.error("Order submission failed", err);
 
-      if (!navigator.onLine || err.code === "ERR_NETWORK") {
-        const { saveOrderOffline } = await import("../lib/offlineSync");
-        const orderItems = items.map((i) => ({
-          productId: i.product.id,
-          quantity: i.quantity,
-          optionIds:
-            i.selectedOptions && i.selectedOptions.length > 0
-              ? i.selectedOptions.map((o) => o.id)
-              : undefined,
-        }));
-        const eventId = items[0].product.eventId;
-
-        await saveOrderOffline({
-          idempotencyKey,
-          eventId,
-          items: orderItems,
-          payments: payments || [],
-          tableName: nameToUse,
-          areaId: areaToUse,
-          createdAt: Date.now(),
-        });
-
-        setSuccessMsg("Offline gespeichert!");
-        clearCart();
-        setTableName("");
-        setAreaId(undefined);
-        setTimeout(() => setSuccessMsg(""), 3000);
-      } else {
+      if (!shouldQueueOffline(err)) {
         alert(
           "Fehler bei der Buchung: " +
             (err.response?.data?.message || err.message),
         );
+        return;
+      }
+
+      // Kein Kontext, keine Vormerkung (Kernpunkt des Issues, Befund B2):
+      // ohne Benutzer und ohne verlässlich bekannte Betriebsart der
+      // Veranstaltung wird nichts lokal gespeichert. `dataMode` ist offline
+      // nicht abfragbar, deshalb der zuletzt bekannte, online geladene Wert
+      // aus `eventContexts` (Entwurf Abschnitt 4).
+      const eventId = items[0].product.eventId;
+      const eventEntry = eventContexts.find((e) => e.id === eventId);
+      const dataMode = eventEntry
+        ? deriveDataMode(eventEntry.status, eventEntry.testMode)
+        : null;
+
+      if (!user || !dataMode) {
+        alert(
+          "Die Bestellung konnte nicht gesendet werden, und die Betriebsart (Test-/Echtbetrieb) dieser Veranstaltung ist gerade nicht bekannt. Bitte kurz auf eine Verbindung warten und danach erneut versuchen.",
+        );
+        return;
+      }
+
+      const context: OfflineCaptureContext = {
+        userId: user.userId,
+        username: user.username,
+        userRole: user.role,
+        eventId,
+        eventName: eventEntry?.name ?? null,
+        dataMode,
+        cashierSessionId: eventEntry?.activeSession?.id ?? null,
+      };
+
+      const orderItems: OfflineOrderItemInput[] = items.map((i) => ({
+        productId: i.product.id,
+        quantity: i.quantity,
+        optionIds:
+          i.selectedOptions && i.selectedOptions.length > 0
+            ? i.selectedOptions.map((o) => o.id)
+            : [],
+        productName: i.product.shortName || i.product.name || null,
+        unitPriceAtCapture: i.finalPrice ?? null,
+      }));
+
+      try {
+        await enqueueOfflineOrder({
+          idempotencyKey,
+          context,
+          items: orderItems,
+          payments: payments || [],
+          tableName: nameToUse,
+          areaId: areaToUse ?? null,
+          totalAtCapture: total,
+        });
+
+        setSuccessMsg("Lokal vorgemerkt");
+        clearCart();
+        setTableName("");
+        setAreaId(undefined);
+        setTimeout(() => setSuccessMsg(""), 3000);
+        void refreshOpenQueueCount();
+      } catch (queueErr) {
+        if (
+          queueErr instanceof OfflineQueueFullError ||
+          queueErr instanceof OfflineQueueUnavailableError
+        ) {
+          alert(queueErr.message);
+        } else {
+          console.error("Failed to enqueue offline order", queueErr);
+          alert(
+            "Die Bestellung konnte weder gesendet noch lokal vorgemerkt werden.",
+          );
+        }
       }
     } finally {
       setIsSubmitting(false);
@@ -561,6 +699,15 @@ export const Dashboard = () => {
           <span>{toastMessage.text}</span>
         </div>
       )}
+
+      {/* Dauerhafter Hinweis auf Verbindungszustand und offene Vormerkungen
+          (Issue #65). Nie mit einer bestätigten Bestellung verwechselbar:
+          eigener Wortlaut "vorgemerkt" statt "gesendet"/"bestätigt". */}
+      <OfflineQueueIndicator
+        openCount={openQueueCount}
+        isOnline={isOnline}
+        onOpen={() => setIsQueuePanelOpen(true)}
+      />
 
       {/* Cart List (White background) */}
       <div className="flex-1 overflow-y-auto bg-white pb-2 touch-pan-y">
@@ -776,6 +923,19 @@ export const Dashboard = () => {
           setAreaId(selectedAreaId);
         }}
         eventId={products.length > 0 ? products[0].eventId : null}
+      />
+
+      <OfflineQueuePanel
+        isOpen={isQueuePanelOpen}
+        onClose={() => setIsQueuePanelOpen(false)}
+        httpClient={api}
+        currentUser={
+          user
+            ? { userId: user.userId, username: user.username, role: user.role }
+            : null
+        }
+        eventContexts={eventContexts}
+        onQueueChanged={refreshOpenQueueCount}
       />
     </div>
   );

@@ -1,5 +1,6 @@
 import { BadRequestException } from "@nestjs/common";
 import { OrdersService } from "./orders.service";
+import { createAuditServiceStub } from "./test-support/audit-service.stub";
 
 // Unit-Tests fuer die Preisberechnung einer Bestellposition nach Issue #75
 // (docs/development/produktoptionen-datenmodell.md, "Preisberechnung einer
@@ -18,7 +19,7 @@ describe("OrdersService – resolveOrderItemPricing (Issue #75)", () => {
 
   beforeEach(() => {
     // Der Prisma-Client wird von resolveOrderItemPricing nicht verwendet.
-    service = new OrdersService({} as any);
+    service = new OrdersService({} as any, createAuditServiceStub() as any);
   });
 
   const resolve = (product: any, optionIds: string[]) =>

@@ -48,6 +48,48 @@ export class OrdersController {
     return this.ordersService.createOrder(userId, body);
   }
 
+  // Issue #65, Abschnitt 7 und Abschnitt 8 Punkte 1 und 2: die beiden
+  // folgenden Rollenlisten haengen zusammen und muessen es bleiben. Das
+  // Verwerfen (POST offline-queue/discard, unten) verlangt laut Abschnitt 7
+  // zwingend den Serverkontakt dieser Auskunft (GET by-idempotency-key/:key)
+  // davor. Jede Rolle, die dort verwerfen darf, muss deshalb auch hier die
+  // Auskunft abrufen duerfen - sonst scheitert eine erlaubte Rolle schon am
+  // vorgeschriebenen Vorlauf mit 403 und erreicht das Verwerfen nie. Die
+  // Auskunft darf umgekehrt mehr Rollen zulassen als das Verwerfen; das ist
+  // keine Luecke. EVENT_MANAGER steht deshalb in beiden Listen -
+  // Entscheidung 11.5 gibt ihm das Verwerfen uebernommener Altbestaende,
+  // und der Service behandelt ihn hier ohnehin schon als jemanden, der
+  // fremde Eintraege sehen darf (siehe canSeeForeignOrders in
+  // getOrderByIdempotencyKey, orders.service.ts).
+  @Get("by-idempotency-key/:key")
+  @Roles("ADMINISTRATOR", "EVENT_MANAGER", "WAITER", "CASHIER")
+  async getOrderByIdempotencyKey(
+    @Request() req: any,
+    @Param("key") key: string,
+  ) {
+    return this.ordersService.getOrderByIdempotencyKey(
+      req.user?.userId,
+      req.user?.role,
+      key,
+    );
+  }
+
+  // Rollenliste ist eine Teilmenge der Liste bei getOrderByIdempotencyKey
+  // oben, und muss es bleiben (siehe Kommentar dort): jede Rolle hier
+  // braucht zwingend Zugriff auf die Auskunft davor. Die feingranulare
+  // Pruefung - wer im Einzelfall verwerfen darf, abhaengig von Herkunft
+  // (legacy) und Zahlungen - liegt im Service (discardOfflineQueueEntry),
+  // nicht im Rollen-Gate.
+  @Post("offline-queue/discard")
+  @Roles("ADMINISTRATOR", "EVENT_MANAGER", "WAITER", "CASHIER")
+  async discardOfflineQueueEntry(@Request() req: any, @Body() body: any) {
+    return this.ordersService.discardOfflineQueueEntry(
+      req.user?.userId,
+      req.user?.role,
+      body,
+    );
+  }
+
   @Get("unpaid")
   @Roles("ADMINISTRATOR", "WAITER", "CASHIER")
   async getUnpaidOrders(@Query("eventId") eventId: string) {
