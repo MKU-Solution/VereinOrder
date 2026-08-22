@@ -19,8 +19,12 @@ export default defineConfig({
   },
   webServer: [
     {
+      // Die Pakete werden hier einzeln gebaut, nicht ueber "pnpm build". Neue
+      // Arbeitsbereichspakete muessen deshalb ergaenzt werden: @vereinorder/shared
+      // wird zur Laufzeit von orders.service ueber seinen dist-Einstieg geladen,
+      // und start:prod baut nichts nach.
       command:
-        "pnpm --filter @vereinorder/database run build && pnpm --filter @vereinorder/backend run build && pnpm --filter @vereinorder/backend run start:prod",
+        "pnpm --filter @vereinorder/shared run build && pnpm --filter @vereinorder/database run build && pnpm --filter @vereinorder/backend run build && pnpm --filter @vereinorder/backend run start:prod",
       url: `http://127.0.0.1:${backendPort}/diagnostics/status`,
       timeout: 120_000,
       reuseExistingServer: false,

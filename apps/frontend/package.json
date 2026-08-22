@@ -9,10 +9,12 @@
     "format:check": "prettier --check . --ignore-unknown --ignore-path ../../.prettierignore",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json",
+    "pretest": "pnpm --filter @vereinorder/shared run build",
     "test": "vitest run",
     "preview": "vite preview"
   },
   "dependencies": {
+    "@vereinorder/shared": "workspace:*",
     "axios": "^1.7.0",
     "idb": "^8.0.3",
     "lucide-react": "^0.378.0",

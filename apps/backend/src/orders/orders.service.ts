@@ -11,6 +11,7 @@ import { PRISMA_CLIENT } from "../prisma/prisma.module";
 import { randomBytes } from "crypto";
 import { resolveTargetStationId } from "../common/target-station";
 import { AuditService } from "../audit/audit.service";
+import { ORDER_REJECTION_MESSAGES } from "@vereinorder/shared";
 
 interface CreateOrderDto {
   eventId: string;
@@ -340,7 +341,7 @@ export class OrdersService {
       dto.items.length > 50
     ) {
       throw new BadRequestException(
-        "Quick sale must contain between 1 and 50 positions",
+        "Ein Schnellverkauf braucht mindestens eine und höchstens 50 Positionen. Bitte die Auswahl entsprechend anpassen.",
       );
     }
     if (!["CASH", "CARD"].includes(dto.paymentMethod)) {
@@ -357,14 +358,14 @@ export class OrdersService {
         item.quantity > 100
       ) {
         throw new BadRequestException(
-          "Every position needs a quantity between 1 and 100",
+          "Jede Position braucht eine Menge zwischen 1 und 100. Bitte die Menge korrigieren.",
         );
       }
       return sum + item.quantity;
     }, 0);
     if (totalQuantity > 100) {
       throw new BadRequestException(
-        "A quick sale cannot issue more than 100 product vouchers",
+        "Pro Verkauf können höchstens 100 Produktbons ausgegeben werden. Bitte den Verkauf aufteilen.",
       );
     }
 
@@ -418,7 +419,9 @@ export class OrdersService {
           requestedItems.length !== storedItems.length ||
           requestedItems.some((item, index) => item !== storedItems[index])
         ) {
-          throw new BadRequestException("idempotencyKey is already in use");
+          throw new BadRequestException(
+            ORDER_REJECTION_MESSAGES.IDEMPOTENCY_KEY_CONFLICT,
+          );
         }
         return {
           order: existingOrder,
@@ -442,7 +445,9 @@ export class OrdersService {
             ? "TEST"
             : null;
       if (!dataMode)
-        throw new BadRequestException("Event is not active for sales");
+        throw new BadRequestException(
+          ORDER_REJECTION_MESSAGES.EVENT_NOT_ACTIVE_FOR_SALES,
+        );
 
       const activePrinter = await prisma.printer.findFirst({
         where: { isActive: true },
@@ -491,14 +496,14 @@ export class OrdersService {
         const product = productsById.get(item.productId);
         if (!product)
           throw new BadRequestException(
-            "Product does not belong to the selected event",
+            ORDER_REJECTION_MESSAGES.PRODUCT_NOT_IN_EVENT_QUICK_SALE,
           );
         if (
           product.availability === "OUT_OF_STOCK" ||
           product.availability === "DISABLED"
         ) {
           throw new BadRequestException(
-            `Product ${product.name} is currently out of stock`,
+            ORDER_REJECTION_MESSAGES.PRODUCT_OUT_OF_STOCK(product.name),
           );
         }
 
@@ -521,7 +526,9 @@ export class OrdersService {
         totalAmount <= 0 ||
         totalAmount > 2_147_483_647
       ) {
-        throw new BadRequestException("Quick-sale total is invalid");
+        throw new BadRequestException(
+          "Der Gesamtbetrag dieses Verkaufs ist ungültig. Bitte den Verkauf neu zusammenstellen.",
+        );
       }
 
       let tenderedAmount: number;
@@ -534,7 +541,7 @@ export class OrdersService {
           tenderedAmount > 2_147_483_647
         ) {
           throw new BadRequestException(
-            "Tendered cash must cover the total amount",
+            "Der gegebene Barbetrag muss den Gesamtbetrag vollständig abdecken.",
           );
         }
         changeAmount = tenderedAmount - totalAmount;
@@ -544,14 +551,15 @@ export class OrdersService {
           dto.tenderedAmount !== totalAmount
         ) {
           throw new BadRequestException(
-            "Card payment must match the total amount",
+            "Der Kartenbetrag muss dem Gesamtbetrag entsprechen. Bitte den Betrag korrigieren.",
           );
         }
         tenderedAmount = totalAmount;
       }
 
       const user = await prisma.user.findUnique({ where: { id: userId } });
-      if (!user?.isActive) throw new BadRequestException("User is not active");
+      if (!user?.isActive)
+        throw new BadRequestException(ORDER_REJECTION_MESSAGES.USER_NOT_ACTIVE);
 
       const order = await prisma.order.create({
         data: {
@@ -880,14 +888,16 @@ export class OrdersService {
       !sameItems ||
       !samePayments
     ) {
-      throw new BadRequestException("idempotencyKey is already in use");
+      throw new BadRequestException(
+        ORDER_REJECTION_MESSAGES.IDEMPOTENCY_KEY_CONFLICT,
+      );
     }
     return existingOrder;
   }
 
   async createOrder(userId: string, dto: CreateOrderDto) {
     if (!dto.items || dto.items.length === 0) {
-      throw new BadRequestException("Order must contain at least one item");
+      throw new BadRequestException(ORDER_REJECTION_MESSAGES.ORDER_EMPTY);
     }
 
     const idempotentOrder = await this.resolveIdempotentOrder(userId, dto);
@@ -905,13 +915,15 @@ export class OrdersService {
     const orderItemsData = dto.items.map((item) => {
       const product = productMap.get(item.productId);
       if (!product)
-        throw new BadRequestException(`Product ${item.productId} not found`);
+        throw new BadRequestException(
+          ORDER_REJECTION_MESSAGES.PRODUCT_NOT_IN_EVENT(item.productId),
+        );
       if (
         product.availability === "OUT_OF_STOCK" ||
         product.availability === "DISABLED"
       ) {
         throw new BadRequestException(
-          `Product ${product.name} is currently out of stock`,
+          ORDER_REJECTION_MESSAGES.PRODUCT_OUT_OF_STOCK(product.name),
         );
       }
 
@@ -945,7 +957,7 @@ export class OrdersService {
       });
       if (!area)
         throw new BadRequestException(
-          "Area does not belong to the selected event",
+          ORDER_REJECTION_MESSAGES.AREA_NOT_IN_EVENT,
         );
     }
 
@@ -964,7 +976,9 @@ export class OrdersService {
               ? "TEST"
               : null;
         if (!orderDataMode)
-          throw new BadRequestException("Event is not active for orders");
+          throw new BadRequestException(
+            ORDER_REJECTION_MESSAGES.EVENT_NOT_ACTIVE_FOR_ORDERS,
+          );
         const activeSession = userId
           ? await prisma.cashierSession.findFirst({
               where: { userId, eventId: dto.eventId, status: "ACTIVE" },
@@ -992,7 +1006,9 @@ export class OrdersService {
           ? await prisma.user.findUnique({ where: { id: userId } })
           : null;
         if (!user?.isActive) {
-          throw new BadRequestException("User is not active");
+          throw new BadRequestException(
+            ORDER_REJECTION_MESSAGES.USER_NOT_ACTIVE,
+          );
         }
         const order = await prisma.order.create({
           data: {
@@ -1367,9 +1383,14 @@ export class OrdersService {
         include: { items: true, payments: true },
       });
 
-      if (!order) throw new NotFoundException("Order not found");
+      if (!order)
+        throw new NotFoundException(
+          "Diese Bestellung wurde nicht gefunden. Bitte die Ansicht aktualisieren.",
+        );
       if (order.lifecycleStatus === "CANCELLED")
-        throw new BadRequestException("Order is already cancelled");
+        throw new BadRequestException(
+          "Diese Bestellung ist bereits storniert.",
+        );
 
       const updatedOrder = await prisma.order.update({
         where: { id: orderId },
@@ -1415,9 +1436,12 @@ export class OrdersService {
         include: { order: { include: { items: true } } },
       });
 
-      if (!item) throw new NotFoundException("OrderItem not found");
+      if (!item)
+        throw new NotFoundException(
+          "Diese Position wurde nicht gefunden. Bitte die Ansicht aktualisieren.",
+        );
       if (item.status === "CANCELLED")
-        throw new BadRequestException("Item is already cancelled");
+        throw new BadRequestException("Diese Position ist bereits storniert.");
 
       const updatedItem = await prisma.orderItem.update({
         where: { id: orderItemId },

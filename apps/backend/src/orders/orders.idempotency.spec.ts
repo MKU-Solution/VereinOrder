@@ -244,7 +244,7 @@ describe("OrdersService – Idempotenzpruefung von createOrder für Issue #86", 
         items: [{ productId: "product-1", quantity: 99 }],
         payments: [{ amount: 12345, method: "CARD" }],
       }),
-    ).rejects.toThrow(/idempotencyKey is already in use/);
+    ).rejects.toBeInstanceOf(BadRequestException);
 
     try {
       await service.createOrder("other-user", {

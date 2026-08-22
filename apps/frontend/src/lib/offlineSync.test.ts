@@ -24,6 +24,11 @@ import {
   type OfflineOrderRecord,
   type OfflineSyncHttpClient,
 } from "./offlineSync";
+// Issue #89: der Beispieltext fuer eine fachliche Ablehnung stammt aus der
+// echten Quelle im gemeinsam genutzten Paket, nicht aus einer hier
+// abgetippten Kopie - siehe Begruendung in offlineQueueClassify.test.ts und
+// packages/shared/index.ts.
+import { ORDER_REJECTION_MESSAGES } from "@vereinorder/shared";
 
 const LIVE_CONTEXT = [
   {
@@ -202,7 +207,10 @@ describe("Sendeschleife: Zustandsübergänge (Abschnitt 2 und 3)", () => {
     httpClient.post.mockRejectedValue({
       response: {
         status: 400,
-        data: { message: "Product sold-out-product is currently out of stock" },
+        data: {
+          message:
+            ORDER_REJECTION_MESSAGES.PRODUCT_OUT_OF_STOCK("sold-out-product"),
+        },
       },
     });
 
@@ -219,7 +227,7 @@ describe("Sendeschleife: Zustandsübergänge (Abschnitt 2 und 3)", () => {
     expect(record.attempt).toBe(1);
     // Der gespeicherte Fehlertext darf keine Tokens oder Stacktraces enthalten.
     expect(record.lastError?.messageForOperator).toBe(
-      "Product sold-out-product is currently out of stock",
+      ORDER_REJECTION_MESSAGES.PRODUCT_OUT_OF_STOCK("sold-out-product"),
     );
 
     // Zweiter Lauf: der Eintrag ist nicht mehr LOCAL_PENDING, also greift die

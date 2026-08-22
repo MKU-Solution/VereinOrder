@@ -5,6 +5,13 @@ import {
   computeNextAttemptDelayMs,
   sanitizeOperatorMessage,
 } from "./offlineQueueClassify";
+// Issue #89: die Backend-Texte fuer fachliche Ablehnungen der
+// Bestellannahme sind deutsch. Statt sie hier erneut abzutippen (was genau
+// die Falle war, die die Ursachenzeile beim ersten Anlauf von #89 lautlos
+// hat wegdriften lassen), wird die tatsaechliche Quelle aus dem gemeinsam
+// genutzten Paket importiert - siehe packages/shared/index.ts fuer die
+// Begruendung dieser Kopplung und ihre Grenzen.
+import { ORDER_REJECTION_MESSAGES } from "@vereinorder/shared";
 
 const RECORD = { idempotencyKey: "key-1", eventId: "event-1" };
 
@@ -47,7 +54,9 @@ describe("Einordnung der Serverantworten (Abschnitt 3)", () => {
       error: {
         response: {
           status: 400,
-          data: { message: "Product xyz is currently out of stock" },
+          data: {
+            message: ORDER_REJECTION_MESSAGES.PRODUCT_OUT_OF_STOCK("xyz"),
+          },
         },
       },
     });
@@ -116,6 +125,62 @@ describe("Einordnung der Serverantworten (Abschnitt 3)", () => {
     if (outcome.nextState === "RETRY") {
       expect(outcome.retryAfterMs).toBe(30_000);
     }
+  });
+});
+
+// Issue #89: die Zuordnung Backend-Text -> Ursache in classifyConflictKind
+// laeuft ausschliesslich ueber Text-Matching und hat keinen Compiler, der bei
+// einer Textaenderung im Backend automatisch mitzoege. Genau das ist beim
+// ersten Anlauf von Issue #89 passiert: die Meldungen wurden von Englisch
+// auf Deutsch umgestellt, die Muster oben blieben aber auf den alten
+// englischen Texten stehen - sechs Ursachen fielen dadurch lautlos auf den
+// generischen UNKNOWN_4XX-Text zurueck ("Der Server hat die Bestellung
+// abgelehnt.") statt ihre eigene Ursachenzeile zu zeigen. Bemerkt wurde das
+// nur durch eine manuelle Abnahme der Konfliktansicht, nicht durch einen
+// roten Test.
+//
+// Dieser Block importiert die tatsaechlichen Backend-Texte (siehe Import
+// oben) und prueft jede Zuordnung gegenueber der echten Quelle, statt einer
+// hier erneut abgetippten Kopie. Faellt eine dieser Pruefungen auf
+// UNKNOWN_4XX statt der erwarteten Ursache, ist entweder ein Muster oben
+// veraltet oder ein Backend-Text hat sich geaendert, ohne dass das Muster
+// nachgezogen wurde.
+describe("classifyConflictKind haelt mit den deutschen Backend-Texten Schritt (Issue #89)", () => {
+  it.each([
+    [
+      "Veranstaltung nicht aktiv (Bestellannahme)",
+      ORDER_REJECTION_MESSAGES.EVENT_NOT_ACTIVE_FOR_ORDERS,
+      "EVENT_MODE",
+    ],
+    [
+      "Produkt ausverkauft",
+      ORDER_REJECTION_MESSAGES.PRODUCT_OUT_OF_STOCK(
+        "Wienerschnitzel mit Pommes",
+      ),
+      "PRODUCT_UNAVAILABLE",
+    ],
+    [
+      "Produkt gehört nicht zur Veranstaltung (Bestellannahme)",
+      ORDER_REJECTION_MESSAGES.PRODUCT_NOT_IN_EVENT("product-123"),
+      "PRODUCT_UNAVAILABLE",
+    ],
+    [
+      "Bereich gehört nicht zur Veranstaltung",
+      ORDER_REJECTION_MESSAGES.AREA_NOT_IN_EVENT,
+      "VALIDATION",
+    ],
+    [
+      "Bestellung ohne Position",
+      ORDER_REJECTION_MESSAGES.ORDER_EMPTY,
+      "VALIDATION",
+    ],
+    [
+      "Benutzerkonto nicht aktiv",
+      ORDER_REJECTION_MESSAGES.USER_NOT_ACTIVE,
+      "FORBIDDEN",
+    ],
+  ] as const)("%s -> %s", (_label, backendMessage, expectedKind) => {
+    expect(classifyConflictKind(400, backendMessage)).toBe(expectedKind);
   });
 });
 

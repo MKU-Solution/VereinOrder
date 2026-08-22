@@ -6,9 +6,16 @@ WORKDIR /app
 RUN corepack enable && corepack prepare pnpm@9.15.4 --activate
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY packages/shared/package.json ./packages/shared/
 COPY apps/frontend/package.json ./apps/frontend/
 
 RUN pnpm install --frozen-lockfile
+
+# Copy and build the shared package (Issue #89: gemeinsame Texte fuer
+# fachliche Ablehnungen, die Backend und Frontend uebereinstimmend
+# verwenden muessen)
+COPY packages/shared ./packages/shared
+RUN pnpm --filter @vereinorder/shared run build
 
 COPY apps/frontend ./apps/frontend
 RUN pnpm --filter @vereinorder/frontend run build
