@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState, useMemo, useRef } from "react";
 import { api } from "../lib/api";
 import { useCartStore, CartItem as CartItemType } from "../store/useCartStore";
 import { Trash2, Check, LayoutGrid, List, Minus, Bell } from "lucide-react";
@@ -7,6 +7,7 @@ import { ProductOptionsModal } from "../components/ProductOptionsModal";
 import { TableSelectionModal } from "../components/TableSelectionModal";
 import { OfflineQueueIndicator } from "../components/OfflineQueueIndicator";
 import { OfflineQueuePanel } from "../components/OfflineQueuePanel";
+import { CatalogLoadError } from "../components/CatalogLoadError";
 import { useAuthStore } from "../store/useAuthStore";
 import {
   countOpenOfflineOrders,
@@ -62,6 +63,16 @@ const shouldQueueOffline = (err: any): boolean => {
   if (status >= 500) return true;
   return QUEUEABLE_RETRY_STATUSES.has(status);
 };
+
+// Wachsender Abstand für den automatischen Neuladeversuch des
+// Produktkatalogs, solange dieser leer geblieben ist (Issue #90). Start bei
+// 2 s, danach Verdopplung, gedeckelt bei 30 s: kurz genug, dass die Kasse
+// nach einer Sekunden-Störung zügig wieder benutzbar wird, lang genug, um
+// den Server während eines längeren Ausfalls nicht im Sekundentakt zu
+// bestürmen. Die Schaltfläche im Hinweis erlaubt jederzeit einen
+// sofortigen Versuch von Hand, unabhängig vom aktuellen Abstand.
+const CATALOG_RETRY_BASE_MS = 2_000;
+const CATALOG_RETRY_MAX_MS = 30_000;
 
 // Hat ein Produkt eine Pflichtgruppe mit Endpreis (ABSOLUTE), zeigt die Kachel
 // den kleinsten Antwortpreis mit dem Zusatz "ab" (Entscheidung 2 der
@@ -276,6 +287,22 @@ const categoryColors = [
 export const Dashboard = () => {
   const [products, setProducts] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  // Eigener Zustand für "Katalog konnte nicht geladen werden" (Issue #90),
+  // getrennt von isLoading: isLoading beschreibt nur den allerersten
+  // Ladevorgang, catalogError bleibt auch danach bestehen, solange kein
+  // Versuch mehr Erfolg hatte. Ein gescheiterter Versuch setzt `products`
+  // nie zurück (siehe fetchProducts unten) — ein bereits angezeigter
+  // Katalog bleibt also stehen, auch wenn catalogError zwischenzeitlich
+  // wahr wird.
+  const [catalogError, setCatalogError] = useState(false);
+  // Verhindert, dass die Schaltfläche im Hinweis einen zweiten Versuch
+  // parallel zu einem laufenden auslöst (siehe auch catalogFetchInFlightRef,
+  // der zusätzlich automatische Versuche und Handauslöser gegeneinander
+  // absichert).
+  const [isCatalogRetrying, setIsCatalogRetrying] = useState(false);
+  const catalogFetchInFlightRef = useRef(false);
+  const catalogRetryTimeoutRef = useRef<number | null>(null);
+  const catalogRetryDelayRef = useRef(CATALOG_RETRY_BASE_MS);
   const [isCheckoutOpen, setIsCheckoutOpen] = useState(false);
   const [isTableModalOpen, setIsTableModalOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -321,15 +348,67 @@ export const Dashboard = () => {
     total,
   } = useCartStore();
 
+  // Merkt einen erneuten Versuch mit wachsendem Abstand vor, solange der
+  // Katalog leer geblieben ist (Issue #90). Wird von fetchProducts unten nur
+  // aufgerufen, wenn nach einem Fehlschlag noch keine Produkte vorliegen —
+  // ein Ladefehler nach bereits erfolgreich gefülltem Katalog löst keine
+  // weiteren automatischen Versuche aus, da dort kein leerer Bildschirm
+  // droht.
+  const scheduleCatalogRetry = () => {
+    if (catalogRetryTimeoutRef.current != null) return; // schon vorgemerkt
+    const delay = catalogRetryDelayRef.current;
+    catalogRetryTimeoutRef.current = window.setTimeout(() => {
+      catalogRetryTimeoutRef.current = null;
+      catalogRetryDelayRef.current = Math.min(
+        catalogRetryDelayRef.current * 2,
+        CATALOG_RETRY_MAX_MS,
+      );
+      void fetchProducts();
+    }, delay);
+  };
+
+  const clearScheduledCatalogRetry = () => {
+    if (catalogRetryTimeoutRef.current != null) {
+      window.clearTimeout(catalogRetryTimeoutRef.current);
+      catalogRetryTimeoutRef.current = null;
+    }
+  };
+
   const fetchProducts = async () => {
+    // Schützt gegen parallele Versuche: automatischer Zeitgeber, "online"
+    // -Ereignis und die Schaltfläche im Hinweis können gleichzeitig auslösen
+    // wollen, es darf aber immer nur eine Anfrage unterwegs sein.
+    if (catalogFetchInFlightRef.current) return;
+    catalogFetchInFlightRef.current = true;
+    setIsCatalogRetrying(true);
     try {
       const res = await api.get("/products");
       setProducts(res.data);
+      setCatalogError(false);
+      catalogRetryDelayRef.current = CATALOG_RETRY_BASE_MS;
+      clearScheduledCatalogRetry();
     } catch (err) {
       console.error("Failed to load products", err);
+      setCatalogError(true);
+      // setProducts wird hier absichtlich nicht mit einem leeren Ergebnis
+      // aufgerufen: ein bereits angezeigter Katalog bleibt bei einem
+      // gescheiterten Versuch unverändert stehen (Akzeptanzkriterium aus
+      // Issue #90). Der functional-update-Aufruf dient nur dem Lesen des
+      // aktuellen Bestands, ohne eine weitere Abhängigkeit einzuführen.
+      setProducts((prev) => {
+        if (prev.length === 0) scheduleCatalogRetry();
+        return prev;
+      });
     } finally {
       setIsLoading(false);
+      catalogFetchInFlightRef.current = false;
+      setIsCatalogRetrying(false);
     }
+  };
+
+  const handleCatalogRetryClick = () => {
+    clearScheduledCatalogRetry();
+    void fetchProducts();
   };
 
   // Aktualisiert den zwischengespeicherten Betriebskontext je Veranstaltung
@@ -378,6 +457,13 @@ export const Dashboard = () => {
 
     const handleOnline = () => {
       setIsOnline(true);
+      // Wiederkehr der Verbindung soll den Katalog ohne Neuladen der Seite
+      // nachladen (Issue #90). Kein zweiter "online"-Behandler: dieser hier
+      // bediente bereits die Sendeschleife, der Katalogversuch hängt sich
+      // nur an. fetchProducts schützt selbst gegen Überlappung mit einem
+      // gerade laufenden automatischen oder von Hand ausgelösten Versuch.
+      clearScheduledCatalogRetry();
+      void fetchProducts();
       void runSync();
     };
     const handleOffline = () => setIsOnline(false);
@@ -393,7 +479,18 @@ export const Dashboard = () => {
       window.removeEventListener("online", handleOnline);
       window.removeEventListener("offline", handleOffline);
       window.clearInterval(intervalId);
+      clearScheduledCatalogRetry();
     };
+    // fetchProducts, fetchSessionContexts und refreshOpenQueueCount sind wie
+    // schon vor Issue #90 absichtlich nicht in den Abhängigkeiten: Dieser
+    // Effekt läuft bewusst nur beim Aufbau der Seite, alle erneuten Aufrufe
+    // laufen über die hier verdrahteten Auslöser ("online", Zeitgeber,
+    // Schaltfläche) statt über einen erneuten Lauf des Effekts selbst.
+    // fetchProducts bleibt zwischen Aufrufen inhaltlich stabil (berührt nur
+    // Refs, Zustandssetter und den unveränderlichen `api`-Client) — die Regel
+    // kann das aber nicht erkennen, sobald es intern clearScheduledCatalogRetry
+    // aufruft, und verlangt es deshalb hier zusätzlich als Abhängigkeit.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Realtime SSE Connection for Stock & Availability Updates
@@ -770,7 +867,15 @@ export const Dashboard = () => {
 
       {/* Product List/Grid */}
       <div className="h-[40vh] bg-slate-800 overflow-y-auto shrink-0 overscroll-contain">
-        {viewMode === "grid" ? (
+        {catalogError && products.length === 0 ? (
+          // Ersetzt die leere Kachelfläche durch einen verständlichen
+          // Hinweis mit Handauslöser (Issue #90) — statt der Kategorieleiste
+          // ohne jede Erklärung, wie es bei der Abnahme zu #65 auffiel.
+          <CatalogLoadError
+            onRetry={handleCatalogRetryClick}
+            isRetrying={isCatalogRetrying}
+          />
+        ) : viewMode === "grid" ? (
           <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-1 p-1">
             {filteredProducts.map((p) => {
               const isOut = p.availability === "OUT_OF_STOCK";
