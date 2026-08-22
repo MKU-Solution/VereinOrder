@@ -3207,7 +3207,12 @@ export const AdminDashboard = () => {
             aria-modal="true"
             aria-labelledby="product-modal-title"
             onKeyDown={(e) => handleModalEscape(e, closeProductModal)}
-            className="bg-slate-900 border border-slate-800 p-6 rounded-3xl max-w-lg w-full max-h-[calc(100vh-2rem)] overflow-y-auto shadow-2xl space-y-4"
+            // Breiter als die uebrigen Modale: Seit Issue #75 werden hier auch
+            // Auswahlgruppen gepflegt. Deren Antwortzeilen tragen Bezeichnung,
+            // Vorzeichen, Euro, Cent, zwei Sortierpfeile und "Entfernen"; bei
+            // max-w-lg bricht jede Zeile mehrfach um. Handy und Tablet bleiben
+            // unveraendert, dort ist die Breite ohnehin vom Bildschirm begrenzt.
+            className="bg-slate-900 border border-slate-800 p-6 rounded-3xl max-w-lg md:max-w-2xl lg:max-w-4xl w-full max-h-[calc(100vh-2rem)] overflow-y-auto shadow-2xl space-y-4"
           >
             <h3
               id="product-modal-title"
