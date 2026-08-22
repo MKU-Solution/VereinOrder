@@ -15,6 +15,13 @@ interface ProductOptionsModalProps {
   isOpen: boolean;
   onClose: () => void;
   onAdd: (product: any, selectedOptions: SelectedProductOption[]) => void;
+  // Anlegefall (Standard) vs. Änderungsfall einer bestehenden Warenkorbzeile
+  // (Issue #82). Der Modus entscheidet über Vorbelegung und Beschriftung des
+  // Hauptknopfs; die Pflichtprüfung selbst ist in beiden Fällen identisch.
+  mode?: "add" | "edit";
+  // Nur im Änderungsfall relevant: die bereits getroffene Auswahl der Zeile,
+  // mit der die Maske vorbelegt wird.
+  initialSelectedOptions?: SelectedProductOption[];
 }
 
 const formatAbsPrice = (cents: number) => `€ ${(cents / 100).toFixed(2)}`;
@@ -30,6 +37,8 @@ export const ProductOptionsModal = ({
   isOpen,
   onClose,
   onAdd,
+  mode = "add",
+  initialSelectedOptions,
 }: ProductOptionsModalProps) => {
   // Kennung der Gruppe -> Liste der gewählten Antwort-Kennungen.
   const [selections, setSelections] = useState<Record<string, string[]>>({});
@@ -40,15 +49,30 @@ export const ProductOptionsModal = ({
   const groupRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const firstOptionRefs = useRef<Record<string, HTMLButtonElement | null>>({});
 
-  // Keine stille Vorauswahl: jede Pflichtgruppe startet unbeantwortet.
   useEffect(() => {
-    if (isOpen && product) {
+    if (!isOpen || !product) return;
+
+    if (mode === "edit") {
+      // Änderungsfall (Issue #82): vorbelegt mit der tatsächlich getroffenen
+      // Auswahl der Zeile. Das ist keine geratene Vorauswahl, sondern zeigt
+      // exakt, was zuvor ausgewählt wurde — die Entscheidung aus #75 betraf
+      // ausschließlich den Anlegefall unten.
+      const prefilled: Record<string, string[]> = {};
+      (initialSelectedOptions || []).forEach((option) => {
+        const current = prefilled[option.groupId] || [];
+        prefilled[option.groupId] = [...current, option.id];
+      });
+      setSelections(prefilled);
+    } else {
+      // Anlegefall: keine stille Vorauswahl, jede Pflichtgruppe startet
+      // unbeantwortet (Entscheidung aus Issue #75).
       setSelections({});
-      setErrorGroupIds(new Set());
-      setFlashGroupId(null);
-      setAriaMessage("");
     }
-  }, [isOpen, product]);
+
+    setErrorGroupIds(new Set());
+    setFlashGroupId(null);
+    setAriaMessage("");
+  }, [isOpen, product, mode, initialSelectedOptions]);
 
   const groups = useMemo(
     () => (product?.optionGroups as any[]) || [],
@@ -124,10 +148,13 @@ export const ProductOptionsModal = ({
         ? `Noch 1 Pflichtangabe offen: ${missingRequiredGroups[0].name}`
         : `Noch ${missingRequiredGroups.length} Pflichtangaben offen: ${missingRequiredGroups.map((g) => g.name).join(", ")}`;
 
+  // Sprechender Hauptknopf: im Änderungsfall "Übernehmen" statt
+  // "Hinzufügen" (Issue #82), die Pflichtprüfung bleibt identisch.
+  const confirmLabel = mode === "edit" ? "Übernehmen" : "Hinzufügen";
   const mainButtonLabel =
     missingRequiredGroups.length > 0
       ? `Weiter zu: ${missingRequiredGroups[0].name}`
-      : `Hinzufügen · ${formatAbsPrice(total)}`;
+      : `${confirmLabel} · ${formatAbsPrice(total)}`;
 
   const scrollToGroup = (group: any) => {
     groupRefs.current[group.id]?.scrollIntoView({
