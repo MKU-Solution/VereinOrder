@@ -492,12 +492,16 @@ export class EventsService {
               include: {
                 categories: {
                   include: {
-                    products: { include: { variants: true, extras: true } },
+                    products: {
+                      include: {
+                        optionGroups: { include: { options: true } },
+                      },
+                    },
                   },
                 },
                 products: {
                   where: { categoryId: null },
-                  include: { variants: true, extras: true },
+                  include: { optionGroups: { include: { options: true } } },
                 },
                 stations: true,
                 areas: true,
@@ -571,18 +575,24 @@ export class EventsService {
                   targetStationId: product.targetStationId
                     ? stationIds.get(product.targetStationId) || null
                     : null,
-                  variants: {
-                    create: product.variants.map((v: any) => ({
-                      name: v.name,
-                      price: v.price,
-                      sortOrder: v.sortOrder,
-                    })),
-                  },
-                  extras: {
-                    create: product.extras.map((e: any) => ({
-                      name: e.name,
-                      price: e.price,
-                      sortOrder: e.sortOrder,
+                  optionGroups: {
+                    create: product.optionGroups.map((group: any) => ({
+                      name: group.name,
+                      selectionType: group.selectionType,
+                      isRequired: group.isRequired,
+                      minSelect: group.minSelect,
+                      maxSelect: group.maxSelect,
+                      priceMode: group.priceMode,
+                      quickSaleTiles: group.quickSaleTiles,
+                      sortOrder: group.sortOrder,
+                      options: {
+                        create: group.options.map((option: any) => ({
+                          name: option.name,
+                          priceEffect: option.priceEffect,
+                          isActive: option.isActive,
+                          sortOrder: option.sortOrder,
+                        })),
+                      },
                     })),
                   },
                 },
@@ -646,12 +656,14 @@ export class EventsService {
           include: {
             categories: {
               include: {
-                products: { include: { variants: true, extras: true } },
+                products: {
+                  include: { optionGroups: { include: { options: true } } },
+                },
               },
             },
             products: {
               where: { categoryId: null },
-              include: { variants: true, extras: true },
+              include: { optionGroups: { include: { options: true } } },
             },
             stations: true,
           },
@@ -732,18 +744,24 @@ export class EventsService {
                   targetStationId: product.targetStationId
                     ? body.stationMappings[product.targetStationId]
                     : null,
-                  variants: {
-                    create: product.variants.map((variant: any) => ({
-                      name: variant.name,
-                      price: variant.price,
-                      sortOrder: variant.sortOrder,
-                    })),
-                  },
-                  extras: {
-                    create: product.extras.map((extra: any) => ({
-                      name: extra.name,
-                      price: extra.price,
-                      sortOrder: extra.sortOrder,
+                  optionGroups: {
+                    create: product.optionGroups.map((group: any) => ({
+                      name: group.name,
+                      selectionType: group.selectionType,
+                      isRequired: group.isRequired,
+                      minSelect: group.minSelect,
+                      maxSelect: group.maxSelect,
+                      priceMode: group.priceMode,
+                      quickSaleTiles: group.quickSaleTiles,
+                      sortOrder: group.sortOrder,
+                      options: {
+                        create: group.options.map((option: any) => ({
+                          name: option.name,
+                          priceEffect: option.priceEffect,
+                          isActive: option.isActive,
+                          sortOrder: option.sortOrder,
+                        })),
+                      },
                     })),
                   },
                 },
@@ -795,11 +813,15 @@ export class EventsService {
       where: { id },
       include: {
         categories: {
-          include: { products: { include: { variants: true, extras: true } } },
+          include: {
+            products: {
+              include: { optionGroups: { include: { options: true } } },
+            },
+          },
         },
         products: {
           where: { categoryId: null },
-          include: { variants: true, extras: true },
+          include: { optionGroups: { include: { options: true } } },
         },
         stations: true,
         areas: true,
@@ -809,65 +831,53 @@ export class EventsService {
     const stationRef = new Map(
       event.stations.map((s, index) => [s.id, `station-${index + 1}`]),
     );
-    const products = event.categories.flatMap((c, ci) =>
-      c.products.map((p, pi) => ({
-        ref: `product-${ci + 1}-${pi + 1}`,
-        categoryRef: `category-${ci + 1}`,
-        stationRef: p.targetStationId
-          ? stationRef.get(p.targetStationId)
-          : null,
-        name: p.name,
-        shortName: p.shortName,
-        description: p.description,
-        price: p.price,
-        taxRate: p.taxRate,
-        color: p.color,
-        sortOrder: p.sortOrder,
-        imageUrl: p.imageUrl,
-        availability: p.availability,
-        variants: p.variants.map((v) => ({
-          name: v.name,
-          price: v.price,
-          sortOrder: v.sortOrder,
-        })),
-        extras: p.extras.map((e) => ({
-          name: e.name,
-          price: e.price,
-          sortOrder: e.sortOrder,
+    const mapProduct = (
+      p: (typeof event.categories)[number]["products"][number],
+      ref: string,
+      categoryRef: string | null,
+    ) => ({
+      ref,
+      categoryRef,
+      stationRef: p.targetStationId ? stationRef.get(p.targetStationId) : null,
+      name: p.name,
+      shortName: p.shortName,
+      description: p.description,
+      price: p.price,
+      taxRate: p.taxRate,
+      color: p.color,
+      sortOrder: p.sortOrder,
+      imageUrl: p.imageUrl,
+      availability: p.availability,
+      optionGroups: p.optionGroups.map((g) => ({
+        name: g.name,
+        selectionType: g.selectionType,
+        isRequired: g.isRequired,
+        minSelect: g.minSelect,
+        maxSelect: g.maxSelect,
+        priceMode: g.priceMode,
+        quickSaleTiles: g.quickSaleTiles,
+        sortOrder: g.sortOrder,
+        options: g.options.map((o) => ({
+          name: o.name,
+          priceEffect: o.priceEffect,
+          isActive: o.isActive,
+          sortOrder: o.sortOrder,
         })),
       })),
+    });
+    const products = event.categories.flatMap((c, ci) =>
+      c.products.map((p, pi) =>
+        mapProduct(p, `product-${ci + 1}-${pi + 1}`, `category-${ci + 1}`),
+      ),
     );
     products.push(
-      ...event.products.map((p, index) => ({
-        ref: `product-none-${index + 1}`,
-        categoryRef: null,
-        stationRef: p.targetStationId
-          ? stationRef.get(p.targetStationId)
-          : null,
-        name: p.name,
-        shortName: p.shortName,
-        description: p.description,
-        price: p.price,
-        taxRate: p.taxRate,
-        color: p.color,
-        sortOrder: p.sortOrder,
-        imageUrl: p.imageUrl,
-        availability: p.availability,
-        variants: p.variants.map((v) => ({
-          name: v.name,
-          price: v.price,
-          sortOrder: v.sortOrder,
-        })),
-        extras: p.extras.map((e) => ({
-          name: e.name,
-          price: e.price,
-          sortOrder: e.sortOrder,
-        })),
-      })),
+      ...event.products.map((p, index) =>
+        mapProduct(p, `product-none-${index + 1}`, null),
+      ),
     );
     return {
       kind: "VEREINORDER_EVENT_CONFIG",
-      schemaVersion: 1,
+      schemaVersion: 2,
       exportedAt: new Date().toISOString(),
       event: {
         name: event.name,
@@ -984,8 +994,26 @@ export class EventsService {
                   targetStationId: product.stationRef
                     ? stationIds.get(product.stationRef)!
                     : null,
-                  variants: { create: product.variants },
-                  extras: { create: product.extras },
+                  optionGroups: {
+                    create: product.optionGroups.map((group) => ({
+                      name: group.name,
+                      selectionType: group.selectionType,
+                      isRequired: group.isRequired,
+                      minSelect: group.minSelect,
+                      maxSelect: group.maxSelect,
+                      priceMode: group.priceMode,
+                      quickSaleTiles: group.quickSaleTiles,
+                      sortOrder: group.sortOrder,
+                      options: {
+                        create: group.options.map((option) => ({
+                          name: option.name,
+                          priceEffect: option.priceEffect,
+                          isActive: option.isActive,
+                          sortOrder: option.sortOrder,
+                        })),
+                      },
+                    })),
+                  },
                 },
               });
             const result = { eventId: target.id, name: target.name };
@@ -1048,6 +1076,217 @@ export class EventsService {
       }
       return value;
     };
+    const boolean = (value: unknown, label: string) => {
+      if (typeof value !== "boolean")
+        throw new BadRequestException(`${label} muss ein Wahrheitswert sein.`);
+      return value;
+    };
+    // Grenzen aus dem Feldvertrag (produktoptionen-datenmodell.md):
+    // priceEffect zwischen -1.000.000 und 1.000.000 Cent.
+    const PRICE_EFFECT_MIN = -1_000_000;
+    const PRICE_EFFECT_MAX = 1_000_000;
+    const parseOption = (raw: unknown, label: string) => {
+      const o = object(
+        raw,
+        ["name", "priceEffect", "isActive", "sortOrder"],
+        label,
+      );
+      const priceEffect = integer(o.priceEffect, `${label}: Preiswirkung`);
+      if (priceEffect < PRICE_EFFECT_MIN || priceEffect > PRICE_EFFECT_MAX)
+        throw new BadRequestException(
+          `${label}: Preiswirkung muss zwischen -1.000.000 und 1.000.000 Cent liegen.`,
+        );
+      return {
+        name: string(o.name, `${label}name`),
+        priceEffect,
+        isActive: boolean(o.isActive, `${label}: Aktivstatus`),
+        sortOrder: integer(o.sortOrder, "Sortierung"),
+      };
+    };
+    // Bildet die CHECK- und partiellen UNIQUE-Bedingungen aus dem Feldvertrag
+    // (produktoptionen-datenmodell.md, "Regeln, die die Datenbank erzwingt")
+    // nach, damit eine ungültige Vorlage mit einer verständlichen deutschen
+    // Meldung abgewiesen wird statt mit einem rohen Datenbankfehler.
+    const parseOptionGroup = (raw: unknown, label: string) => {
+      const g = object(
+        raw,
+        [
+          "name",
+          "selectionType",
+          "isRequired",
+          "minSelect",
+          "maxSelect",
+          "priceMode",
+          "quickSaleTiles",
+          "sortOrder",
+          "options",
+        ],
+        label,
+      );
+      const name = string(g.name, `${label}name`);
+      if (g.selectionType !== "SINGLE" && g.selectionType !== "MULTIPLE")
+        throw new BadRequestException(`${label}: Auswahlart ist ungültig.`);
+      if (g.priceMode !== "ABSOLUTE" && g.priceMode !== "SURCHARGE")
+        throw new BadRequestException(`${label}: Preismodus ist ungültig.`);
+      const isRequired = boolean(g.isRequired, `${label}: Pflichtangabe`);
+      const minSelect = integer(g.minSelect, `${label}: Mindestanzahl`);
+      if (minSelect < 0)
+        throw new BadRequestException(
+          `${label}: Mindestanzahl darf nicht negativ sein.`,
+        );
+      let maxSelect: number | null = null;
+      if (g.maxSelect !== null) {
+        maxSelect = integer(g.maxSelect, `${label}: Höchstanzahl`);
+        if (maxSelect < 1)
+          throw new BadRequestException(
+            `${label}: Höchstanzahl muss mindestens 1 sein.`,
+          );
+        if (maxSelect < minSelect)
+          throw new BadRequestException(
+            `${label}: Höchstanzahl darf nicht kleiner als die Mindestanzahl sein.`,
+          );
+      }
+      if (isRequired !== minSelect >= 1)
+        throw new BadRequestException(
+          `${label}: Pflichtangabe muss zur Mindestanzahl passen.`,
+        );
+      const quickSaleTiles = boolean(
+        g.quickSaleTiles,
+        `${label}: Schnellverkaufs-Kacheln`,
+      );
+      const sortOrder = integer(g.sortOrder, "Sortierung");
+      if (sortOrder < 0)
+        throw new BadRequestException(
+          `${label}: Sortierung darf nicht negativ sein.`,
+        );
+      if (g.selectionType === "SINGLE" && (maxSelect !== 1 || minSelect > 1))
+        throw new BadRequestException(
+          `${label}: Einfachauswahl verlangt Höchstanzahl 1 und Mindestanzahl höchstens 1.`,
+        );
+      if (
+        g.priceMode === "ABSOLUTE" &&
+        (g.selectionType !== "SINGLE" || !isRequired)
+      )
+        throw new BadRequestException(
+          `${label}: absoluter Preis verlangt Einfachauswahl und Pflichtangabe.`,
+        );
+      if (quickSaleTiles && (g.selectionType !== "SINGLE" || !isRequired))
+        throw new BadRequestException(
+          `${label}: Schnellverkaufs-Kacheln verlangen Einfachauswahl und Pflichtangabe.`,
+        );
+      const options = array(g.options, `${label}: Optionen`).map((o, i) =>
+        parseOption(o, `${label} – Option ${i + 1}`),
+      );
+      if (g.priceMode === "ABSOLUTE" && options.some((o) => o.priceEffect < 0))
+        throw new BadRequestException(
+          `${label}: Optionen mit absolutem Preis dürfen nicht negativ sein.`,
+        );
+      return {
+        name,
+        selectionType: g.selectionType as "SINGLE" | "MULTIPLE",
+        isRequired,
+        minSelect,
+        maxSelect,
+        priceMode: g.priceMode as "ABSOLUTE" | "SURCHARGE",
+        quickSaleTiles,
+        sortOrder,
+        options,
+      };
+    };
+    // Höchstens eine ABSOLUTE- und höchstens eine Kachel-Gruppe je Produkt
+    // (partielle UNIQUE-Indizes in der Migration).
+    const assertOptionGroupLimits = (
+      groups: ReturnType<typeof parseOptionGroup>[],
+      label: string,
+    ) => {
+      if (groups.filter((g) => g.priceMode === "ABSOLUTE").length > 1)
+        throw new BadRequestException(
+          `${label}: höchstens eine Auswahlgruppe mit absolutem Preis ist je Produkt zulässig.`,
+        );
+      if (groups.filter((g) => g.quickSaleTiles).length > 1)
+        throw new BadRequestException(
+          `${label}: höchstens eine Auswahlgruppe mit Schnellverkaufs-Kacheln ist je Produkt zulässig.`,
+        );
+    };
+    // Übersetzung von Vorlagendateien der Version 1 (produktoptionen-schnittstelle.md,
+    // Abschnitt "Ereignisvorlagen"): dieselbe Regel wie die SQL-Migration
+    // 20260821140000_add_product_option_groups, Datenuebernahme 1-4. Damit
+    // verhält sich ein Vorlagenimport wie eine migrierte Datenbank.
+    const parseLegacyChild = (
+      raw: unknown,
+      label: string,
+      allowNegative: boolean,
+    ) => {
+      const c = object(raw, ["name", "price", "sortOrder"], label);
+      const price = integer(c.price, `${label}preis`);
+      if (!allowNegative && price < 0)
+        throw new BadRequestException(`${label}preis darf nicht negativ sein.`);
+      if (price < PRICE_EFFECT_MIN || price > PRICE_EFFECT_MAX)
+        throw new BadRequestException(
+          `${label}preis muss zwischen -1.000.000 und 1.000.000 Cent liegen.`,
+        );
+      return {
+        name: string(c.name, `${label}name`),
+        price,
+        sortOrder: integer(c.sortOrder, "Sortierung"),
+      };
+    };
+    const sortDense = <T extends { name: string; sortOrder: number }>(
+      items: T[],
+    ) =>
+      [...items]
+        .sort(
+          (a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name),
+        )
+        .map((item, index) => ({ ...item, sortOrder: index }));
+    const legacyOptionGroups = (
+      variantsRaw: unknown,
+      extrasRaw: unknown,
+      label: string,
+    ) => {
+      const variants = array(variantsRaw, `${label}: Varianten`).map((v) =>
+        parseLegacyChild(v, "Variante", false),
+      );
+      const extras = array(extrasRaw, `${label}: Extras`).map((e) =>
+        parseLegacyChild(e, "Extra", true),
+      );
+      const groups: ReturnType<typeof parseOptionGroup>[] = [];
+      if (variants.length > 0)
+        groups.push({
+          name: "Variante",
+          selectionType: "SINGLE",
+          isRequired: true,
+          minSelect: 1,
+          maxSelect: 1,
+          priceMode: "ABSOLUTE",
+          quickSaleTiles: true,
+          sortOrder: 0,
+          options: sortDense(variants).map((v) => ({
+            name: v.name,
+            priceEffect: v.price,
+            isActive: true,
+            sortOrder: v.sortOrder,
+          })),
+        });
+      if (extras.length > 0)
+        groups.push({
+          name: "Extras",
+          selectionType: "MULTIPLE",
+          isRequired: false,
+          minSelect: 0,
+          maxSelect: null,
+          priceMode: "SURCHARGE",
+          quickSaleTiles: false,
+          sortOrder: 1,
+          options: sortDense(extras).map((e) => ({
+            name: e.name,
+            priceEffect: e.price,
+            isActive: true,
+            sortOrder: e.sortOrder,
+          })),
+        });
+      return groups;
+    };
     const root = object(
       input,
       [
@@ -1062,8 +1301,12 @@ export class EventsService {
       ],
       "Import",
     );
-    if (root.kind !== "VEREINORDER_EVENT_CONFIG" || root.schemaVersion !== 1)
+    if (
+      root.kind !== "VEREINORDER_EVENT_CONFIG" ||
+      (root.schemaVersion !== 1 && root.schemaVersion !== 2)
+    )
       throw new BadRequestException("Unbekanntes Konfigurationsformat.");
+    const schemaVersion = root.schemaVersion as 1 | 2;
     const eventRaw = object(
       root.event,
       ["name", "organizer", "location", "startTime", "endTime", "timezone"],
@@ -1162,82 +1405,81 @@ export class EventsService {
     );
     const stationRefs = refs(stations, "Stations");
     const categoryRefs = refs(categories, "Kategorien");
-    const products = array(root.products, "Produkte").map((raw: unknown) => {
-      const x = object(
-        raw,
-        [
-          "ref",
-          "categoryRef",
-          "stationRef",
-          "name",
-          "shortName",
-          "description",
-          "price",
-          "taxRate",
-          "color",
-          "sortOrder",
-          "imageUrl",
-          "availability",
-          "variants",
-          "extras",
-        ],
-        "Produkt",
-      );
-      if (x.categoryRef !== null && !categoryRefs.has(x.categoryRef))
-        throw new BadRequestException(
-          "Produkt verweist auf eine unbekannte Kategorie.",
+    const products = array(root.products, "Produkte").map(
+      (raw: unknown, index: number) => {
+        const productLabel = `Produkt ${index + 1}`;
+        const x = object(
+          raw,
+          [
+            "ref",
+            "categoryRef",
+            "stationRef",
+            "name",
+            "shortName",
+            "description",
+            "price",
+            "taxRate",
+            "color",
+            "sortOrder",
+            "imageUrl",
+            "availability",
+            ...(schemaVersion === 1
+              ? ["variants", "extras"]
+              : ["optionGroups"]),
+          ],
+          "Produkt",
         );
-      if (x.stationRef !== null && !stationRefs.has(x.stationRef))
-        throw new BadRequestException(
-          "Produkt verweist auf eine unbekannte Station.",
-        );
-      const child = (rawChild: unknown, label: string) => {
-        const c = object(rawChild, ["name", "price", "sortOrder"], label);
-        const price = integer(c.price, `${label}preis`);
-        if (price < 0)
+        if (x.categoryRef !== null && !categoryRefs.has(x.categoryRef))
           throw new BadRequestException(
-            `${label}preis darf nicht negativ sein.`,
+            "Produkt verweist auf eine unbekannte Kategorie.",
           );
-        return {
-          name: string(c.name, `${label}name`),
-          price,
-          sortOrder: integer(c.sortOrder, "Sortierung"),
-        };
-      };
-      const availability = string(x.availability, "Verfügbarkeit");
-      if (
-        !["AVAILABLE", "LOW_STOCK", "OUT_OF_STOCK", "DISABLED"].includes(
-          availability,
+        if (x.stationRef !== null && !stationRefs.has(x.stationRef))
+          throw new BadRequestException(
+            "Produkt verweist auf eine unbekannte Station.",
+          );
+        const availability = string(x.availability, "Verfügbarkeit");
+        if (
+          !["AVAILABLE", "LOW_STOCK", "OUT_OF_STOCK", "DISABLED"].includes(
+            availability,
+          )
         )
-      )
-        throw new BadRequestException("Verfügbarkeit ist ungültig.");
-      const price = integer(x.price, "Preis");
-      const taxRate = integer(x.taxRate, "Steuersatz");
-      if (price < 0)
-        throw new BadRequestException("Preis darf nicht negativ sein.");
-      if (taxRate < 0 || taxRate > 10000)
-        throw new BadRequestException(
-          "Steuersatz muss zwischen 0 und 10000 liegen.",
-        );
-      return {
-        ref: string(x.ref, "Produktreferenz"),
-        categoryRef: x.categoryRef,
-        stationRef: x.stationRef,
-        name: string(x.name, "Produktname"),
-        shortName: string(x.shortName, "Produktkurzname", true),
-        description: string(x.description, "Beschreibung", true),
-        price,
-        taxRate,
-        color: string(x.color, "Farbe", true),
-        sortOrder: integer(x.sortOrder, "Sortierung"),
-        imageUrl: string(x.imageUrl, "Bildadresse", true),
-        availability,
-        variants: array(x.variants, "Varianten").map((v) =>
-          child(v, "Variante"),
-        ),
-        extras: array(x.extras, "Extras").map((v) => child(v, "Extra")),
-      };
-    });
+          throw new BadRequestException("Verfügbarkeit ist ungültig.");
+        const price = integer(x.price, "Preis");
+        const taxRate = integer(x.taxRate, "Steuersatz");
+        if (price < 0)
+          throw new BadRequestException("Preis darf nicht negativ sein.");
+        if (taxRate < 0 || taxRate > 10000)
+          throw new BadRequestException(
+            "Steuersatz muss zwischen 0 und 10000 liegen.",
+          );
+        const optionGroups =
+          schemaVersion === 1
+            ? legacyOptionGroups(x.variants, x.extras, productLabel)
+            : array(x.optionGroups, `${productLabel}: Auswahlgruppen`).map(
+                (g, gi) =>
+                  parseOptionGroup(
+                    g,
+                    `${productLabel} – Auswahlgruppe ${gi + 1}`,
+                  ),
+              );
+        assertOptionGroupLimits(optionGroups, productLabel);
+        return {
+          ref: string(x.ref, "Produktreferenz"),
+          categoryRef: x.categoryRef,
+          stationRef: x.stationRef,
+          name: string(x.name, "Produktname"),
+          shortName: string(x.shortName, "Produktkurzname", true),
+          description: string(x.description, "Beschreibung", true),
+          price,
+          taxRate,
+          color: string(x.color, "Farbe", true),
+          sortOrder: integer(x.sortOrder, "Sortierung"),
+          imageUrl: string(x.imageUrl, "Bildadresse", true),
+          availability,
+          optionGroups,
+        };
+      },
+    );
     refs(products, "Produkt");
     return {
       kind: root.kind,

@@ -31,6 +31,55 @@ const stationTicket: PrintJobLike = {
   },
 };
 
+// Bestellposition mit einer ABSOLUTE-Antwort (variantName) und mehreren
+// SURCHARGE-Antworten aus zwei unterschiedlichen Auswahlgruppen (Issue #75).
+// "extras" trägt zusätzlich groupId/groupName, wie
+// docs/development/produktoptionen-datenmodell.md ("OrderItem bleibt
+// unverändert") es als optionale Felder erlaubt; der Bondruck liest davon
+// nur den Namen. Die zweite Antwort ist bewusst lang genug, um auf 58 mm
+// umzubrechen, während sie auf 80 mm in eine Zeile passt.
+const stationTicketWithOptions: PrintJobLike = {
+  id: "job-station-options",
+  jobType: "STATION_TICKET",
+  createdAt,
+  content: {
+    title: "ABHOL-/KÜCHENBON",
+    stationName: "Küche",
+    orderNumber: 43,
+    createdAt,
+    items: [
+      {
+        productName: "Schnitzel",
+        quantity: 1,
+        variantName: "Menü groß",
+        extras: [
+          {
+            id: "option-pommes",
+            name: "Pommes",
+            price: 0,
+            groupId: "group-beilage",
+            groupName: "Beilage",
+          },
+          {
+            id: "option-sauce",
+            name: "extra Sauce Hollandaise mit Kräutern",
+            price: 80,
+            groupId: "group-anpassung",
+            groupName: "Anpassung",
+          },
+          {
+            id: "option-ohne-zwiebeln",
+            name: "ohne Zwiebeln",
+            price: -50,
+            groupId: "group-anpassung",
+            groupName: "Anpassung",
+          },
+        ],
+      },
+    ],
+  },
+};
+
 const productVoucher: PrintJobLike = {
   id: "job-voucher",
   jobType: "PRODUCT_VOUCHER",
@@ -112,6 +161,7 @@ const testPrint: PrintJobLike = {
 
 const ALL_JOBS = [
   stationTicket,
+  stationTicketWithOptions,
   productVoucher,
   receipt,
   cashierClosing,
@@ -154,6 +204,48 @@ describe("Bonaufbau je Auftragsart", () => {
     expect(text).toContain(formatDateTime(createdAt));
     // Der Stationsbon zeigt bewusst keine Preise.
     expect(text).not.toContain("€");
+  });
+
+  it.each(WIDTHS)(
+    "druckt Variante und mehrere Antworten aus verschiedenen Gruppen auf %s mm (Issue #75)",
+    (width) => {
+      const text = textOf(stationTicketWithOptions, width);
+      const normalized = text.replace(/\s+/g, " ");
+
+      // Die ABSOLUTE-Antwort (variantName) und alle SURCHARGE-Antworten aus
+      // beiden Gruppen (Beilage, Anpassung) müssen lesbar erscheinen, auch
+      // wenn eine davon auf 58 mm umbricht.
+      expect(normalized).toContain("> Menü groß");
+      expect(normalized).toContain("+ Pommes");
+      expect(normalized).toContain("+ extra Sauce Hollandaise mit Kräutern");
+      expect(normalized).toContain("+ ohne Zwiebeln");
+    },
+  );
+
+  it("bricht eine lange Antwort auf 58 mm um, hält sie auf 80 mm aber in einer Zeile", () => {
+    const linesFor = (width: PaperWidth) =>
+      renderDocument(
+        buildDocument(stationTicketWithOptions),
+        PAPER_PROFILES[width],
+      ).map((line) => line.text.trim());
+
+    const fullSauceLine = "+ extra Sauce Hollandaise mit Kräutern";
+    const narrowLines = linesFor(58);
+    const wideLines = linesFor(80);
+
+    // Auf 58 mm (32 Spalten, 3 Spalten Einzug für Antworten) passt die
+    // Antwort nicht in eine Zeile: es gibt keine einzelne Zeile, die den
+    // vollen Text trägt, wohl aber eine, die mit "+ extra" beginnt und
+    // dadurch den Umbruch belegt.
+    expect(narrowLines).not.toContain(fullSauceLine);
+    expect(narrowLines.some((line) => line.startsWith("+ extra Sauce"))).toBe(
+      true,
+    );
+    // Nichts geht beim Umbruch verloren: der volle Text steht weiterhin
+    // irgendwo im normalisierten Bon (siehe vorheriger Test).
+
+    // Auf 80 mm (48 Spalten) passt dieselbe Antwort in eine einzige Zeile.
+    expect(wideLines).toContain(fullSauceLine);
   });
 
   it.each(WIDTHS)("druckt den Produktbon auf %s mm mit Code", (width) => {

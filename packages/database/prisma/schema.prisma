@@ -160,28 +160,112 @@ model Product {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  variants   ProductVariant[]
-  extras     ProductExtra[]
-  orderItems OrderItem[]
-  vouchers   ProductVoucher[]
+  optionGroups ProductOptionGroup[]
+  orderItems   OrderItem[]
+  vouchers     ProductVoucher[]
 }
 
-model ProductVariant {
-  id        String  @id @default(uuid())
-  name      String
-  price     Int // price in cents (absolute price for this variant)
-  sortOrder Int     @default(0)
-  productId String
-  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+// Anzahl der zulaessigen Antworten je Auswahlgruppe (Issue #75).
+// SINGLE: hoechstens eine Antwort, MULTIPLE: beliebig viele im Rahmen von
+// minSelect/maxSelect. Die Unterscheidung ist ausdrueckliches Stammdatum und
+// wird nicht aus der Optionsanzahl erraten.
+enum ProductOptionSelectionType {
+  SINGLE
+  MULTIPLE
 }
 
-model ProductExtra {
-  id        String  @id @default(uuid())
-  name      String
-  price     Int     @default(0) // additional cost in cents
-  sortOrder Int     @default(0)
+// Preiswirkung einer Gruppe. ABSOLUTE ersetzt den Grundpreis des Produkts
+// (Nachfolger von ProductVariant), SURCHARGE addiert auf den Grundpreis
+// (Nachfolger von ProductExtra).
+enum ProductOptionPriceMode {
+  ABSOLUTE
+  SURCHARGE
+}
+
+// Eine Auswahlgruppe gehoert immer genau einem Produkt. Wiederverwendbare
+// Gruppen ueber mehrere Produkte hinweg sind ausdruecklich Nicht-Ziel.
+//
+// Nicht in Prisma abbildbar und deshalb nur in der SQL-Migration
+// 20260821140000_add_product_option_groups vorhanden (dort im Kopfkommentar
+// begruendet, spaetere Migrationen duerfen sie nicht stillschweigend
+// entfernen):
+//   - CHECK: sortOrder >= 0, Name nicht leer
+//   - CHECK: minSelect >= 0, maxSelect >= 1 und maxSelect >= minSelect
+//   - CHECK: isRequired = (minSelect >= 1)
+//   - CHECK: SINGLE erzwingt maxSelect = 1 und minSelect <= 1
+//   - CHECK: ABSOLUTE erzwingt SINGLE und isRequired
+//   - CHECK: quickSaleTiles erzwingt SINGLE und isRequired
+//   - UNIQUE (partiell): hoechstens eine ABSOLUTE-Gruppe je Produkt
+//   - UNIQUE (partiell): hoechstens eine quickSaleTiles-Gruppe je Produkt
+model ProductOptionGroup {
+  id String @id @default(uuid())
+
+  // Anzeigename der Frage, zum Beispiel "Groesse" oder "Beilage".
+  name String
+
+  // Einfach- oder Mehrfachauswahl.
+  selectionType ProductOptionSelectionType
+
+  // Pflicht oder freiwillig. Streng an minSelect gebunden:
+  // isRequired ist genau dann wahr, wenn minSelect >= 1 ist.
+  isRequired Boolean @default(false)
+
+  // Mindestanzahl zu waehlender Optionen. 0 bedeutet freiwillig.
+  minSelect Int @default(0)
+
+  // Hoechstanzahl zu waehlender Optionen. NULL bedeutet unbegrenzt.
+  // Bei SINGLE immer 1.
+  maxSelect Int?
+
+  // Wirkung der gewaehlten Option auf den Preis der Bestellposition.
+  priceMode ProductOptionPriceMode @default(SURCHARGE)
+
+  // Genau diese Gruppe faechert im Schnellverkauf in einzelne Kacheln auf.
+  // Hoechstens eine Gruppe je Produkt darf die Marke tragen; traegt keine
+  // Gruppe sie, zeigt der Schnellverkauf eine Kachel zum Produktgrundpreis.
+  // Die Marke ist die einzige Quelle dieser Entscheidung; der Schnellverkauf
+  // leitet sie nicht aus priceMode ab.
+  quickSaleTiles Boolean @default(false)
+
+  sortOrder Int @default(0)
+
   productId String
   product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  options ProductOption[]
+
+  @@index([productId, sortOrder])
+}
+
+// Eine waehlbare Antwort innerhalb einer Auswahlgruppe.
+//
+// Nicht in Prisma abbildbar, nur in der SQL-Migration:
+//   - CHECK: sortOrder >= 0, Name nicht leer
+//   - CHECK: priceEffect zwischen -1000000 und 1000000 Cent
+model ProductOption {
+  id String @id @default(uuid())
+
+  // Anzeigename der Antwort, zum Beispiel "0,5 l" oder "extra Sosse".
+  name String
+
+  // Preiswirkung in ganzen Cent, Betrag hoechstens 1000000.
+  // Deutung haengt am priceMode der Gruppe: bei ABSOLUTE der Endpreis der
+  // Position vor Aufpreisen, bei SURCHARGE der Aufpreis. Bei SURCHARGE sind
+  // negative Werte erlaubt und bedeuten einen Abschlag ("ohne Beilage -2,00").
+  // Bei ABSOLUTE muss der Wert nicht negativ sein; das kann eine zeilenweise
+  // Bedingung nicht pruefen und wird in der Produktpflege erzwungen.
+  priceEffect Int @default(0)
+
+  // Voruebergehend nicht waehlbar, ohne die Option zu loeschen.
+  // Bestehende Bestellungen bleiben davon unberuehrt.
+  isActive Boolean @default(true)
+
+  sortOrder Int @default(0)
+
+  groupId String
+  group   ProductOptionGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  @@index([groupId, sortOrder])
 }
 
 enum OrderLifecycleStatus {
@@ -331,9 +415,20 @@ model OrderItem {
   priceAtTime Int // in cents, snapshot of product price + variant price + extras
   status      OrderItemStatus @default(PENDING)
 
+  // Momentaufnahme der Auswahl zum Bestellzeitpunkt. Die drei Spalten bleiben
+  // mit Issue #75 unveraendert, damit Berichte, Stornos und der Bondruck
+  // bestehende Zeilen ohne Datenwanderung weiterlesen koennen.
+  //
+  // variantId/variantName: die gewaehlte Option der ABSOLUTE-Gruppe, also die
+  // Antwort, die den Grundpreis gesetzt hat. NULL, wenn das Produkt keine
+  // ABSOLUTE-Gruppe hat.
+  // extras: alle uebrigen gewaehlten Optionen als Array
+  // [{ id, name, price }], price = priceEffect in Cent. Neue Zeilen duerfen
+  // zusaetzlich groupId und groupName fuehren; Leser muessen beide Felder als
+  // moeglicherweise fehlend behandeln.
   variantId   String?
   variantName String?
-  extras      Json? // Array of selected extras: [{ id, name, price }]
+  extras      Json?
 
   orderId String
   order   Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)

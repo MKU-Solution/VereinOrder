@@ -14,9 +14,7 @@ interface CreateOrderDto {
   items: {
     productId: string;
     quantity: number;
-    variantId?: string;
-    variantName?: string;
-    extras?: { id: string; name: string; price: number }[];
+    optionIds?: string[];
   }[];
   payments?: { amount: number; method: "CASH" | "CARD" | "VOUCHER" }[];
   idempotencyKey?: string;
@@ -30,11 +28,47 @@ interface QuickSaleDto {
   items: {
     productId: string;
     quantity: number;
-    variantId?: string;
+    optionIds?: string[];
   }[];
   paymentMethod: "CASH" | "CARD";
   tenderedAmount?: number;
 }
+
+// Snapshot einer aufgeloesten Bestellposition. variantId/variantName/extras
+// entsprechen exakt den gleichnamigen OrderItem-Spalten (unveraendert seit
+// Issue #75, siehe docs/development/produktoptionen-datenmodell.md,
+// "OrderItem bleibt unveraendert").
+interface ResolvedOrderItemPricing {
+  priceAtTime: number;
+  variantId?: string;
+  variantName?: string;
+  extras: {
+    id: string;
+    name: string;
+    price: number;
+    groupId: string;
+    groupName: string;
+  }[];
+}
+
+type ProductWithOptionGroups = {
+  id: string;
+  name: string;
+  price: number;
+  optionGroups: {
+    id: string;
+    name: string;
+    minSelect: number;
+    maxSelect: number | null;
+    priceMode: "ABSOLUTE" | "SURCHARGE";
+    options: {
+      id: string;
+      name: string;
+      priceEffect: number;
+      isActive: boolean;
+    }[];
+  }[];
+};
 
 interface PrintOptions {
   receiptTitle?: string;
@@ -75,9 +109,44 @@ export class OrdersService {
               sortOrder: true,
               availability: true,
               category: { select: { id: true, name: true, sortOrder: true } },
-              variants: {
-                select: { id: true, name: true, price: true, sortOrder: true },
-                orderBy: { sortOrder: "asc" },
+              // Volle Gruppenliste, dieselben Felder und dieselbe Sortierung
+              // wie GET /products (findAllActive). Der Schnellverkauf
+              // entscheidet selbst anhand von quickSaleTiles UND der
+              // uebrigen Pflichtgruppen, ob und wie ein Produkt angeboten
+              // wird (docs/development/produktoptionen-datenmodell.md,
+              // "Schnellverkauf") -- ein auf die Kachelgruppe verengtes
+              // Feld traegt diese Entscheidung nicht. Verbindlich berechnet
+              // wird ohnehin erst bei der Bestellannahme in
+              // resolveOrderItemPricing; hier sind Kachelpreise reine
+              // Anzeige.
+              optionGroups: {
+                select: {
+                  id: true,
+                  name: true,
+                  selectionType: true,
+                  isRequired: true,
+                  minSelect: true,
+                  maxSelect: true,
+                  priceMode: true,
+                  quickSaleTiles: true,
+                  sortOrder: true,
+                  options: {
+                    where: { isActive: true },
+                    select: {
+                      id: true,
+                      name: true,
+                      priceEffect: true,
+                      isActive: true,
+                      sortOrder: true,
+                    },
+                    orderBy: [
+                      { sortOrder: "asc" },
+                      { name: "asc" },
+                      { id: "asc" },
+                    ],
+                  },
+                },
+                orderBy: [{ sortOrder: "asc" }, { name: "asc" }, { id: "asc" }],
               },
             },
             orderBy: [{ category: { sortOrder: "asc" } }, { sortOrder: "asc" }],
@@ -108,6 +177,117 @@ export class OrdersService {
       activeSession: sessionsByEvent.get(event.id) || null,
       printingReady: Boolean(activePrinter),
     }));
+  }
+
+  /**
+   * Loest die gewaehlten optionIds einer Bestellposition gegen das Produkt
+   * auf und berechnet den Preis nach
+   * docs/development/produktoptionen-datenmodell.md
+   * ("Preisberechnung einer Bestellposition") sowie
+   * docs/development/produktoptionen-schnittstelle.md ("Bestellannahme").
+   * Wird von createOrder und createQuickSale gleichermassen verwendet, damit
+   * beide dieselben Regeln durchsetzen.
+   */
+  private resolveOrderItemPricing(
+    product: ProductWithOptionGroups,
+    optionIds: string[],
+  ): ResolvedOrderItemPricing {
+    const optionsById = new Map<
+      string,
+      {
+        option: ProductWithOptionGroups["optionGroups"][number]["options"][number];
+        group: ProductWithOptionGroups["optionGroups"][number];
+      }
+    >();
+    for (const group of product.optionGroups) {
+      for (const option of group.options) {
+        optionsById.set(option.id, { option, group });
+      }
+    }
+
+    const selectedByGroup = new Map<
+      string,
+      {
+        group: ProductWithOptionGroups["optionGroups"][number];
+        options: ProductWithOptionGroups["optionGroups"][number]["options"];
+      }
+    >();
+    const seenOptionIds = new Set<string>();
+    for (const optionId of optionIds) {
+      // Eine doppelt angegebene Kennung deutet auf einen Fehler beim
+      // Aufrufer hin (Doppelklick, kaputter Warenkorb-Zustand). Stilles
+      // Entdoppeln wuerde diesen Fehler verdecken und in einer
+      // MULTIPLE-Gruppe ohne maxSelect den Aufpreis verdoppeln, ohne dass
+      // die Auswahl das rechtfertigt. Der Vertrag macht die Backend-Pruefung
+      // zur Zusage, deshalb wird abgewiesen statt still repariert.
+      if (seenOptionIds.has(optionId)) {
+        throw new BadRequestException(
+          `Die Antwort ${optionId} wurde für ${product.name} mehrfach angegeben.`,
+        );
+      }
+      seenOptionIds.add(optionId);
+
+      const found = optionsById.get(optionId);
+      if (!found || !found.option.isActive) {
+        throw new BadRequestException(
+          `Die Antwort ${optionId} gehört zu keiner aktiven Auswahlgruppe von ${product.name}.`,
+        );
+      }
+      const entry = selectedByGroup.get(found.group.id) ?? {
+        group: found.group,
+        options: [],
+      };
+      entry.options.push(found.option);
+      selectedByGroup.set(found.group.id, entry);
+    }
+
+    for (const group of product.optionGroups) {
+      const selectedCount = selectedByGroup.get(group.id)?.options.length ?? 0;
+      if (selectedCount < group.minSelect) {
+        throw new BadRequestException(
+          `Die Auswahlgruppe „${group.name}" von ${product.name} braucht mindestens ${group.minSelect} Antwort(en).`,
+        );
+      }
+      if (group.maxSelect !== null && selectedCount > group.maxSelect) {
+        throw new BadRequestException(
+          `Die Auswahlgruppe „${group.name}" von ${product.name} erlaubt höchstens ${group.maxSelect} Antwort(en).`,
+        );
+      }
+    }
+
+    let basePrice = product.price;
+    let variantId: string | undefined;
+    let variantName: string | undefined;
+    const extras: ResolvedOrderItemPricing["extras"] = [];
+
+    for (const entry of selectedByGroup.values()) {
+      if (entry.group.priceMode === "ABSOLUTE") {
+        const option = entry.options[0];
+        basePrice = option.priceEffect;
+        variantId = option.id;
+        variantName = option.name;
+      } else {
+        for (const option of entry.options) {
+          extras.push({
+            id: option.id,
+            name: option.name,
+            price: option.priceEffect,
+            groupId: entry.group.id,
+            groupName: entry.group.name,
+          });
+        }
+      }
+    }
+
+    const surcharge = extras.reduce((sum, extra) => sum + extra.price, 0);
+    const priceAtTime = basePrice + surcharge;
+    if (!Number.isInteger(priceAtTime) || priceAtTime < 0) {
+      throw new BadRequestException(
+        `Der Endpreis für ${product.name} darf nicht negativ sein.`,
+      );
+    }
+
+    return { priceAtTime, variantId, variantName, extras };
   }
 
   async createQuickSale(userId: string, dto: QuickSaleDto) {
@@ -166,17 +346,28 @@ export class OrdersService {
       });
       if (existingOrder) {
         const payment = existingOrder.payments[0];
+        // Idempotenzschluessel nach docs/development/produktoptionen-schnittstelle.md
+        // ("Idempotenz des Schnellverkaufs"): alle gewaehlten Antwortkennungen
+        // gehen aufsteigend sortiert ein, sonst gelten zwei verschiedene
+        // Zusammenstellungen desselben Produkts als Wiederholung derselben
+        // Bestellung.
         const requestedItems = dto.items
-          .map(
-            (item) =>
-              `${item.productId}:${item.variantId || ""}:${item.quantity}`,
-          )
+          .map((item) => {
+            const optionIds = [...(item.optionIds ?? [])].sort();
+            return `${item.productId}:${item.quantity}:${optionIds.join(",")}`;
+          })
           .sort();
         const storedItems = existingOrder.items
-          .map(
-            (item) =>
-              `${item.productId}:${item.variantId || ""}:${item.quantity}`,
-          )
+          .map((item) => {
+            const extras = Array.isArray(item.extras)
+              ? (item.extras as { id: string }[])
+              : [];
+            const optionIds = [
+              ...(item.variantId ? [item.variantId] : []),
+              ...extras.map((extra) => extra.id),
+            ].sort();
+            return `${item.productId}:${item.quantity}:${optionIds.join(",")}`;
+          })
           .sort();
         const sameTenderedAmount =
           dto.paymentMethod === "CASH"
@@ -256,7 +447,7 @@ export class OrdersService {
       const productIds = [...new Set(dto.items.map((item) => item.productId))];
       const products = await prisma.product.findMany({
         where: { id: { in: productIds }, eventId: dto.eventId },
-        include: { variants: true },
+        include: { optionGroups: { include: { options: true } } },
       });
       const productsById = new Map(
         products.map((product) => [product.id, product]),
@@ -278,20 +469,8 @@ export class OrdersService {
           );
         }
 
-        const variant = item.variantId
-          ? product.variants.find(
-              (candidate) => candidate.id === item.variantId,
-            )
-          : null;
-        if (item.variantId && !variant) {
-          throw new BadRequestException(
-            "Variant does not belong to the selected product",
-          );
-        }
-        const priceAtTime = variant?.price ?? product.price;
-        if (!Number.isInteger(priceAtTime) || priceAtTime < 0) {
-          throw new BadRequestException("Product price is invalid");
-        }
+        const { priceAtTime, variantId, variantName, extras } =
+          this.resolveOrderItemPricing(product, item.optionIds ?? []);
         totalAmount += priceAtTime * item.quantity;
 
         return {
@@ -299,8 +478,9 @@ export class OrdersService {
           quantity: item.quantity,
           priceAtTime,
           status: "PENDING" as const,
-          variantId: variant?.id,
-          variantName: variant?.name,
+          variantId,
+          variantName,
+          extras: extras.length > 0 ? (extras as any) : undefined,
         };
       });
       if (
@@ -596,7 +776,7 @@ export class OrdersService {
     const productIds = dto.items.map((i) => i.productId);
     const products = await this.prisma.product.findMany({
       where: { id: { in: productIds }, eventId: dto.eventId },
-      include: { variants: true, extras: true },
+      include: { optionGroups: { include: { options: true } } },
     });
 
     const productMap = new Map(products.map((p) => [p.id, p]));
@@ -615,33 +795,18 @@ export class OrdersService {
         );
       }
 
-      let basePrice = product.price;
-
-      if (item.variantId) {
-        const variant = product.variants.find((v) => v.id === item.variantId);
-        if (variant) basePrice = variant.price;
-      }
-
-      let extrasCost = 0;
-      if (item.extras && item.extras.length > 0) {
-        for (const ext of item.extras) {
-          const dbExtra = product.extras.find((e) => e.id === ext.id);
-          if (dbExtra) extrasCost += dbExtra.price;
-        }
-      }
-
-      const finalItemPrice = basePrice + extrasCost;
-      const itemTotal = finalItemPrice * item.quantity;
-      totalAmount += itemTotal;
+      const { priceAtTime, variantId, variantName, extras } =
+        this.resolveOrderItemPricing(product, item.optionIds ?? []);
+      totalAmount += priceAtTime * item.quantity;
 
       return {
         productId: product.id,
         quantity: item.quantity,
-        priceAtTime: finalItemPrice,
+        priceAtTime,
         status: "PENDING" as any,
-        variantId: item.variantId,
-        variantName: item.variantName,
-        extras: item.extras as any,
+        variantId,
+        variantName,
+        extras: extras.length > 0 ? (extras as any) : undefined,
       };
     });
 

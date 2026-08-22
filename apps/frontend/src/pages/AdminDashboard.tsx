@@ -1,6 +1,15 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { api } from "../lib/api";
 import { EventConfigurationActions } from "../components/admin/EventConfigurationActions";
+import {
+  ProductOptionGroupsEditor,
+  loadOptionGroupsFromProduct,
+  buildOptionGroupsPayload,
+  findEmptyGroupIds,
+  findFirstDuplicateNameError,
+  findFirstInvalidPriceError,
+  type OptionGroupFormState,
+} from "../components/admin/ProductOptionGroupsEditor";
 import { useAuthStore } from "../store/useAuthStore";
 import {
   Users,
@@ -288,6 +297,10 @@ export const AdminDashboard = () => {
   });
   const [productCategories, setProductCategories] = useState<any[]>([]);
   const [productStations, setProductStations] = useState<any[]>([]);
+  // Auswahlgruppen (Issue #75) — Formularzustand im Produktmodal
+  const [optionGroups, setOptionGroups] = useState<OptionGroupFormState[]>([]);
+  const [optionGroupsValidationAttempted, setOptionGroupsValidationAttempted] =
+    useState(false);
 
   // Printer Modal State
   const [isPrinterModalOpen, setIsPrinterModalOpen] = useState(false);
@@ -586,6 +599,8 @@ export const AdminDashboard = () => {
         targetStationId: item?.targetStationId || "",
         sortOrder: String(item?.sortOrder ?? 0),
       });
+      setOptionGroups(loadOptionGroupsFromProduct(item));
+      setOptionGroupsValidationAttempted(false);
       setIsProductModalOpen(true);
       if (!eventId) {
         setModalError("Bitte wähle zuerst eine Veranstaltung aus.");
@@ -620,6 +635,18 @@ export const AdminDashboard = () => {
       }
       setIsModalOpen(true);
     }
+  };
+
+  /**
+   * Schließt das Produktmodal und verwirft den Auswahlgruppen-Formularzustand,
+   * damit beim nächsten Öffnen nicht die Gruppen des zuvor bearbeiteten
+   * Produkts hängen bleiben (siehe handleOpenModal, das ohnehin neu lädt —
+   * dies ist die zusätzliche Absicherung beim Abbrechen).
+   */
+  const closeProductModal = () => {
+    setIsProductModalOpen(false);
+    setOptionGroups([]);
+    setOptionGroupsValidationAttempted(false);
   };
 
   const handleSaveModal = async (e: React.FormEvent) => {
@@ -763,6 +790,7 @@ export const AdminDashboard = () => {
     e.preventDefault();
     if (isSavingModal) return;
     setModalError("");
+    setOptionGroupsValidationAttempted(false);
 
     const name = productFormData.name.trim();
     const euroInput = productFormData.euro.trim();
@@ -804,6 +832,25 @@ export const AdminDashboard = () => {
       );
       return;
     }
+    if (findEmptyGroupIds(optionGroups).size > 0) {
+      setOptionGroupsValidationAttempted(true);
+      setModalError(
+        "Bitte ergänze fehlende Antworten in den markierten Gruppen.",
+      );
+      return;
+    }
+    const invalidPriceError = findFirstInvalidPriceError(optionGroups);
+    if (invalidPriceError) {
+      setOptionGroupsValidationAttempted(true);
+      setModalError(invalidPriceError);
+      return;
+    }
+    const duplicateNameError = findFirstDuplicateNameError(optionGroups);
+    if (duplicateNameError) {
+      setOptionGroupsValidationAttempted(true);
+      setModalError(duplicateNameError);
+      return;
+    }
 
     setIsSavingModal(true);
     try {
@@ -813,18 +860,22 @@ export const AdminDashboard = () => {
         categoryId: productFormData.categoryId || null,
         targetStationId: productFormData.targetStationId || null,
         sortOrder,
+        optionGroups: buildOptionGroupsPayload(optionGroups),
       };
       if (editingProduct) {
         await api.patch(`/products/${editingProduct.id}`, payload);
       } else {
         await api.post("/products", { ...payload, eventId });
       }
-      setIsProductModalOpen(false);
+      closeProductModal();
       fetchData();
     } catch (err) {
       console.error("Failed to save product", err);
       setModalError(
-        "Speichern fehlgeschlagen. Bitte prüfe die Eingaben und versuche es erneut.",
+        backendMessage(
+          err,
+          "Speichern fehlgeschlagen. Bitte prüfe die Eingaben und versuche es erneut.",
+        ),
       );
     } finally {
       setIsSavingModal(false);
@@ -3155,9 +3206,7 @@ export const AdminDashboard = () => {
             role="dialog"
             aria-modal="true"
             aria-labelledby="product-modal-title"
-            onKeyDown={(e) =>
-              handleModalEscape(e, () => setIsProductModalOpen(false))
-            }
+            onKeyDown={(e) => handleModalEscape(e, closeProductModal)}
             className="bg-slate-900 border border-slate-800 p-6 rounded-3xl max-w-lg w-full max-h-[calc(100vh-2rem)] overflow-y-auto shadow-2xl space-y-4"
           >
             <h3
@@ -3322,10 +3371,21 @@ export const AdminDashboard = () => {
                   className="w-full min-h-11 bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 text-white"
                 />
               </div>
+
+              <div className="space-y-3 border-t border-slate-800 pt-4">
+                <h4 className="text-sm font-bold text-white">Auswahlgruppen</h4>
+                <ProductOptionGroupsEditor
+                  groups={optionGroups}
+                  onChange={setOptionGroups}
+                  disabled={isSavingModal}
+                  validationAttempted={optionGroupsValidationAttempted}
+                />
+              </div>
+
               <div className="flex gap-2 justify-end pt-2">
                 <button
                   type="button"
-                  onClick={() => setIsProductModalOpen(false)}
+                  onClick={closeProductModal}
                   className="min-h-11 px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold"
                 >
                   Abbrechen

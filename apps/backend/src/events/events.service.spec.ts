@@ -52,10 +52,48 @@ const configuration = {
           color: null,
           imageUrl: null,
           availability: "AVAILABLE",
-          variants: [
-            { id: "variant-1", name: "groß", price: 450, sortOrder: 1 },
+          optionGroups: [
+            {
+              id: "group-variant-1",
+              name: "Variante",
+              selectionType: "SINGLE",
+              isRequired: true,
+              minSelect: 1,
+              maxSelect: 1,
+              priceMode: "ABSOLUTE",
+              quickSaleTiles: true,
+              sortOrder: 0,
+              options: [
+                {
+                  id: "variant-1",
+                  name: "groß",
+                  priceEffect: 450,
+                  isActive: true,
+                  sortOrder: 0,
+                },
+              ],
+            },
+            {
+              id: "group-extras-1",
+              name: "Extras",
+              selectionType: "MULTIPLE",
+              isRequired: false,
+              minSelect: 0,
+              maxSelect: null,
+              priceMode: "SURCHARGE",
+              quickSaleTiles: false,
+              sortOrder: 1,
+              options: [
+                {
+                  id: "extra-1",
+                  name: "Eis",
+                  priceEffect: 50,
+                  isActive: true,
+                  sortOrder: 0,
+                },
+              ],
+            },
           ],
-          extras: [{ id: "extra-1", name: "Eis", price: 50, sortOrder: 1 }],
         },
       ],
     },
@@ -211,8 +249,22 @@ describe("EventsService – Wächtervertrag für Issue #53", () => {
     expect(tx.product.create).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
-          variants: { create: [expect.objectContaining({ name: "groß" })] },
-          extras: { create: [expect.objectContaining({ name: "Eis" })] },
+          optionGroups: {
+            create: [
+              expect.objectContaining({
+                name: "Variante",
+                options: {
+                  create: [expect.objectContaining({ name: "groß" })],
+                },
+              }),
+              expect.objectContaining({
+                name: "Extras",
+                options: {
+                  create: [expect.objectContaining({ name: "Eis" })],
+                },
+              }),
+            ],
+          },
         }),
       }),
     );
@@ -297,7 +349,7 @@ describe("EventsService – Wächtervertrag für Issue #53", () => {
     expect(exported).toEqual(
       expect.objectContaining({
         kind: "VEREINORDER_EVENT_CONFIG",
-        schemaVersion: 1,
+        schemaVersion: 2,
         exportedAt: expect.any(String),
         event: expect.objectContaining({ name: "Sommerfest" }),
         areas: expect.any(Array),

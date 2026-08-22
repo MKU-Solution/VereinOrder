@@ -94,10 +94,24 @@ async function main() {
       targetStationId: schank.id,
       eventId: event.id,
       sortOrder: 1,
-      variants: {
+      optionGroups: {
         create: [
-          { name: "0,3l", price: 350, sortOrder: 1 },
-          { name: "0,5l", price: 450, sortOrder: 2 },
+          {
+            name: "Größe",
+            selectionType: "SINGLE",
+            isRequired: true,
+            minSelect: 1,
+            maxSelect: 1,
+            priceMode: "ABSOLUTE",
+            quickSaleTiles: true,
+            sortOrder: 0,
+            options: {
+              create: [
+                { name: "0,3l", priceEffect: 350, sortOrder: 0 },
+                { name: "0,5l", priceEffect: 450, sortOrder: 1 },
+              ],
+            },
+          },
         ],
       },
     },
@@ -123,11 +137,41 @@ async function main() {
       targetStationId: kueche.id,
       eventId: event.id,
       sortOrder: 1,
-      extras: {
+      optionGroups: {
         create: [
-          { name: "ohne Beilage", price: -200, sortOrder: 1 },
-          { name: "Ketchup", price: 50, sortOrder: 2 },
-          { name: "Zitrone extra", price: 0, sortOrder: 3 },
+          {
+            name: "Beilage",
+            selectionType: "SINGLE",
+            isRequired: true,
+            minSelect: 1,
+            maxSelect: 1,
+            priceMode: "SURCHARGE",
+            quickSaleTiles: false,
+            sortOrder: 0,
+            options: {
+              create: [
+                { name: "Pommes", priceEffect: 0, sortOrder: 0 },
+                { name: "Reis", priceEffect: 0, sortOrder: 1 },
+              ],
+            },
+          },
+          {
+            name: "Extras",
+            selectionType: "MULTIPLE",
+            isRequired: false,
+            minSelect: 0,
+            maxSelect: null,
+            priceMode: "SURCHARGE",
+            quickSaleTiles: false,
+            sortOrder: 1,
+            options: {
+              create: [
+                { name: "ohne Beilage", priceEffect: -200, sortOrder: 0 },
+                { name: "Ketchup", priceEffect: 50, sortOrder: 1 },
+                { name: "Zitrone extra", priceEffect: 0, sortOrder: 2 },
+              ],
+            },
+          },
         ],
       },
     },
@@ -142,15 +186,29 @@ async function main() {
       targetStationId: kueche.id,
       eventId: event.id,
       sortOrder: 2,
-      extras: {
+      optionGroups: {
         create: [
-          { name: "Ketchup", price: 50, sortOrder: 1 },
-          { name: "Mayo", price: 50, sortOrder: 2 },
+          {
+            name: "Extras",
+            selectionType: "MULTIPLE",
+            isRequired: false,
+            minSelect: 0,
+            maxSelect: null,
+            priceMode: "SURCHARGE",
+            quickSaleTiles: false,
+            sortOrder: 0,
+            options: {
+              create: [
+                { name: "Ketchup", priceEffect: 50, sortOrder: 0 },
+                { name: "Mayo", priceEffect: 50, sortOrder: 1 },
+              ],
+            },
+          },
         ],
       },
     },
   });
-  console.log(`Test-Produkte mit Varianten und Extras erstellt.`);
+  console.log(`Test-Produkte mit Auswahlgruppen erstellt.`);
 }
 
 main()

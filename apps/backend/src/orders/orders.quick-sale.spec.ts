@@ -12,7 +12,7 @@ describe("OrdersService – Bonkassen-Schnellverkauf für Issue #52", () => {
     eventId: "event-1",
     targetStationId: null,
     availability: "AVAILABLE",
-    variants: [],
+    optionGroups: [],
   };
 
   beforeEach(() => {
@@ -227,7 +227,11 @@ describe("OrdersService – Bonkassen-Schnellverkauf für Issue #52", () => {
         eventId: "event-1",
         idempotencyKey: "quick-sale-variant",
         items: [
-          { productId: product.id, quantity: 1, variantId: "foreign-variant" },
+          {
+            productId: product.id,
+            quantity: 1,
+            optionIds: ["foreign-option"],
+          },
         ],
         paymentMethod: "CASH",
         tenderedAmount: 500,
