@@ -28,12 +28,17 @@ const getTilePriceLabel = (product: any) => {
 };
 
 // Sub-Komponente für Swipe-to-Delete/Reduce
-const CartItem = ({
+export const CartItem = ({
   item,
+  addItem,
   removeItem,
   deleteItem,
 }: {
   item: CartItemType;
+  addItem: (
+    product: any,
+    selectedOptions?: CartItemType["selectedOptions"],
+  ) => void;
   removeItem: (id: string) => void;
   deleteItem: (id: string) => void;
 }) => {
@@ -94,9 +99,17 @@ const CartItem = ({
         onTouchEnd={onTouchEnd}
         onClick={() => setTranslateX(0)}
       >
-        <div className="w-12 text-center text-lg font-bold text-slate-800">
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            addItem(item.product, item.selectedOptions);
+          }}
+          className="w-12 min-h-[44px] flex items-center justify-center text-center text-lg font-bold text-slate-800"
+          aria-label={`Menge von ${item.product.shortName || item.product.name} erhöhen`}
+        >
           {item.quantity}
-        </div>
+        </button>
         <div className="flex-1 truncate pr-2">
           <div className="flex items-center gap-1.5">
             <span className="text-lg font-semibold text-slate-800">
@@ -114,9 +127,17 @@ const CartItem = ({
             </div>
           )}
         </div>
-        <div className="text-right text-lg font-bold text-slate-800 w-24">
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            removeItem(item.id);
+          }}
+          className="w-24 min-h-[44px] flex items-center justify-end text-right text-lg font-bold text-slate-800"
+          aria-label={`Menge von ${item.product.shortName || item.product.name} verringern`}
+        >
           {formatPrice(item.finalPrice * item.quantity)}
-        </div>
+        </button>
       </div>
     </div>
   );
@@ -429,6 +450,7 @@ export const Dashboard = () => {
               <CartItem
                 key={item.id}
                 item={item}
+                addItem={addItem}
                 removeItem={removeItem}
                 deleteItem={deleteItem}
               />
