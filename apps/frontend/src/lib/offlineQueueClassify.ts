@@ -117,19 +117,27 @@ export function classifyConflictKind(
   if (httpStatus === 403) return "FORBIDDEN";
   if (httpStatus === 404 || httpStatus === 405) return "VALIDATION";
 
+  // Issue #89: die Backend-Texte sind deutsch. Diese Muster sind bewusst auf
+  // kurze, in orders.messages.ts (Backend) eindeutig vorkommende Fragmente
+  // zugeschnitten - nicht auf den vollen Satz -, damit eine spaetere
+  // Umformulierung der handlungsleitenden Zusatzsaetze nicht sofort das
+  // Muster bricht. Trotzdem bleiben Muster und Backend-Text zwei getrennte
+  // Stellen: offlineQueueClassify.test.ts importiert ORDER_REJECTION_MESSAGES
+  // direkt aus dem Backend und schlaegt fehl, wenn beide auseinanderlaufen
+  // (siehe Kommentar dort und in orders.messages.ts).
   const patterns: [RegExp, ConflictKind][] = [
     [/anderen Betriebsmodus/i, "EVENT_MODE"],
-    [/not active for orders/i, "EVENT_MODE"],
-    [/currently out of stock/i, "PRODUCT_UNAVAILABLE"],
-    [/Product .* not found/i, "PRODUCT_UNAVAILABLE"],
+    [/Bestellungen sind erst möglich/i, "EVENT_MODE"],
+    [/ist derzeit nicht verfügbar/i, "PRODUCT_UNAVAILABLE"],
+    [/ist für diese Veranstaltung nicht hinterlegt/i, "PRODUCT_UNAVAILABLE"],
     [/gehört zu keiner aktiven Auswahlgruppe/i, "PRICE_OR_OPTION"],
     [/braucht mindestens/i, "PRICE_OR_OPTION"],
     [/erlaubt höchstens/i, "PRICE_OR_OPTION"],
     [/mehrfach angegeben/i, "PRICE_OR_OPTION"],
     [/Endpreis.*nicht negativ/i, "PRICE_OR_OPTION"],
-    [/Area does not belong to/i, "VALIDATION"],
-    [/must contain at least one item/i, "VALIDATION"],
-    [/User is not active/i, "FORBIDDEN"],
+    [/gewählte Bereich gehört nicht zu dieser Veranstaltung/i, "VALIDATION"],
+    [/Es wurde keine Position ausgewählt/i, "VALIDATION"],
+    [/Benutzerkonto ist nicht aktiv/i, "FORBIDDEN"],
     [/Sitzung/i, "SESSION_CLOSED"],
   ];
 

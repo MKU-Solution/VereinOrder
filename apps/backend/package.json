@@ -32,7 +32,8 @@
     "bcryptjs": "^2.4.3",
     "reflect-metadata": "^0.2.0",
     "rxjs": "^7.8.1",
-    "@vereinorder/database": "workspace:*"
+    "@vereinorder/database": "workspace:*",
+    "@vereinorder/shared": "workspace:*"
   },
   "devDependencies": {
     "@nestjs/cli": "^10.0.0",

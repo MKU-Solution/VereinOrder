@@ -1,3 +1,4 @@
+import { BadRequestException } from "@nestjs/common";
 import { Prisma } from "@vereinorder/database";
 import { OrdersService } from "./orders.service";
 import { createAuditServiceStub } from "./test-support/audit-service.stub";
@@ -172,6 +173,6 @@ describe("OrdersService – P2002 auf idempotencyKey als Wiederholung für Issue
         idempotencyKey: "race-key",
         items: [{ productId: "product-1", quantity: 2 }],
       }),
-    ).rejects.toThrow(/idempotencyKey is already in use/);
+    ).rejects.toBeInstanceOf(BadRequestException);
   });
 });
