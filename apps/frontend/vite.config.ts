@@ -51,6 +51,15 @@ export default defineConfig({
         target: apiProxyTarget,
         changeOrigin: true,
       },
+      // Der Ereignisstrom laeuft ueber EventSource auf /realtime/stream, also
+      // nicht ueber die Axios-Instanz mit ihrem /api-Praefix. Ohne diesen
+      // Eintrag landet er beim Entwicklungsserver statt beim Backend und
+      // scheitert still, weil EventSource.onerror nur schweigt. Im Betrieb
+      // leitet apps/frontend/nginx.conf denselben Pfad weiter.
+      "/realtime": {
+        target: apiProxyTarget,
+        changeOrigin: true,
+      },
     },
   },
 });
