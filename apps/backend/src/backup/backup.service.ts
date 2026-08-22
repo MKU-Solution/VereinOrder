@@ -65,8 +65,8 @@ export class BackupService implements OnModuleInit {
       stations,
       categories,
       products,
-      variants,
-      extras,
+      optionGroups,
+      options,
       users,
       orders,
       orderItems,
@@ -81,8 +81,8 @@ export class BackupService implements OnModuleInit {
       this.prisma.station.findMany(),
       this.prisma.productCategory.findMany(),
       this.prisma.product.findMany(),
-      this.prisma.productVariant.findMany(),
-      this.prisma.productExtra.findMany(),
+      this.prisma.productOptionGroup.findMany(),
+      this.prisma.productOption.findMany(),
       this.prisma.user.findMany(),
       this.prisma.order.findMany(),
       this.prisma.orderItem.findMany(),
@@ -104,8 +104,8 @@ export class BackupService implements OnModuleInit {
         stations: stations.length,
         categories: categories.length,
         products: products.length,
-        variants: variants.length,
-        extras: extras.length,
+        optionGroups: optionGroups.length,
+        options: options.length,
         users: users.length,
         orders: orders.length,
         orderItems: orderItems.length,
@@ -121,8 +121,8 @@ export class BackupService implements OnModuleInit {
         stations,
         categories,
         products,
-        variants,
-        extras,
+        optionGroups,
+        options,
         users,
         orders,
         orderItems,
@@ -242,8 +242,8 @@ export class BackupService implements OnModuleInit {
       await tx.orderItem.deleteMany();
       await tx.order.deleteMany();
       await tx.cashierSession.deleteMany();
-      await tx.productExtra.deleteMany();
-      await tx.productVariant.deleteMany();
+      await tx.productOption.deleteMany();
+      await tx.productOptionGroup.deleteMany();
       await tx.product.deleteMany();
       await tx.productCategory.deleteMany();
       await tx.station.deleteMany();
@@ -266,10 +266,10 @@ export class BackupService implements OnModuleInit {
         await tx.productCategory.createMany({ data: data.categories });
       if (data.products?.length)
         await tx.product.createMany({ data: data.products });
-      if (data.variants?.length)
-        await tx.productVariant.createMany({ data: data.variants });
-      if (data.extras?.length)
-        await tx.productExtra.createMany({ data: data.extras });
+      if (data.optionGroups?.length)
+        await tx.productOptionGroup.createMany({ data: data.optionGroups });
+      if (data.options?.length)
+        await tx.productOption.createMany({ data: data.options });
       if (data.sessions?.length)
         await tx.cashierSession.createMany({ data: data.sessions });
       if (data.orders?.length) await tx.order.createMany({ data: data.orders });

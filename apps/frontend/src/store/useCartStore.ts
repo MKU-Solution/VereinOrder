@@ -1,17 +1,25 @@
 import { create } from "zustand";
 
+export interface SelectedCartOption {
+  id: string;
+  name: string;
+  priceEffect: number;
+  groupId: string;
+  groupName: string;
+  priceMode: "ABSOLUTE" | "SURCHARGE";
+}
+
 export interface CartItem {
   id: string;
   product: any;
-  variant?: any;
-  extras?: any[];
+  selectedOptions?: SelectedCartOption[];
   quantity: number;
   finalPrice: number;
 }
 
 interface CartState {
   items: CartItem[];
-  addItem: (product: any, variant?: any, extras?: any[]) => void;
+  addItem: (product: any, selectedOptions?: SelectedCartOption[]) => void;
   removeItem: (cartItemId: string) => void;
   deleteItem: (cartItemId: string) => void;
   clearCart: () => void;
@@ -21,27 +29,28 @@ interface CartState {
 export const useCartStore = create<CartState>((set) => ({
   items: [],
   total: 0,
-  addItem: (product, variant, extras) =>
+  addItem: (product, selectedOptions) =>
     set((state) => {
-      let finalPrice = product.price;
-      const idParts = [product.id];
+      const options = selectedOptions || [];
 
-      if (variant) {
-        finalPrice = variant.price;
-        idParts.push(variant.id);
-      }
+      // Grundpreis: die Antwort der ABSOLUTE-Gruppe, sonst der Produktpreis.
+      const absoluteOption = options.find((o) => o.priceMode === "ABSOLUTE");
+      let finalPrice = absoluteOption
+        ? absoluteOption.priceEffect
+        : product.price;
 
-      if (extras && extras.length > 0) {
-        const extraCost = extras.reduce((sum, e) => sum + e.price, 0);
-        finalPrice += extraCost;
-        const extraIds = extras
-          .map((e) => e.id)
-          .sort()
-          .join("_");
-        idParts.push(extraIds);
-      }
+      // Aufpreise: Summe der priceEffect aller übrigen gewählten Antworten.
+      const surcharge = options
+        .filter((o) => o.priceMode !== "ABSOLUTE")
+        .reduce((sum, o) => sum + o.priceEffect, 0);
+      finalPrice += surcharge;
 
-      const cartItemId = idParts.join("|");
+      // cartItemId enthält alle gewählten Antwortkennungen, aufsteigend sortiert,
+      // damit zwei verschiedene Zusammenstellungen desselben Produkts nicht zu
+      // einer Warenkorbzeile verschmelzen.
+      const optionIds = options.map((o) => o.id).sort();
+      const cartItemId = [product.id, ...optionIds].join("|");
+
       const existing = state.items.find((i) => i.id === cartItemId);
       let newItems;
 
@@ -52,7 +61,13 @@ export const useCartStore = create<CartState>((set) => ({
       } else {
         newItems = [
           ...state.items,
-          { id: cartItemId, product, variant, extras, quantity: 1, finalPrice },
+          {
+            id: cartItemId,
+            product,
+            selectedOptions: options,
+            quantity: 1,
+            finalPrice,
+          },
         ];
       }
 

@@ -14,11 +14,25 @@ import {
 } from "lucide-react";
 import { api } from "../lib/api";
 
-interface QuickSaleVariant {
+interface QuickSaleOption {
   id: string;
   name: string;
-  price: number;
+  priceEffect: number;
+  isActive: boolean;
   sortOrder: number;
+}
+
+interface QuickSaleOptionGroup {
+  id: string;
+  name: string;
+  selectionType: "SINGLE" | "MULTIPLE";
+  isRequired: boolean;
+  minSelect: number;
+  maxSelect: number | null;
+  priceMode: "ABSOLUTE" | "SURCHARGE";
+  quickSaleTiles: boolean;
+  sortOrder: number;
+  options: QuickSaleOption[];
 }
 
 interface QuickSaleProduct {
@@ -29,7 +43,7 @@ interface QuickSaleProduct {
   color?: string | null;
   availability: "AVAILABLE" | "LOW_STOCK" | "OUT_OF_STOCK";
   category?: { id: string; name: string; sortOrder: number } | null;
-  variants: QuickSaleVariant[];
+  optionGroups: QuickSaleOptionGroup[];
 }
 
 interface QuickSaleContext {
@@ -49,9 +63,10 @@ interface QuickSaleContext {
 interface SaleOption {
   key: string;
   productId: string;
-  variantId?: string;
+  optionIds: string[];
   label: string;
   detail?: string;
+  hint?: string;
   price: number;
   color?: string | null;
   availability: QuickSaleProduct["availability"];
@@ -178,24 +193,71 @@ export const QuickSaleDashboard = () => {
   const options = useMemo<SaleOption[]>(() => {
     return (context?.products || []).flatMap((product) => {
       const category = product.category?.name || "Ohne Kategorie";
-      if (product.variants.length > 0) {
-        return product.variants.map((variant) => ({
-          key: `${product.id}|${variant.id}`,
-          productId: product.id,
-          variantId: variant.id,
-          label: product.shortName || product.name,
-          detail: variant.name,
-          price: variant.price,
-          color: product.color,
-          availability: product.availability,
-          category,
-        }));
+      const groups = product.optionGroups || [];
+
+      // Die Auffächerung in Kacheln hängt ausschließlich an der Gruppe mit
+      // quickSaleTiles === true, nie an priceMode oder der Anzahl der Gruppen.
+      const tileGroup = groups.find((g) => g.quickSaleTiles);
+
+      // Weitere Pflichtgruppen neben der Kachelgruppe: Der Schnellverkauf ist
+      // eine Ein-Tipp-Maske, deshalb kann er keine Rückfrage stellen. Sind sie
+      // alle aufpreisfrei (jede aktive Antwort mit priceEffect 0), wird die
+      // erste Antwort in gepflegter Reihenfolge verwendet und die Kachel trägt
+      // einen Hinweis. Trägt eine von ihnen einen Aufpreis, ist der
+      // Kachelpreis unbestimmt und das Produkt wird im Schnellverkauf nicht
+      // angeboten.
+      const otherRequiredGroups = groups.filter(
+        (g) => g.id !== tileGroup?.id && g.isRequired,
+      );
+      const isGroupSurchargeFree = (group: QuickSaleOptionGroup) =>
+        group.options
+          .filter((o) => o.isActive !== false)
+          .every((o) => o.priceEffect === 0);
+      const blockedByPaidRequiredGroup = otherRequiredGroups.some(
+        (g) => !isGroupSurchargeFree(g),
+      );
+      if (blockedByPaidRequiredGroup) return [];
+
+      const defaultOptions = otherRequiredGroups
+        .map((g) => g.options.filter((o) => o.isActive !== false)[0])
+        .filter((o): o is QuickSaleOption => !!o);
+      const defaultOptionIds = defaultOptions.map((o) => o.id);
+      const defaultHint =
+        defaultOptions.length > 0
+          ? `Standard: ${defaultOptions.map((o) => o.name).join(", ")}`
+          : undefined;
+
+      if (tileGroup) {
+        const activeTileOptions = tileGroup.options.filter(
+          (o) => o.isActive !== false,
+        );
+        return activeTileOptions.map((option) => {
+          const price =
+            tileGroup.priceMode === "ABSOLUTE"
+              ? option.priceEffect
+              : product.price + option.priceEffect;
+          return {
+            key: `${product.id}|${option.id}`,
+            productId: product.id,
+            optionIds: [option.id, ...defaultOptionIds],
+            label: product.shortName || product.name,
+            detail: option.name,
+            hint: defaultHint,
+            price,
+            color: product.color,
+            availability: product.availability,
+            category,
+          };
+        });
       }
+
       return [
         {
           key: product.id,
           productId: product.id,
+          optionIds: defaultOptionIds,
           label: product.shortName || product.name,
+          hint: defaultHint,
           price: product.price,
           color: product.color,
           availability: product.availability,
@@ -293,8 +355,8 @@ export const QuickSaleDashboard = () => {
         idempotencyKey,
         items: cart.map((line) => ({
           productId: line.productId,
-          variantId: line.variantId,
           quantity: line.quantity,
+          optionIds: line.optionIds.length > 0 ? line.optionIds : undefined,
         })),
         paymentMethod,
         tenderedAmount: paymentMethod === "CASH" ? tenderedAmount : undefined,
@@ -494,6 +556,11 @@ export const QuickSaleDashboard = () => {
                         {option.detail}
                       </span>
                     )}
+                    {option.hint && (
+                      <span className="mt-1 block text-[10px] font-semibold text-white/60">
+                        {option.hint}
+                      </span>
+                    )}
                     <span className="mt-2 block font-mono text-sm font-bold text-white/90">
                       {formatCurrency(option.price * selectedQuantity)}
                     </span>
@@ -573,6 +640,11 @@ export const QuickSaleDashboard = () => {
                         {line.detail && (
                           <p className="truncate text-xs text-slate-500">
                             {line.detail}
+                          </p>
+                        )}
+                        {line.hint && (
+                          <p className="truncate text-[10px] italic text-slate-400">
+                            {line.hint}
                           </p>
                         )}
                       </div>

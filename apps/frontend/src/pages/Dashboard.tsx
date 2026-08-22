@@ -8,6 +8,25 @@ import { TableSelectionModal } from "../components/TableSelectionModal";
 
 const formatPrice = (cents: number) => `€ ${(cents / 100).toFixed(2)}`;
 
+// Hat ein Produkt eine Pflichtgruppe mit Endpreis (ABSOLUTE), zeigt die Kachel
+// den kleinsten Antwortpreis mit dem Zusatz "ab" (Entscheidung 2 der
+// Projektleitung). Ohne solche Gruppe bleibt die Kachel unverändert.
+const getTilePriceLabel = (product: any) => {
+  const absoluteGroup = (product.optionGroups || []).find(
+    (g: any) => g.priceMode === "ABSOLUTE",
+  );
+  if (absoluteGroup) {
+    const activeOptions = (absoluteGroup.options || []).filter(
+      (o: any) => o.isActive !== false,
+    );
+    if (activeOptions.length > 0) {
+      const min = Math.min(...activeOptions.map((o: any) => o.priceEffect));
+      return `ab ${formatPrice(min)}`;
+    }
+  }
+  return formatPrice(product.price);
+};
+
 // Sub-Komponente für Swipe-to-Delete/Reduce
 const CartItem = ({
   item,
@@ -89,11 +108,9 @@ const CartItem = ({
               </span>
             )}
           </div>
-          {(item.variant || (item.extras && item.extras.length > 0)) && (
+          {item.selectedOptions && item.selectedOptions.length > 0 && (
             <div className="text-sm text-slate-500 leading-tight">
-              {item.variant?.name}
-              {item.variant && item.extras?.length ? " · " : ""}
-              {item.extras?.map((e) => e.name).join(", ")}
+              {item.selectedOptions.map((o) => o.name).join(", ")}
             </div>
           )}
         </div>
@@ -264,10 +281,7 @@ export const Dashboard = () => {
       return; // Do not allow adding out-of-stock products
     }
 
-    if (
-      (product.variants && product.variants.length > 0) ||
-      (product.extras && product.extras.length > 0)
-    ) {
+    if (product.optionGroups && product.optionGroups.length > 0) {
       setSelectedProductForOptions(product);
     } else {
       addItem(product);
@@ -304,9 +318,10 @@ export const Dashboard = () => {
       const orderItems = items.map((i) => ({
         productId: i.product.id,
         quantity: i.quantity,
-        variantId: i.variant?.id,
-        variantName: i.variant?.name,
-        extras: i.extras,
+        optionIds:
+          i.selectedOptions && i.selectedOptions.length > 0
+            ? i.selectedOptions.map((o) => o.id)
+            : undefined,
       }));
 
       const eventId = items[0].product.eventId;
@@ -333,9 +348,10 @@ export const Dashboard = () => {
         const orderItems = items.map((i) => ({
           productId: i.product.id,
           quantity: i.quantity,
-          variantId: i.variant?.id,
-          variantName: i.variant?.name,
-          extras: i.extras,
+          optionIds:
+            i.selectedOptions && i.selectedOptions.length > 0
+              ? i.selectedOptions.map((o) => o.id)
+              : undefined,
         }));
         const eventId = items[0].product.eventId;
 
@@ -503,7 +519,7 @@ export const Dashboard = () => {
                   <span
                     className={`text-xs mt-1 drop-shadow-md ${isOut ? "text-slate-500" : "text-white/80"}`}
                   >
-                    {formatPrice(p.price)}
+                    {getTilePriceLabel(p)}
                   </span>
                 </button>
               );
@@ -549,7 +565,7 @@ export const Dashboard = () => {
                   <span
                     className={`font-bold text-lg drop-shadow-md ${isOut ? "text-slate-500" : "text-white"}`}
                   >
-                    {formatPrice(p.price)}
+                    {getTilePriceLabel(p)}
                   </span>
                 </button>
               );

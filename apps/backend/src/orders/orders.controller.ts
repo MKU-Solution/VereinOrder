@@ -33,7 +33,7 @@ export class OrdersController {
     body: {
       eventId: string;
       idempotencyKey: string;
-      items: { productId: string; quantity: number; variantId?: string }[];
+      items: { productId: string; quantity: number; optionIds?: string[] }[];
       paymentMethod: "CASH" | "CARD";
       tenderedAmount?: number;
     },
