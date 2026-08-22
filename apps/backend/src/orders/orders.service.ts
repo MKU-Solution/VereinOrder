@@ -775,6 +775,75 @@ export class OrdersService {
         },
       });
       if (existingOrder) {
+        // Idempotenzpruefung nach Issue #86, nach dem Muster von
+        // createQuickSale: der Kurzschluss darf eine vorhandene Bestellung
+        // nur zurueckgeben, wenn Benutzer, Veranstaltung, Positionen und
+        // Zahlungen tatsaechlich der Anfrage entsprechen. Reihenfolgen
+        // (Positionen wie darin enthaltene Auswahlkennungen, sowie
+        // Zahlungen) sind dabei irrelevant.
+        const normalizeItems = (
+          items: { productId: string; quantity: number; optionIds: string[] }[],
+        ) =>
+          items
+            .map((item) => {
+              const optionIds = [...item.optionIds].sort();
+              return `${item.productId}:${item.quantity}:${optionIds.join(",")}`;
+            })
+            .sort();
+
+        const requestedItems = normalizeItems(
+          dto.items.map((item) => ({
+            productId: item.productId,
+            quantity: item.quantity,
+            optionIds: item.optionIds ?? [],
+          })),
+        );
+        // Die gespeicherte Bestellposition haelt die getroffene Auswahl als
+        // Momentaufnahme in variantId (ABSOLUTE-Gruppe) und im JSON-Feld
+        // extras (uebrige Gruppen). Beides zusammen entspricht den
+        // optionIds der Anfrage, siehe requestedItems oben in
+        // createQuickSale.
+        const storedItems = normalizeItems(
+          existingOrder.items.map((item) => {
+            const extras = Array.isArray(item.extras)
+              ? (item.extras as { id: string }[])
+              : [];
+            const optionIds = [
+              ...(item.variantId ? [item.variantId] : []),
+              ...extras.map((extra) => extra.id),
+            ];
+            return {
+              productId: item.productId,
+              quantity: item.quantity,
+              optionIds,
+            };
+          }),
+        );
+
+        const normalizePayments = (
+          payments: { amount: number; method: string }[],
+        ) => payments.map((p) => `${p.amount}:${p.method}`).sort();
+
+        const requestedPayments = normalizePayments(dto.payments ?? []);
+        const storedPayments = normalizePayments(existingOrder.payments);
+
+        const sameItems =
+          requestedItems.length === storedItems.length &&
+          requestedItems.every((item, index) => item === storedItems[index]);
+        const samePayments =
+          requestedPayments.length === storedPayments.length &&
+          requestedPayments.every(
+            (payment, index) => payment === storedPayments[index],
+          );
+
+        if (
+          existingOrder.userId !== userId ||
+          existingOrder.eventId !== dto.eventId ||
+          !sameItems ||
+          !samePayments
+        ) {
+          throw new BadRequestException("idempotencyKey is already in use");
+        }
         return existingOrder;
       }
     }
