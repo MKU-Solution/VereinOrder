@@ -34,6 +34,7 @@ export const CartItem = ({
   addItem,
   removeItem,
   deleteItem,
+  onEditOptions,
 }: {
   item: CartItemType;
   // Die lebende Produktliste, über den Ereignisstrom aktuell gehalten.
@@ -49,6 +50,11 @@ export const CartItem = ({
   ) => void;
   removeItem: (id: string) => void;
   deleteItem: (id: string) => void;
+  // Öffnet die Auswahlmaske im Änderungsfall, vorbelegt mit der Auswahl
+  // dieser Zeile (Issue #82). Optional, damit ältere Aufrufer ohne diese
+  // Funktion weiterhin funktionieren — dann bleibt der mittlere Bereich bei
+  // Produkten mit Auswahlgruppen inaktiv.
+  onEditOptions?: (item: CartItemType) => void;
 }) => {
   const [translateX, setTranslateX] = useState(0);
   const [startX, setStartX] = useState(0);
@@ -77,6 +83,10 @@ export const CartItem = ({
   const currentProduct =
     products.find((p) => p.id === item.product?.id) ?? item.product;
   const isOutOfStock = currentProduct?.availability === "OUT_OF_STOCK";
+  // Nur mit Auswahlgruppen gibt es überhaupt etwas zu ändern (Issue #82).
+  // Ohne sie bleibt der mittlere Bereich ein einfacher Text ohne
+  // Schaltflächen-Anmutung, um keine Bedienbarkeit vorzutäuschen.
+  const hasOptionGroups = (currentProduct?.optionGroups?.length ?? 0) > 0;
 
   return (
     <div
@@ -131,20 +141,55 @@ export const CartItem = ({
           {item.quantity}
         </button>
         <div className="flex-1 truncate pr-2">
-          <div className="flex items-center gap-1.5">
-            <span className="text-lg font-semibold text-slate-800">
-              {item.product.shortName || item.product.name}
-            </span>
-            {isOutOfStock && (
-              <span className="bg-rose-600 text-white text-xs px-1.5 py-0.5 rounded font-bold uppercase">
-                Ausverkauft
+          {hasOptionGroups ? (
+            // Echte Schaltfläche statt reinem Text: Tippen auf Produktname
+            // und Auswahl öffnet die Maske erneut, vorbelegt mit der
+            // bereits getroffenen Auswahl (Issue #82). Die Ereignisweitergabe
+            // an das onClick der Zeile (Wischverschiebung zurücksetzen) wird
+            // unterbunden.
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onEditOptions?.(item);
+              }}
+              className="w-full min-h-[44px] flex flex-col items-start justify-center text-left truncate rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-1"
+              aria-label={`Auswahl von ${item.product.shortName || item.product.name} ändern`}
+            >
+              <span className="flex items-center gap-1.5">
+                <span className="text-lg font-semibold text-slate-800">
+                  {item.product.shortName || item.product.name}
+                </span>
+                {isOutOfStock && (
+                  <span className="bg-rose-600 text-white text-xs px-1.5 py-0.5 rounded font-bold uppercase">
+                    Ausverkauft
+                  </span>
+                )}
               </span>
-            )}
-          </div>
-          {item.selectedOptions && item.selectedOptions.length > 0 && (
-            <div className="text-sm text-slate-500 leading-tight">
-              {item.selectedOptions.map((o) => o.name).join(", ")}
-            </div>
+              {item.selectedOptions && item.selectedOptions.length > 0 && (
+                <span className="block text-sm text-slate-500 leading-tight">
+                  {item.selectedOptions.map((o) => o.name).join(", ")}
+                </span>
+              )}
+            </button>
+          ) : (
+            <>
+              <div className="flex items-center gap-1.5">
+                <span className="text-lg font-semibold text-slate-800">
+                  {item.product.shortName || item.product.name}
+                </span>
+                {isOutOfStock && (
+                  <span className="bg-rose-600 text-white text-xs px-1.5 py-0.5 rounded font-bold uppercase">
+                    Ausverkauft
+                  </span>
+                )}
+              </div>
+              {item.selectedOptions && item.selectedOptions.length > 0 && (
+                <div className="text-sm text-slate-500 leading-tight">
+                  {item.selectedOptions.map((o) => o.name).join(", ")}
+                </div>
+              )}
+            </>
           )}
         </div>
         <button
@@ -186,6 +231,14 @@ export const Dashboard = () => {
   const [selectedProductForOptions, setSelectedProductForOptions] = useState<
     any | null
   >(null);
+  // Warenkorbzeile, deren Auswahl gerade geändert wird (Issue #82). Getrennt
+  // von selectedProductForOptions oben: jenes ist der Anlegefall (Kachel
+  // angetippt, Maske startet ohne Vorauswahl), dies hier der Änderungsfall
+  // (Zeile angetippt, Maske startet mit deren bisheriger Auswahl). Beide
+  // teilen sich dieselbe ProductOptionsModal-Instanz unten.
+  const [editingCartItem, setEditingCartItem] = useState<CartItemType | null>(
+    null,
+  );
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
 
   // Realtime Toast State
@@ -194,8 +247,15 @@ export const Dashboard = () => {
     type: "warning" | "info";
   } | null>(null);
 
-  const { items, addItem, removeItem, deleteItem, clearCart, total } =
-    useCartStore();
+  const {
+    items,
+    addItem,
+    updateItemOptions,
+    removeItem,
+    deleteItem,
+    clearCart,
+    total,
+  } = useCartStore();
 
   const fetchProducts = async () => {
     try {
@@ -326,6 +386,44 @@ export const Dashboard = () => {
       setSelectedProductForOptions(product);
     } else {
       addItem(product);
+    }
+  };
+
+  // Öffnet die Auswahlmaske im Änderungsfall für eine bestehende
+  // Warenkorbzeile (Issue #82). Der mittlere Bereich der Zeile ruft dies nur
+  // auf, wenn das Produkt Auswahlgruppen hat — bei Produkten ohne
+  // Auswahlgruppen wird die Schaltfläche gar nicht erst angezeigt.
+  const handleEditOptions = (item: CartItemType) => {
+    setEditingCartItem(item);
+  };
+
+  // Anlege- und Änderungsfall teilen sich dieselbe ProductOptionsModal.
+  // Welcher Fall aktiv ist, entscheidet ausschließlich, welcher der beiden
+  // States oben gesetzt ist — nie ein und derselbe State für beides.
+  const isOptionsModalOpen = !!selectedProductForOptions || !!editingCartItem;
+  const optionsModalProduct = editingCartItem
+    ? (products.find((p) => p.id === editingCartItem.product?.id) ??
+      editingCartItem.product)
+    : selectedProductForOptions;
+
+  const closeOptionsModal = () => {
+    setSelectedProductForOptions(null);
+    setEditingCartItem(null);
+  };
+
+  const handleOptionsSubmit = (
+    product: any,
+    selectedOptions: NonNullable<CartItemType["selectedOptions"]>,
+  ) => {
+    if (editingCartItem) {
+      // Änderungsfall: Auswahl der Zeile ersetzen, Menge bleibt erhalten und
+      // wird mit einer eventuell bereits vorhandenen gleichen Zeile
+      // verschmolzen (im Store gelöst, siehe useCartStore.updateItemOptions).
+      updateItemOptions(editingCartItem.id, selectedOptions);
+    } else {
+      // Anlegefall: neue Zeile hinzufügen bzw. mit bestehender gleicher
+      // Zeile verschmelzen (unverändertes Verhalten aus addItem).
+      addItem(product, selectedOptions);
     }
   };
 
@@ -480,6 +578,7 @@ export const Dashboard = () => {
                 addItem={addItem}
                 removeItem={removeItem}
                 deleteItem={deleteItem}
+                onEditOptions={handleEditOptions}
               />
             ))}
           </div>
@@ -661,10 +760,12 @@ export const Dashboard = () => {
       />
 
       <ProductOptionsModal
-        product={selectedProductForOptions}
-        isOpen={!!selectedProductForOptions}
-        onClose={() => setSelectedProductForOptions(null)}
-        onAdd={addItem}
+        product={optionsModalProduct}
+        isOpen={isOptionsModalOpen}
+        onClose={closeOptionsModal}
+        onAdd={handleOptionsSubmit}
+        mode={editingCartItem ? "edit" : "add"}
+        initialSelectedOptions={editingCartItem?.selectedOptions}
       />
 
       <TableSelectionModal

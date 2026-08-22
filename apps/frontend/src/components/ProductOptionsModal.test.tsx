@@ -254,3 +254,145 @@ describe("ProductOptionsModal – Kassenmaske (Issue #75)", () => {
     expect(screen.queryByText(/Gesamtpreis: € /)).not.toBeInTheDocument();
   });
 });
+
+// Deckt den Änderungsfall aus Issue #82 ab: eine bereits im Warenkorb
+// befindliche Zusammenstellung wird erneut geöffnet, diesmal vorbelegt mit
+// der zuvor getroffenen Auswahl. Die Regel aus #75 (Anlegefall: keine
+// Vorauswahl) wird dadurch nicht aufgeweicht — der obige describe-Block
+// bleibt unverändert grün und deckt weiterhin ausschließlich den
+// Standardmodus ("add") ab, in dem initialSelectedOptions gar nicht gesetzt
+// wird.
+const reisSelection = {
+  id: "option-reis",
+  name: "Reis",
+  priceEffect: 0,
+  groupId: "group-beilage",
+  groupName: "Beilage",
+  priceMode: "SURCHARGE" as const,
+};
+
+const extraSosseSelection = {
+  id: "option-extra-sosse",
+  name: "extra Soße",
+  priceEffect: 80,
+  groupId: "group-anpassung",
+  groupName: "Anpassung",
+  priceMode: "SURCHARGE" as const,
+};
+
+describe("ProductOptionsModal – Änderungsfall einer Warenkorbzeile (Issue #82)", () => {
+  it("öffnet im Änderungsmodus vorbelegt mit der bisherigen Auswahl und beschriftet den Hauptknopf 'Übernehmen'", () => {
+    render(
+      <ProductOptionsModal
+        product={schnitzelProduct}
+        isOpen={true}
+        onClose={vi.fn()}
+        onAdd={vi.fn()}
+        mode="edit"
+        initialSelectedOptions={[reisSelection, extraSosseSelection]}
+      />,
+    );
+
+    expect(optionButton("Reis")).toHaveClass("border-indigo-500");
+    expect(optionButton("Pommes")).not.toHaveClass("border-indigo-500");
+    expect(optionButton("extra Soße")).toHaveClass("border-emerald-500");
+
+    expect(
+      screen.getByRole("button", { name: /^Übernehmen/ }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /^Hinzufügen/ }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("übernimmt eine geänderte Auswahl und behält dabei die Menge der Zeile bei (Mengenerhalt liegt beim Aufrufer)", () => {
+    const onAdd = vi.fn();
+    render(
+      <ProductOptionsModal
+        product={schnitzelProduct}
+        isOpen={true}
+        onClose={vi.fn()}
+        onAdd={onAdd}
+        mode="edit"
+        initialSelectedOptions={[reisSelection, extraSosseSelection]}
+      />,
+    );
+
+    // Statt Reis nun Pommes; die freiwillige Zusatzauswahl bleibt bestehen.
+    fireEvent.click(optionButton("Pommes"));
+
+    fireEvent.click(screen.getByRole("button", { name: /^Übernehmen/ }));
+
+    expect(onAdd).toHaveBeenCalledTimes(1);
+    const [submittedProduct, selectedOptions] = onAdd.mock.calls[0];
+    expect(submittedProduct).toBe(schnitzelProduct);
+    expect(selectedOptions).toEqual([
+      expect.objectContaining({ id: "option-pommes" }),
+      expect.objectContaining({ id: "option-extra-sosse" }),
+    ]);
+  });
+
+  it("lässt sich abbrechen, ohne onAdd aufzurufen", () => {
+    const onAdd = vi.fn();
+    const onClose = vi.fn();
+    render(
+      <ProductOptionsModal
+        product={schnitzelProduct}
+        isOpen={true}
+        onClose={onClose}
+        onAdd={onAdd}
+        mode="edit"
+        initialSelectedOptions={[reisSelection]}
+      />,
+    );
+
+    fireEvent.click(optionButton("Pommes"));
+    fireEvent.click(screen.getByRole("button", { name: "Schließen" }));
+
+    expect(onAdd).not.toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("lässt eine Pflichtgruppe im Änderungsfall nicht leer übernehmen", () => {
+    const onAdd = vi.fn();
+    render(
+      <ProductOptionsModal
+        product={schnitzelProduct}
+        isOpen={true}
+        onClose={vi.fn()}
+        onAdd={onAdd}
+        mode="edit"
+        initialSelectedOptions={[reisSelection]}
+      />,
+    );
+
+    // Die vorbelegte Pflichtantwort abwählen (Einfachauswahl: erneutes
+    // Tippen hebt die Auswahl auf) und danach versuchen, zu übernehmen.
+    fireEvent.click(optionButton("Reis"));
+
+    expect(
+      screen.getByRole("button", { name: "Weiter zu: Beilage" }),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Weiter zu: Beilage" }));
+
+    expect(onAdd).not.toHaveBeenCalled();
+  });
+
+  it("wählt beim Anlegen weiterhin nichts vor, selbst wenn initialSelectedOptions übergeben würde, solange mode nicht 'edit' ist", () => {
+    render(
+      <ProductOptionsModal
+        product={schnitzelProduct}
+        isOpen={true}
+        onClose={vi.fn()}
+        onAdd={vi.fn()}
+        initialSelectedOptions={[reisSelection]}
+      />,
+    );
+
+    expect(optionButton("Reis")).not.toHaveClass("border-indigo-500");
+    expect(
+      screen.getByRole("button", { name: "Weiter zu: Beilage" }),
+    ).toBeInTheDocument();
+  });
+});
