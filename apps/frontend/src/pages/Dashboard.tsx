@@ -30,11 +30,19 @@ const getTilePriceLabel = (product: any) => {
 // Sub-Komponente für Swipe-to-Delete/Reduce
 export const CartItem = ({
   item,
+  products = [],
   addItem,
   removeItem,
   deleteItem,
 }: {
   item: CartItemType;
+  // Die lebende Produktliste, über den Ereignisstrom aktuell gehalten.
+  // Verfügbarkeit wird zur Anzeigezeit daraus abgeleitet, statt in der
+  // Warenkorbzeile nachgeführt zu werden (Entscheidung zu Issue #80).
+  // Optional mit Default, damit bestehende Aufrufer ohne Produktliste
+  // (z. B. ältere Tests) weiter funktionieren und dann auf die
+  // Momentaufnahme der Zeile zurückfallen.
+  products?: any[];
   addItem: (
     product: any,
     selectedOptions?: CartItemType["selectedOptions"],
@@ -63,7 +71,12 @@ export const CartItem = ({
     }
   };
 
-  const isOutOfStock = item.product?.availability === "OUT_OF_STOCK";
+  // Produkt zur Zeile anhand der Kennung in der lebenden Liste nachschlagen.
+  // Fehlt es dort (z. B. Produkt gelöscht oder Liste noch nicht geladen),
+  // gilt die Momentaufnahme der Zeile als Rückfallwert.
+  const currentProduct =
+    products.find((p) => p.id === item.product?.id) ?? item.product;
+  const isOutOfStock = currentProduct?.availability === "OUT_OF_STOCK";
 
   return (
     <div
@@ -101,12 +114,19 @@ export const CartItem = ({
       >
         <button
           type="button"
+          disabled={isOutOfStock}
           onClick={(e) => {
             e.stopPropagation();
+            if (isOutOfStock) return;
             addItem(item.product, item.selectedOptions);
           }}
-          className="w-12 min-h-[44px] flex items-center justify-center text-center text-lg font-bold text-slate-800"
+          className={`w-12 min-h-[44px] flex items-center justify-center text-center text-lg font-bold ${
+            isOutOfStock
+              ? "text-slate-400 cursor-not-allowed"
+              : "text-slate-800"
+          }`}
           aria-label={`Menge von ${item.product.shortName || item.product.name} erhöhen`}
+          aria-disabled={isOutOfStock}
         >
           {item.quantity}
         </button>
@@ -315,10 +335,16 @@ export const Dashboard = () => {
   ) => {
     if (items.length === 0) return;
 
-    // Check if any cart items are out of stock
-    const outOfStockItems = items.filter(
-      (i) => i.product?.availability === "OUT_OF_STOCK",
-    );
+    // Check if any cart items are out of stock. Verfügbarkeit wird aus der
+    // lebenden Produktliste abgeleitet, nicht aus der Momentaufnahme der
+    // Zeile (Issue #80) — sonst greift diese Prüfung bei einer
+    // zwischenzeitlichen Meldung nicht mehr.
+    const outOfStockItems = items.filter((i) => {
+      const currentProduct = products.find((p) => p.id === i.product?.id);
+      const availability =
+        currentProduct?.availability ?? i.product?.availability;
+      return availability === "OUT_OF_STOCK";
+    });
     if (outOfStockItems.length > 0) {
       alert(
         `Folgende Artikel sind ausverkauft und können nicht bestellt werden: ${outOfStockItems.map((i) => i.product.name).join(", ")}`,
@@ -450,6 +476,7 @@ export const Dashboard = () => {
               <CartItem
                 key={item.id}
                 item={item}
+                products={products}
                 addItem={addItem}
                 removeItem={removeItem}
                 deleteItem={deleteItem}

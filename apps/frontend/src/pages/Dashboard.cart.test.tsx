@@ -50,8 +50,14 @@ const anpassungOption: SelectedCartOption = {
 // Rendert die Warenkorbzeilen direkt aus dem echten Store, so wie es
 // Dashboard.tsx auch tut, damit sowohl die Schaltflächen der Zeile als auch
 // das Zusammenspiel mit useCartStore geprüft werden.
-const renderCart = () => {
-  const Wrapper = () => {
+//
+// `products` simuliert die lebende Produktliste aus Dashboard.tsx, die über
+// den Ereignisstrom aktuell gehalten wird (Issue #80). Ein zweiter Aufruf
+// von `rerenderWithProducts` mit einer geänderten Liste bildet eine
+// PRODUCT_AVAILABILITY_CHANGED-Meldung nach, ohne die SSE-Anbindung selbst
+// zu testen.
+const renderCart = (initialProducts: any[] = []) => {
+  const Wrapper = ({ products }: { products: any[] }) => {
     const { items, addItem, removeItem, deleteItem } = useCartStore();
     return (
       <div>
@@ -59,6 +65,7 @@ const renderCart = () => {
           <CartItem
             key={item.id}
             item={item}
+            products={products}
             addItem={addItem}
             removeItem={removeItem}
             deleteItem={deleteItem}
@@ -67,7 +74,12 @@ const renderCart = () => {
       </div>
     );
   };
-  return render(<Wrapper />);
+  const utils = render(<Wrapper products={initialProducts} />);
+  return {
+    ...utils,
+    rerenderWithProducts: (products: any[]) =>
+      utils.rerender(<Wrapper products={products} />),
+  };
 };
 
 beforeEach(() => {
@@ -140,5 +152,83 @@ describe("Warenkorbzeile – Menge durch Tippen ändern (Issue #78)", () => {
     const items = useCartStore.getState().items;
     expect(items).toHaveLength(1);
     expect(items[0].quantity).toBe(1);
+  });
+});
+
+describe("Warenkorbzeile – Verfügbarkeitsänderung nach dem Hinzufügen (Issue #80)", () => {
+  it("kennzeichnet die Zeile sichtbar und in Textform, sobald das Produkt in der lebenden Liste als ausverkauft geführt wird, und sperrt Erhöhen", () => {
+    useCartStore.getState().addItem(drinkProduct, [sizeOption]);
+    const { rerenderWithProducts } = renderCart([drinkProduct]);
+
+    // Zunächst verfügbar: keine Kennzeichnung, Erhöhen erlaubt.
+    expect(screen.queryByText("Ausverkauft")).not.toBeInTheDocument();
+
+    // Die Station meldet das Produkt ausverkauft; die lebende Produktliste
+    // aktualisiert sich (hier simuliert), die Warenkorbzeile nicht separat.
+    rerenderWithProducts([{ ...drinkProduct, availability: "OUT_OF_STOCK" }]);
+
+    expect(screen.getByText("Ausverkauft")).toBeInTheDocument();
+
+    const increaseButton = screen.getByRole("button", {
+      name: "Menge von Getränk erhöhen",
+    });
+    expect(increaseButton).toBeDisabled();
+    expect(increaseButton).toHaveAttribute("aria-disabled", "true");
+
+    fireEvent.click(increaseButton);
+
+    expect(useCartStore.getState().items[0].quantity).toBe(1);
+  });
+
+  it("erlaubt Verringern und Entfernen weiterhin, wenn die Zeile ausverkauft gekennzeichnet ist", () => {
+    useCartStore.getState().addItem(drinkProduct, [sizeOption]);
+    useCartStore.getState().addItem(drinkProduct, [sizeOption]);
+    renderCart([{ ...drinkProduct, availability: "OUT_OF_STOCK" }]);
+
+    expect(screen.getByText("Ausverkauft")).toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Menge von Getränk verringern" }),
+    );
+
+    expect(useCartStore.getState().items[0].quantity).toBe(1);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Menge von Getränk verringern" }),
+    );
+
+    expect(useCartStore.getState().items).toHaveLength(0);
+  });
+
+  it("hebt die Kennzeichnung auf und erlaubt Erhöhen wieder, wenn das Produkt erneut als verfügbar gemeldet wird", () => {
+    useCartStore.getState().addItem(drinkProduct, [sizeOption]);
+    const { rerenderWithProducts } = renderCart([
+      { ...drinkProduct, availability: "OUT_OF_STOCK" },
+    ]);
+
+    expect(screen.getByText("Ausverkauft")).toBeInTheDocument();
+
+    rerenderWithProducts([{ ...drinkProduct, availability: "AVAILABLE" }]);
+
+    expect(screen.queryByText("Ausverkauft")).not.toBeInTheDocument();
+
+    const increaseButton = screen.getByRole("button", {
+      name: "Menge von Getränk erhöhen",
+    });
+    expect(increaseButton).not.toBeDisabled();
+
+    fireEvent.click(increaseButton);
+
+    expect(useCartStore.getState().items[0].quantity).toBe(2);
+  });
+
+  it("fällt auf die Momentaufnahme der Zeile zurück, wenn das Produkt nicht (mehr) in der lebenden Liste enthalten ist", () => {
+    useCartStore.getState().addItem(drinkProduct, [sizeOption]);
+    renderCart([]);
+
+    expect(screen.queryByText("Ausverkauft")).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Menge von Getränk erhöhen" }),
+    ).not.toBeDisabled();
   });
 });
