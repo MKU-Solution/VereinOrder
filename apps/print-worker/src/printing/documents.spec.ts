@@ -124,6 +124,28 @@ const receipt: PrintJobLike = {
   },
 };
 
+// Issue #98: Nachdruck desselben Produktbons/Belegs. isCopy/reprintedAt
+// kommen ausschließlich von reprintOrder (orders.service.ts) und dürfen den
+// Rest des Inhalts nicht verändern.
+const reprintedAt = new Date(2026, 7, 22, 9, 30, 0).toISOString();
+
+const productVoucherReprint: PrintJobLike = {
+  ...productVoucher,
+  id: "job-voucher-reprint",
+  content: { ...productVoucher.content, isCopy: true, reprintedAt },
+};
+
+const receiptReprint: PrintJobLike = {
+  ...receipt,
+  id: "job-receipt-reprint",
+  content: {
+    ...receipt.content,
+    title: "INTERNER ZAHLUNGSNACHWEIS",
+    isCopy: true,
+    reprintedAt,
+  },
+};
+
 const cashierClosing: PrintJobLike = {
   id: "job-closing",
   jobType: "CASHIER_CLOSING",
@@ -164,6 +186,8 @@ const ALL_JOBS = [
   stationTicketWithOptions,
   productVoucher,
   receipt,
+  productVoucherReprint,
+  receiptReprint,
   cashierClosing,
   testPrint,
 ];
@@ -272,6 +296,40 @@ describe("Bonaufbau je Auftragsart", () => {
     expect(text).toContain("Rückgeld");
     expect(text).toContain(formatCurrency(1750));
   });
+
+  // Issue #98: ein nachgedruckter Beleg oder Produktbon muss auf beiden
+  // Papierbreiten eindeutig als Kopie samt Zeitpunkt erkennbar sein - bei
+  // Abholware entscheidet das darüber, ob ein zweites Mal Ware ausgegeben
+  // wird. Das Original selbst darf keine Kopiekennzeichnung tragen.
+  it.each(WIDTHS)(
+    "kennzeichnet den nachgedruckten Produktbon auf %s mm als Kopie samt Zeitpunkt",
+    (width) => {
+      const text = textOf(productVoucherReprint, width);
+
+      expect(text).toContain("KOPIE");
+      expect(text).toContain(formatDateTime(reprintedAt));
+      // Der übrige Inhalt bleibt wie beim Original.
+      expect(text).toContain("VO-2026-000042");
+      expect(text).toContain("1x Grillhendl");
+
+      expect(textOf(productVoucher, width)).not.toContain("KOPIE");
+    },
+  );
+
+  it.each(WIDTHS)(
+    "kennzeichnet den nachgedruckten Kassenbeleg auf %s mm als Kopie mit Originaltitel",
+    (width) => {
+      const text = textOf(receiptReprint, width);
+
+      expect(text).toContain("KOPIE");
+      expect(text).toContain(formatDateTime(reprintedAt));
+      // Titel wie beim ursprünglichen Verkauf, nicht der Standardtitel.
+      expect(text).toContain("INTERNER ZAHLUNGSNACHWEIS");
+      expect(text).not.toContain("KASSENBELEG");
+
+      expect(textOf(receipt, width)).not.toContain("KOPIE");
+    },
+  );
 
   it.each(WIDTHS)("druckt den Kassenabschluss auf %s mm", (width) => {
     const text = textOf(cashierClosing, width);

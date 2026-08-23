@@ -107,6 +107,14 @@ interface PrintOptions {
     stationId?: string | null;
     issuedAt: Date;
   }[];
+  // Issue #98: ein Nachdruck darf der Station keinen neuen Arbeitsauftrag
+  // schicken. Vorgabe true, damit der reguläre Verkauf (createOrder,
+  // createQuickSale) unveraendert Stationsbons erzeugt, ohne diesen Schalter
+  // je zu setzen; nur reprintOrder setzt ihn explizit auf false.
+  includeStationTickets?: boolean;
+  // Issue #98: Zeitpunkt des Nachdrucks. Nur gesetzt, wenn dieser Druck ein
+  // Nachdruck ist; steuert die Kopiekennzeichnung auf Beleg und Produktbons.
+  reprintedAt?: Date;
 }
 
 @Injectable()
@@ -684,45 +692,54 @@ export class OrdersService {
     }
 
     // 1. Group items by targetStation for STATION_TICKETS
-    const itemsByStation = new Map<string, any[]>();
-    for (const item of order.items) {
-      const stationId =
-        (item.product && resolveTargetStationId(item.product)) || "NO_STATION";
-      if (!itemsByStation.has(stationId)) {
-        itemsByStation.set(stationId, []);
+    //
+    // Issue #98: ein Nachdruck (reprintOrder) darf keinen Arbeitsauftrag an
+    // eine Station erzeugen - die Speisen wurden bereits einmal zubereitet.
+    // includeStationTickets ist nur beim Nachdruck false; der reguläre
+    // Verkauf (createOrder, createQuickSale) lässt den Schalter unangetastet
+    // (Vorgabe true) und erzeugt Stationsbons wie bisher.
+    if (options.includeStationTickets ?? true) {
+      const itemsByStation = new Map<string, any[]>();
+      for (const item of order.items) {
+        const stationId =
+          (item.product && resolveTargetStationId(item.product)) ||
+          "NO_STATION";
+        if (!itemsByStation.has(stationId)) {
+          itemsByStation.set(stationId, []);
+        }
+        itemsByStation.get(stationId)!.push(item);
       }
-      itemsByStation.get(stationId)!.push(item);
-    }
 
-    for (const [stationId, stationItems] of itemsByStation.entries()) {
-      const station = stationMap.get(stationId) as any;
-      const targetPrinter = station?.printer?.isActive
-        ? station.printer
-        : defaultPrinter;
-      if (targetPrinter) {
-        await prisma.printJob.create({
-          data: {
-            printerId: targetPrinter.id,
-            jobType: "STATION_TICKET",
-            orderId: order.id,
-            content: {
-              title: "ABHOL-/KÜCHENBON",
-              stationName: station?.name || "Zentrale Ausgabe",
-              orderNumber: order.orderNumber,
+      for (const [stationId, stationItems] of itemsByStation.entries()) {
+        const station = stationMap.get(stationId) as any;
+        const targetPrinter = station?.printer?.isActive
+          ? station.printer
+          : defaultPrinter;
+        if (targetPrinter) {
+          await prisma.printJob.create({
+            data: {
+              printerId: targetPrinter.id,
+              jobType: "STATION_TICKET",
               orderId: order.id,
-              tableName: order.tableName || "Theke / Ohne Tisch",
-              waiterName: user?.name || user?.username || "Kellner",
-              isPriority: order.isPriority,
-              createdAt: order.createdAt,
-              items: stationItems.map((i) => ({
-                productName: i.product.name,
-                quantity: i.quantity,
-                variantName: i.variantName,
-                extras: i.extras,
-              })),
+              content: {
+                title: "ABHOL-/KÜCHENBON",
+                stationName: station?.name || "Zentrale Ausgabe",
+                orderNumber: order.orderNumber,
+                orderId: order.id,
+                tableName: order.tableName || "Theke / Ohne Tisch",
+                waiterName: user?.name || user?.username || "Kellner",
+                isPriority: order.isPriority,
+                createdAt: order.createdAt,
+                items: stationItems.map((i) => ({
+                  productName: i.product.name,
+                  quantity: i.quantity,
+                  variantName: i.variantName,
+                  extras: i.extras,
+                })),
+              },
             },
-          },
-        });
+          });
+        }
       }
     }
 
@@ -751,6 +768,10 @@ export class OrdersService {
             stationName: station?.name || "Zentrale Ausgabe",
             issuedAt: voucher.issuedAt,
             rksvDisclaimer: "VereinOrder ist keine RKSV-Registrierkasse.",
+            // Issue #98: Kopiekennzeichnung, sobald dieser Druck ein
+            // Nachdruck ist (documents.ts liest isCopy/reprintedAt).
+            isCopy: Boolean(options.reprintedAt),
+            reprintedAt: options.reprintedAt,
           },
         },
       });
@@ -795,6 +816,10 @@ export class OrdersService {
             tenderedAmount: options.tenderedAmount,
             changeAmount,
             rksvDisclaimer: "VereinOrder ist keine RKSV-Registrierkasse.",
+            // Issue #98: Kopiekennzeichnung, sobald dieser Druck ein
+            // Nachdruck ist (documents.ts liest isCopy/reprintedAt).
+            isCopy: Boolean(options.reprintedAt),
+            reprintedAt: options.reprintedAt,
           },
         },
       });
@@ -1248,36 +1273,133 @@ export class OrdersService {
     return { success: true };
   }
 
+  /**
+   * Issue #98: Wiederholungsdruck. Gibt aus, was die Kundschaft braucht
+   * (Produktbons und Beleg), löst aber keinen Arbeitsauftrag an eine Station
+   * erneut aus (dispatchPrintJobs erhält includeStationTickets: false) und
+   * kennzeichnet Beleg wie Produktbons deutlich als Kopie samt Zeitpunkt.
+   *
+   * Bestellung, Zahlung und Gutscheine werden ausschließlich gelesen, nie
+   * verändert - es entstehen keine neuen ProductVoucher-Zeilen, die
+   * bestehenden werden lediglich erneut gedruckt.
+   */
   async reprintOrder(orderId: string, userId?: string) {
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },
       include: {
         items: { include: { product: { include: { category: true } } } },
         payments: true,
+        vouchers: true,
       },
     });
     if (!order) throw new NotFoundException("Order not found");
 
-    const user = userId
-      ? await this.prisma.user.findUnique({ where: { id: userId } })
-      : null;
-
-    await this.dispatchPrintJobs(this.prisma, order, user);
-
-    if (userId) {
-      await this.prisma.auditLog.create({
-        data: {
-          action: "REPRINT_ORDER",
-          entityId: orderId,
-          entityType: "Order",
-          userId,
-          details: {
-            orderNumber: order.orderNumber,
-            totalAmount: order.totalAmount,
-          },
-        },
-      });
+    // Issue #98, Punkt 5: der Nachdruck ist auf Bestellungen der
+    // Veranstaltung beschränkt, in der die aufrufende Person gerade
+    // arbeitet. Einziger tragfähiger Anhaltspunkt dafür ist die aktive
+    // Kassensitzung (siehe createOrder/createQuickSale, die genau darüber
+    // die Veranstaltung des Verkaufs bestimmen) - ohne eine solche Sitzung
+    // in exakt dieser Veranstaltung lässt sich die Zugehörigkeit nicht
+    // feststellen, und der Nachdruck wird abgewiesen statt sie zu erraten.
+    //
+    // Ausnahme ADMINISTRATOR (Rückmeldung der Projektleitung): der Nachdruck
+    // wird in der Oberfläche ausschließlich aus "Offene Tische" aufgerufen
+    // (UnpaidOrders.tsx), das auch ADMINISTRATOR offensteht. Dort hilft ein
+    // Administrator typischerweise ohne eigene Kassensitzung aus (z. B. bei
+    // einem Druckerausfall) - er ist der Eskalationsweg und jede Aktion ist
+    // ohnehin auditiert (REPRINT_ORDER unten). Für alle anderen Rollen bleibt
+    // die Sitzungspflicht bestehen, das ist die eigentliche Zusage des
+    // Issues.
+    //
+    // STATION bleibt bewusst in der Sitzungspflicht, obwohl der Endpunkt die
+    // Rolle zulässt: es gibt heute keinen Bildschirm, der für STATION einen
+    // Nachdruck auslöst, und die Rolle kann noch keine Kassensitzung öffnen
+    // (siehe docs/development/stationskasse.md, Vorbefund zu #66). Sobald
+    // #66 Stationssitzungen einführt, greift diese Prüfung für STATION ohne
+    // weitere Änderung korrekt - das ist kein Versehen, sondern Absicht.
+    if (!userId) {
+      throw new ForbiddenException(
+        "Für den Nachdruck ist eine Anmeldung erforderlich.",
+      );
     }
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (user?.role !== "ADMINISTRATOR") {
+      const activeSession = await this.prisma.cashierSession.findFirst({
+        where: { userId, eventId: order.eventId, status: "ACTIVE" },
+      });
+      if (!activeSession) {
+        throw new ForbiddenException(
+          "Der Nachdruck ist nur für Bestellungen der eigenen, aktiven Veranstaltung möglich.",
+        );
+      }
+    }
+
+    // Punkt 3: Titel wie beim ursprünglichen Verkauf. Der einzige Ort, an
+    // dem er unverändert seit der Bestellung vorliegt, ist der zuerst
+    // erzeugte RECEIPT-Druckauftrag selbst (Order trägt keinen eigenen
+    // Titel). Gibt es keinen (z. B. weil beim Verkauf kein Drucker aktiv
+    // war), bleibt receiptTitle weg und dispatchPrintJobs greift auf den
+    // Standardtitel zurück - das ist kein Erfinden, sondern derselbe
+    // Rückfall, den auch der ursprüngliche Verkauf genommen hätte.
+    const originalReceiptJob = await this.prisma.printJob.findFirst({
+      where: { orderId, jobType: "RECEIPT" },
+      orderBy: { createdAt: "asc" },
+    });
+    const originalReceiptContent = originalReceiptJob?.content as any;
+    const originalReceiptTitle: string | undefined =
+      originalReceiptContent?.title;
+
+    // Punkt 3: gegebener Betrag und Rückgeld kommen ausschließlich aus
+    // Payment, nie erfunden. Nur eine Barzahlung mit gespeichertem
+    // tenderedAmount belegt, dass tatsächlich Bargeld floss; fehlt das,
+    // bleiben beide Felder weg statt mit einer falschen Null gefüllt zu
+    // werden.
+    const cashPayment = order.payments.find(
+      (p) => p.method === "CASH" && p.tenderedAmount != null,
+    );
+
+    // Punkt 2: die Produktbons kommen ausschließlich aus den vorhandenen
+    // ProductVoucher-Zeilen dieser Bestellung - es wird nichts angelegt.
+    const vouchers: PrintOptions["vouchers"] = order.vouchers.map((voucher) => {
+      const item = order.items.find((i) => i.id === voucher.orderItemId);
+      return {
+        code: voucher.code,
+        orderItemId: voucher.orderItemId,
+        productId: voucher.productId,
+        productName: item?.product.name ?? "Produkt",
+        variantName: item?.variantName,
+        stationId: item?.product ? resolveTargetStationId(item.product) : null,
+        issuedAt: voucher.issuedAt,
+      };
+    });
+
+    const reprintedAt = new Date();
+
+    await this.dispatchPrintJobs(this.prisma, order, user, {
+      receiptTitle: originalReceiptTitle,
+      tenderedAmount: cashPayment?.tenderedAmount ?? undefined,
+      changeAmount: cashPayment ? cashPayment.changeAmount : undefined,
+      vouchers,
+      // Punkt 1: kein erneuter Arbeitsauftrag an eine Station.
+      includeStationTickets: false,
+      // Punkt 4: Beleg und Produktbons als Kopie kennzeichnen.
+      reprintedAt,
+    });
+
+    await this.prisma.auditLog.create({
+      data: {
+        action: "REPRINT_ORDER",
+        entityId: orderId,
+        entityType: "Order",
+        userId,
+        details: {
+          orderNumber: order.orderNumber,
+          totalAmount: order.totalAmount,
+          reprintedAt,
+          vouchersReprinted: vouchers.length,
+        },
+      },
+    });
 
     return {
       success: true,
