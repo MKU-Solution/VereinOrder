@@ -75,7 +75,18 @@ function isLeaseConflict(error: unknown): boolean {
   );
 }
 
-async function claimNextJob(): Promise<PrintJob | null> {
+/**
+ * Holt den nächsten Druckauftrag. Fängt JEDEN Fehler ab und liefert `null`
+ * statt zu werfen — das gilt ausdrücklich auch für ein `503` des Backends
+ * (Issue #67, Wartungsmodus: `POST /print-jobs/claim` ist während der
+ * Wartung gesperrt). `main()` unten wertet `null` als "gerade nichts zu tun"
+ * und schläft einfach bis zum nächsten Versuch (`POLL_INTERVAL_MS`) — der
+ * Arbeiter übersteht eine laufende Wartung dadurch von selbst, ohne
+ * Sonderbehandlung, und erholt sich beim Ende der Wartung im nächsten
+ * Umlauf, sobald das Backend wieder normal antwortet. Siehe
+ * `index.spec.ts`, Abschnitt "Wartungsmodus", für den Nachweis.
+ */
+export async function claimNextJob(): Promise<PrintJob | null> {
   try {
     const response = await axios.post(
       `${BACKEND_URL}/print-jobs/claim`,

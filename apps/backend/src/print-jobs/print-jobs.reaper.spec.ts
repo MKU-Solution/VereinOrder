@@ -10,15 +10,25 @@ function makePrisma() {
   } as any;
 }
 
+function makeMaintenanceState(phase: "OPEN" | "DRAINING" | "LOCKED" = "OPEN") {
+  return { read: jest.fn(() => ({ phase })) };
+}
+
 let prisma: any;
 let audit: { log: jest.Mock };
+let maintenanceState: ReturnType<typeof makeMaintenanceState>;
 let reaper: PrintJobsReaperService;
 
 describe("PrintJobsReaperService – Übergänge 8 und 9 (Abschnitt 4.3)", () => {
   beforeEach(() => {
     prisma = makePrisma();
     audit = { log: jest.fn() };
-    reaper = new PrintJobsReaperService(prisma, audit as any);
+    maintenanceState = makeMaintenanceState("OPEN");
+    reaper = new PrintJobsReaperService(
+      prisma,
+      audit as any,
+      maintenanceState as any,
+    );
   });
 
   it("setzt CLAIMED mit abgelaufener Lease zurück nach PENDING, ohne Failover auszulösen", async () => {
@@ -141,5 +151,31 @@ describe("PrintJobsReaperService – Übergänge 8 und 9 (Abschnitt 4.3)", () =>
   it("lässt einen Durchlauf nicht am Backend-Prozess reißen, wenn eine Abfrage fehlschlägt", async () => {
     prisma.printJob.findMany.mockRejectedValue(new Error("DB down"));
     await expect(reaper.sweepExpiredLeases()).resolves.toBeUndefined();
+  });
+
+  // Issue #67 (Wartungsmodus): Ein Reaper, der während einer
+  // Wiederherstellung Druckaufträge auf UNRESOLVED setzt, arbeitet an Daten,
+  // die es gleich nicht mehr gibt.
+  it("setzt bei LOCKED aus und fasst keine Zeile an", async () => {
+    maintenanceState.read.mockReturnValue({ phase: "LOCKED" });
+
+    await reaper.sweepExpiredLeases();
+
+    expect(prisma.printJob.findMany).not.toHaveBeenCalled();
+    expect(prisma.printJob.updateMany).not.toHaveBeenCalled();
+  });
+
+  // Während DRAINING bleibt der Reaper aktiv: er hilft, echte Leichen
+  // abzuräumen, damit der Übergang nach LOCKED (der auf "keine Zeile mehr in
+  // DELIVERING/SPOOLED" wartet) überhaupt terminieren kann.
+  it("bleibt bei DRAINING aktiv", async () => {
+    maintenanceState.read.mockReturnValue({ phase: "DRAINING" });
+    prisma.printJob.findMany
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([]);
+
+    await reaper.sweepExpiredLeases();
+
+    expect(prisma.printJob.findMany).toHaveBeenCalled();
   });
 });

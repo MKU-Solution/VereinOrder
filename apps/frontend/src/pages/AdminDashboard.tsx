@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { api } from "../lib/api";
 import { EventConfigurationActions } from "../components/admin/EventConfigurationActions";
+import { MaintenancePanel } from "../components/admin/MaintenancePanel";
 import {
   ProductOptionGroupsEditor,
   loadOptionGroupsFromProduct,
@@ -54,7 +55,8 @@ type Tab =
   | "printers"
   | "backups"
   | "audit"
-  | "diagnostics";
+  | "diagnostics"
+  | "maintenance";
 
 interface EventItem {
   id: string;
@@ -536,6 +538,7 @@ export const AdminDashboard = () => {
     { id: "stations", label: "Stationen", icon: Store },
     { id: "printers", label: "Drucker & Bon-Routing", icon: Printer },
     { id: "backups", label: "Backups & Datensicherung", icon: HardDrive },
+    { id: "maintenance", label: "Wartungsmodus", icon: PowerOff },
     { id: "audit", label: "Audit-Protokoll & Sicherheit", icon: ShieldAlert },
     { id: "categories", label: "Kategorien", icon: Tag },
     { id: "products", label: "Produkte", icon: Package },
@@ -1406,7 +1409,8 @@ export const AdminDashboard = () => {
         </div>
         {activeTab !== "backups" &&
           activeTab !== "audit" &&
-          activeTab !== "diagnostics" && (
+          activeTab !== "diagnostics" &&
+          activeTab !== "maintenance" && (
             <button
               onClick={() => handleOpenModal()}
               className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2.5 px-5 rounded-2xl flex items-center gap-2 shadow-lg shadow-indigo-600/30 transition-all active:scale-95 shrink-0"
@@ -2315,6 +2319,13 @@ export const AdminDashboard = () => {
               </table>
             </div>
           </div>
+        ) : activeTab === "maintenance" ? (
+          /* Wartungsmodus (Issue #67) - eigenständige Komponente, holt und
+             ändert ihren Zustand selbst über GET/POST /maintenance/*, statt
+             sich in den generischen Listen-Ladepfad (fetchData/data) dieser
+             Datei einzuklinken, der für paginierte Ressourcenlisten gebaut
+             ist. */
+          <MaintenancePanel />
         ) : activeTab === "audit" ? (
           /* Audit-Log & Security */
           <div className="space-y-6">

@@ -3,6 +3,13 @@ import * as os from "os";
 import * as path from "path";
 import { BackupService } from "./backup.service";
 
+// Issue #67: BackupService braucht seither MaintenanceStateService, um den
+// stuendlichen Lauf bei LOCKED auszusetzen. Diese Tests pruefen ausschliess-
+// lich restoreBackup und beruehren onModuleInit nicht - eine Attrappe reicht.
+function makeMaintenanceStateStub() {
+  return { read: jest.fn(() => ({ phase: "OPEN" })) } as any;
+}
+
 function createPrisma() {
   const tx = {
     printJob: { deleteMany: jest.fn(), createMany: jest.fn() },
@@ -90,7 +97,10 @@ describe("BackupService – Wiederherstellung nach Issue #84", () => {
 
   it("ordnet einem kategorielosen Produkt aus einer Sicherung von vor Issue #84 dieselbe Auffangkategorie zu wie Migration und Vorlagenimport", async () => {
     const { prisma, tx } = createPrisma();
-    const service = new BackupService(prisma as any);
+    const service = new BackupService(
+      prisma as any,
+      makeMaintenanceStateStub(),
+    );
 
     const legacyBackup = {
       version: "0.1.0",
@@ -172,7 +182,10 @@ describe("BackupService – Wiederherstellung nach Issue #84", () => {
 
   it("lässt eine Sicherung ohne kategorielose Produkte unverändert", async () => {
     const { prisma, tx } = createPrisma();
-    const service = new BackupService(prisma as any);
+    const service = new BackupService(
+      prisma as any,
+      makeMaintenanceStateStub(),
+    );
 
     const modernBackup = {
       version: "0.1.0",
@@ -235,5 +248,51 @@ describe("BackupService – Wiederherstellung nach Issue #84", () => {
       .data as any[];
     expect(productsWritten).toHaveLength(1);
     expect(productsWritten[0].categoryId).toBe("category-a");
+  });
+});
+
+// Issue #67: Der stuendliche Sicherungslauf setzt bei LOCKED aus - ein
+// Reaper/Cron, der waehrend einer Wiederherstellung liest oder schreibt,
+// arbeitet an Daten, die die Wiederherstellung gleich ersetzt.
+describe("BackupService – stündlicher Lauf setzt bei LOCKED aus (Issue #67)", () => {
+  let tempDir: string;
+  let previousBackupDir: string | undefined;
+
+  beforeEach(() => {
+    previousBackupDir = process.env.BACKUP_DIR;
+    tempDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "vereinorder-backup-cron-spec-"),
+    );
+    process.env.BACKUP_DIR = tempDir;
+  });
+
+  afterEach(() => {
+    if (previousBackupDir === undefined) delete process.env.BACKUP_DIR;
+    else process.env.BACKUP_DIR = previousBackupDir;
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it("fragt die Datenbank nicht einmal ab, wenn der Wartungsmodus LOCKED ist", async () => {
+    const prisma = { event: { count: jest.fn().mockResolvedValue(1) } };
+    const maintenanceState = {
+      read: jest.fn(() => ({ phase: "LOCKED" })),
+    };
+    const service = new BackupService(prisma as any, maintenanceState as any);
+
+    await service.runScheduledBackupIfDue();
+
+    expect(prisma.event.count).not.toHaveBeenCalled();
+  });
+
+  it("läuft normal, wenn der Wartungsmodus OPEN ist", async () => {
+    const prisma = { event: { count: jest.fn().mockResolvedValue(0) } };
+    const maintenanceState = { read: jest.fn(() => ({ phase: "OPEN" })) };
+    const service = new BackupService(prisma as any, maintenanceState as any);
+
+    await service.runScheduledBackupIfDue();
+
+    expect(prisma.event.count).toHaveBeenCalledWith({
+      where: { status: "ACTIVE" },
+    });
   });
 });

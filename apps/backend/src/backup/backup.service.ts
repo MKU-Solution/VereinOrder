@@ -11,6 +11,7 @@ import * as fs from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
 import { planFallbackCategory } from "../common/fallback-category";
+import { MaintenanceStateService } from "../maintenance/maintenance-state.service";
 
 // Issue #103 (B9): Die Voreinstellung von Prisma fuer interaktive
 // Transaktionen ist 5 Sekunden. Vierzehn deleteMany und ebenso viele
@@ -32,7 +33,10 @@ export interface BackupMetadata {
 export class BackupService implements OnModuleInit {
   private backupDir: string;
 
-  constructor(@Inject(PRISMA_CLIENT) private prisma: PrismaClient) {
+  constructor(
+    @Inject(PRISMA_CLIENT) private prisma: PrismaClient,
+    private readonly maintenanceState: MaintenanceStateService,
+  ) {
     this.backupDir =
       process.env.BACKUP_DIR || path.join(process.cwd(), "backups");
     if (!fs.existsSync(this.backupDir)) {
@@ -43,21 +47,34 @@ export class BackupService implements OnModuleInit {
   onModuleInit() {
     // Automatic backup every 60 minutes
     const intervalMs = 60 * 60 * 1000;
-    setInterval(async () => {
-      try {
-        const activeEvents = await this.prisma.event.count({
-          where: { status: "ACTIVE" },
-        });
-        if (activeEvents > 0) {
-          console.log(
-            "[BackupService] Automatisches Stündliches Backup wird erstellt...",
-          );
-          await this.createBackup("SYSTEM_CRON");
-        }
-      } catch (err) {
-        console.error("[BackupService] Fehler beim automatischen Backup:", err);
+    setInterval(() => this.runScheduledBackupIfDue(), intervalMs);
+  }
+
+  /**
+   * Als eigene Methode ausgelagert (statt Rumpf des `setInterval` oben),
+   * damit sie in Tests direkt aufgerufen werden kann, ohne 60 Minuten
+   * abzuwarten oder Zeitgeber zu verstellen — Vorbild:
+   * `PrintJobsReaperService.sweepExpiredLeases`.
+   */
+  async runScheduledBackupIfDue(): Promise<void> {
+    try {
+      // Issue #67 (Wartungsmodus): Bei LOCKED laeuft moeglicherweise
+      // gerade eine Wiederherstellung. Der stuendliche Lauf darf die
+      // Datenbank in diesem Moment nicht anfassen - weder lesend fuer eine
+      // neue Sicherung noch schreibend.
+      if (this.maintenanceState.read().phase === "LOCKED") return;
+      const activeEvents = await this.prisma.event.count({
+        where: { status: "ACTIVE" },
+      });
+      if (activeEvents > 0) {
+        console.log(
+          "[BackupService] Automatisches Stündliches Backup wird erstellt...",
+        );
+        await this.createBackup("SYSTEM_CRON");
       }
-    }, intervalMs);
+    } catch (err) {
+      console.error("[BackupService] Fehler beim automatischen Backup:", err);
+    }
   }
 
   async createBackup(userId?: string): Promise<BackupMetadata> {

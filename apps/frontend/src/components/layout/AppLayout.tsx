@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Outlet, useLocation, useNavigate } from "react-router-dom";
+import { Navigate, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useAuthStore } from "../../store/useAuthStore";
 import {
   LogOut,
@@ -16,6 +16,8 @@ import {
   type RouteAccess,
 } from "./routeAccess";
 import { SessionGate } from "./SessionGate";
+import { useMaintenanceStatus } from "../../lib/maintenance";
+import { Maintenance } from "../../pages/Maintenance";
 
 const allowedLockTimeouts = [30, 60, 120, 300, 900];
 
@@ -23,6 +25,7 @@ export const AppLayout = () => {
   const { logout, user } = useAuthStore();
   const navigate = useNavigate();
   const location = useLocation();
+  const maintenanceStatus = useMaintenanceStatus();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [lockTimeoutSeconds, setLockTimeoutSeconds] = useState(() => {
     const stored = Number(localStorage.getItem("authLockTimeoutSeconds"));
@@ -174,6 +177,21 @@ export const AppLayout = () => {
       );
     };
   }, [lockTimeoutSeconds, sessionMode, user]);
+
+  // Issue #67 (Wartungsmodus): für ADMINISTRATOR bleibt /admin bedienbar
+  // (Entwurf Abschnitt 6) - jede andere Rolle bekommt statt der gewohnten
+  // Oberfläche die ganzseitige Anzeige, weil jede ihrer Anfragen ohnehin 503
+  // bekäme. Erst nach diesem Punkt geprüft (nicht als früher return), damit
+  // sämtliche Hooks oben immer in derselben Reihenfolge laufen.
+  if (maintenanceStatus && maintenanceStatus.phase !== "OPEN") {
+    if (user?.role === "ADMINISTRATOR") {
+      if (location.pathname !== "/admin") {
+        return <Navigate to="/admin" replace />;
+      }
+    } else {
+      return <Maintenance status={maintenanceStatus} />;
+    }
+  }
 
   return (
     <div className="min-h-screen bg-slate-950 flex flex-col">

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useAuthStore } from "../store/useAuthStore";
 import { api } from "../lib/api";
+import { MAINTENANCE_ENDED_EVENT } from "../lib/maintenance";
 import {
   Wallet,
   Banknote,
@@ -90,6 +91,13 @@ export const CashierDashboard = () => {
       }
     };
     fetchEvent();
+
+    // Issue #67 (Wartungsmodus): nach dem Ende einer Wartung können sich
+    // Veranstaltung und Sitzung um Stunden zurückbewegt haben (Entwurf
+    // Abschnitt 6) - derselbe Kontextabruf wie beim Einstieg lädt neu.
+    window.addEventListener(MAINTENANCE_ENDED_EVENT, fetchEvent);
+    return () =>
+      window.removeEventListener(MAINTENANCE_ENDED_EVENT, fetchEvent);
   }, []);
 
   useEffect(() => {

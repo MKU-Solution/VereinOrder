@@ -19,6 +19,7 @@ import {
   type OfflineCaptureContext,
   type OfflineOrderItemInput,
 } from "../lib/offlineSync";
+import { MAINTENANCE_ENDED_EVENT } from "../lib/maintenance";
 
 const formatPrice = (cents: number) => `€ ${(cents / 100).toFixed(2)}`;
 
@@ -470,6 +471,17 @@ export const Dashboard = () => {
     window.addEventListener("online", handleOnline);
     window.addEventListener("offline", handleOffline);
 
+    // Issue #67 (Wartungsmodus): nach dem Ende einer Wartung können sich
+    // Veranstaltung, Sitzung und Sortiment um Stunden zurückbewegt haben
+    // (Entwurf Abschnitt 6) - derselbe vollständige Sendeschleifen-Lauf wie
+    // bei "online" lädt Katalog und Betriebskontext neu.
+    const handleMaintenanceEnded = () => {
+      clearScheduledCatalogRetry();
+      void fetchProducts();
+      void runSync();
+    };
+    window.addEventListener(MAINTENANCE_ENDED_EVENT, handleMaintenanceEnded);
+
     // Zusätzlich zu "online": abgelaufene Wartezeiten (`nextAttemptAt`)
     // werden nur erreicht, wenn überhaupt erneut versucht wird, während die
     // Anwendung offen bleibt (Entwurf Abschnitt 7, Auslöser).
@@ -478,6 +490,10 @@ export const Dashboard = () => {
     return () => {
       window.removeEventListener("online", handleOnline);
       window.removeEventListener("offline", handleOffline);
+      window.removeEventListener(
+        MAINTENANCE_ENDED_EVENT,
+        handleMaintenanceEnded,
+      );
       window.clearInterval(intervalId);
       clearScheduledCatalogRetry();
     };

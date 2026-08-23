@@ -3,6 +3,7 @@ import { Interval } from "@nestjs/schedule";
 import { PrismaClient } from "@vereinorder/database";
 import { PRISMA_CLIENT } from "../prisma/prisma.module";
 import { AuditService } from "../audit/audit.service";
+import { MaintenanceStateService } from "../maintenance/maintenance-state.service";
 
 /**
  * Architekturvorgabe Abschnitt 3.2, M5: Der Reaper läuft periodisch im
@@ -25,10 +26,18 @@ export class PrintJobsReaperService {
   constructor(
     @Inject(PRISMA_CLIENT) private readonly prisma: PrismaClient,
     private readonly auditService: AuditService,
+    private readonly maintenanceState: MaintenanceStateService,
   ) {}
 
   @Interval(REAPER_INTERVAL_MS)
   async sweepExpiredLeases(): Promise<void> {
+    // Issue #67 (Wartungsmodus): Bei LOCKED laeuft moeglicherweise gerade
+    // eine Wiederherstellung, die die Datenbank gleich ersetzt. Der Reaper
+    // darf in diesem Fenster keine PrintJob-Zeilen mehr auf UNRESOLVED
+    // setzen - er wuerde an Daten arbeiten, die es gleich nicht mehr gibt.
+    // Waehrend DRAINING bleibt er aktiv: er hilft, echte Leichen abzuraeumen,
+    // damit der Uebergang nach LOCKED ueberhaupt terminiert.
+    if (this.maintenanceState.read().phase === "LOCKED") return;
     try {
       await this.requeueClaimedExpired();
       await this.unresolveActiveExpired();
