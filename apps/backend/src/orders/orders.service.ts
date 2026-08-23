@@ -9,10 +9,7 @@ import {
 import { PrismaClient, Prisma } from "@vereinorder/database";
 import { PRISMA_CLIENT } from "../prisma/prisma.module";
 import { randomBytes } from "crypto";
-import {
-  resolveTargetStationId,
-  productAtStationFilter,
-} from "../common/target-station";
+import { resolveTargetStationId } from "../common/target-station";
 import { drawPickupNumber } from "../common/pickup-number";
 import { AuditService } from "../audit/audit.service";
 import { ORDER_REJECTION_MESSAGES } from "@vereinorder/shared";
@@ -167,7 +164,32 @@ export class OrdersService {
               color: true,
               sortOrder: true,
               availability: true,
-              category: { select: { id: true, name: true, sortOrder: true } },
+              // Issue #66, Stationskasse: Zielstation von Produkt und
+              // Warengruppe. Getragen fuer die Anzeige, nicht fuer die
+              // Verkaufstransaktion selbst (die prueft Station und
+              // Sortiment serverseitig eigenstaendig ueber
+              // productAtStationFilter, common/target-station.ts) - aber
+              // sowohl die Stationskasse (StationSaleDashboard.tsx) als
+              // auch die Kachelableitung dort filtern das angezeigte
+              // Sortiment nach genau diesen beiden Feldern, per
+              // resolveTargetStationId-Logik: Station des Produkts, sonst
+              // Station seiner Warengruppe, sonst null. Fehlen sie hier,
+              // loest jedes Produkt clientseitig auf "keine Station" auf,
+              // und jede Station zeigt ein leeres Kachelraster - genau der
+              // Fehler, der diesen Kommentar veranlasst hat. Bewusst auch
+              // im zentralen Pfad (getQuickSaleContext) mitgeliefert, nicht
+              // nur im Stationszweig: zwei Skalarfelder mehr sind billiger
+              // als zwei auseinanderlaufende Selects fuer dieselbe
+              // Produktliste; die zentrale Bonkasse ignoriert sie einfach.
+              targetStationId: true,
+              category: {
+                select: {
+                  id: true,
+                  name: true,
+                  sortOrder: true,
+                  targetStationId: true,
+                },
+              },
               // Volle Gruppenliste, dieselben Felder und dieselbe Sortierung
               // wie GET /products (findAllActive). Der Schnellverkauf
               // entscheidet selbst anhand von quickSaleTiles UND der
@@ -640,17 +662,26 @@ export class OrdersService {
         const productIds = [
           ...new Set(dto.items.map((item) => item.productId)),
         ];
+        // Stationskasse (Issue #66): Produkte zunaechst nur gegen die
+        // Veranstaltung aufloesen, OHNE den Stationsfilter in derselben
+        // where-Klausel. Stand vorher beides in einem Filter
+        // (productAtStationFilter direkt in "where"), war ein Produkt einer
+        // anderen Station derselben Veranstaltung nicht von einem Produkt zu
+        // unterscheiden, das es in dieser Veranstaltung gar nicht gibt -
+        // beides fehlte im Ergebnis und landete unten in derselben Meldung
+        // "gehört nicht zu dieser Veranstaltung". Das schickt die Bedienung
+        // an der Kasse in die falsche Richtung (sie prueft eine Veranstaltung,
+        // die stimmt, statt die Station zu wechseln). Die Stationszugehoerigkeit
+        // wird deshalb als zweiter, eigener Schritt weiter unten geprueft -
+        // mit derselben Funktion (resolveTargetStationId), nicht mit einem
+        // zweiten, selbstgebauten Filter. "category" wird dafuer zusaetzlich
+        // geladen, weil resolveTargetStationId sie im Parametertyp verlangt.
         const products = await prisma.product.findMany({
-          where: {
-            id: { in: productIds },
-            eventId: dto.eventId,
-            // Stationskasse (Issue #66): Sortiment auf die Station
-            // eingeschraenkt. Einzige Auflösung der Zielstation im Projekt
-            // (common/target-station.ts) - kein zweiter, selbstgebauter
-            // Filter.
-            ...(dto.stationId ? productAtStationFilter(dto.stationId) : {}),
+          where: { id: { in: productIds }, eventId: dto.eventId },
+          include: {
+            optionGroups: { include: { options: true } },
+            category: { select: { targetStationId: true } },
           },
-          include: { optionGroups: { include: { options: true } } },
         });
         const productsById = new Map(
           products.map((product) => [product.id, product]),
@@ -663,6 +694,20 @@ export class OrdersService {
             throw new BadRequestException(
               ORDER_REJECTION_MESSAGES.PRODUCT_NOT_IN_EVENT_QUICK_SALE,
             );
+          // Zweiter Schritt: das Produkt gehoert zur Veranstaltung (siehe
+          // oben), aber gehoert es auch zur gewaehlten Station? Dieselbe
+          // Regel wie der fruehere where-Filter (productAtStationFilter),
+          // nur jetzt mit einer eigenen, praezisen Meldung statt der
+          // Veranstaltungsmeldung. Ohne dto.stationId (zentraler
+          // Schnellverkauf) entfaellt diese Pruefung unveraendert wie bisher.
+          if (
+            dto.stationId &&
+            resolveTargetStationId(product) !== dto.stationId
+          ) {
+            throw new BadRequestException(
+              ORDER_REJECTION_MESSAGES.PRODUCT_NOT_AT_STATION_QUICK_SALE,
+            );
+          }
           if (
             product.availability === "OUT_OF_STOCK" ||
             product.availability === "DISABLED"

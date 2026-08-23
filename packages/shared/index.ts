@@ -39,6 +39,16 @@ export const ORDER_REJECTION_MESSAGES = {
     `Ein Produkt (${productId}) ist für diese Veranstaltung nicht hinterlegt. Bitte die Auswahl aktualisieren und erneut versuchen.`,
   PRODUCT_NOT_IN_EVENT_QUICK_SALE:
     "Ein Produkt gehört nicht zu dieser Veranstaltung. Bitte die Auswahl aktualisieren und erneut versuchen.",
+  // Issue #66, Stationskasse: eigene Meldung fuer ein Produkt, das zwar zur
+  // Veranstaltung gehoert, aber zu einer anderen Station als der gewaehlten
+  // (orders.service.ts, createQuickSale). Ohne diese Unterscheidung landet
+  // dieser Fall in PRODUCT_NOT_IN_EVENT_QUICK_SALE und schickt die Bedienung
+  // an der Kasse in die falsche Richtung: sie prueft die Veranstaltung,
+  // obwohl die stimmt, statt die Station zu wechseln. Bewusst ohne
+  // Stationsnamen oder -kennung - der Text geht an ein Bediengeraet, nicht
+  // in ein Protokoll.
+  PRODUCT_NOT_AT_STATION_QUICK_SALE:
+    "Dieses Produkt gehört zum Sortiment einer anderen Station. Bitte die Station wechseln oder das Produkt dort verkaufen.",
   AREA_NOT_IN_EVENT:
     "Der gewählte Bereich gehört nicht zu dieser Veranstaltung. Bitte einen anderen Bereich wählen.",
   ORDER_EMPTY:

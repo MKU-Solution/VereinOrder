@@ -260,34 +260,84 @@ describe("OrdersService – Stationsverkauf für Issue #66", () => {
     expect(prisma.order.create).not.toHaveBeenCalled();
   });
 
-  it("weist ein Produkt einer fremden Station ab, weil es aus dem stationsgefilterten Sortiment fällt", async () => {
-    // productAtStationFilter würde ein Produkt einer anderen Station aus
-    // dem Ergebnis der Datenbankabfrage ausschließen - hier simuliert durch
-    // ein leeres findMany-Ergebnis.
+  // Rückmeldung der Projektleitung nach dem Durchspielen mit echten Daten:
+  // vorher stand productAtStationFilter direkt in der where-Klausel der
+  // Produktabfrage. Damit war ein Produkt einer anderen Station derselben
+  // Veranstaltung im Ergebnis nicht von einem Produkt zu unterscheiden, das
+  // es in dieser Veranstaltung gar nicht gibt - beide Fälle warfen dieselbe
+  // Meldung ("gehört nicht zu dieser Veranstaltung"), was die Bedienung an
+  // der Kasse in die falsche Richtung schickt. Die folgenden vier Tests
+  // halten die beiden Fälle getrennt fest, jeweils auf den konkreten Text.
+  it("weist ein Produkt einer anderen Station derselben Veranstaltung mit der neuen Meldung ab (eigene Zielstation)", async () => {
+    prisma.product.findMany.mockResolvedValue([
+      {
+        ...stationProduct,
+        targetStationId: "station-other",
+        category: { ...stationProduct.category, targetStationId: null },
+      },
+    ]);
+
+    await expect(
+      service.createQuickSale("station-user-1", stationSaleDto()),
+    ).rejects.toMatchObject({
+      message:
+        "Dieses Produkt gehört zum Sortiment einer anderen Station. Bitte die Station wechseln oder das Produkt dort verkaufen.",
+    });
+    expect(prisma.order.create).not.toHaveBeenCalled();
+  });
+
+  it("weist ein Produkt einer anderen Station derselben Veranstaltung mit der neuen Meldung ab (von der Warengruppe geerbte Zielstation)", async () => {
+    prisma.product.findMany.mockResolvedValue([
+      {
+        ...stationProduct,
+        targetStationId: null,
+        category: {
+          ...stationProduct.category,
+          targetStationId: "station-other",
+        },
+      },
+    ]);
+
+    await expect(
+      service.createQuickSale("station-user-1", stationSaleDto()),
+    ).rejects.toMatchObject({
+      message:
+        "Dieses Produkt gehört zum Sortiment einer anderen Station. Bitte die Station wechseln oder das Produkt dort verkaufen.",
+    });
+    expect(prisma.order.create).not.toHaveBeenCalled();
+  });
+
+  it("weist ein Produkt einer fremden Veranstaltung weiterhin mit der bisherigen Meldung ab", async () => {
+    // Die Produktabfrage filtert nach eventId - ein Produkt einer anderen
+    // Veranstaltung erscheint im Ergebnis gar nicht erst, unabhängig von
+    // seiner Station.
     prisma.product.findMany.mockResolvedValue([]);
 
     await expect(
       service.createQuickSale("station-user-1", stationSaleDto()),
-    ).rejects.toBeInstanceOf(BadRequestException);
+    ).rejects.toMatchObject({
+      message:
+        "Ein Produkt gehört nicht zu dieser Veranstaltung. Bitte die Auswahl aktualisieren und erneut versuchen.",
+    });
     expect(prisma.order.create).not.toHaveBeenCalled();
   });
 
-  it("baut den Sortimentsfilter mit productAtStationFilter statt eines eigenen Filters", async () => {
+  it("lädt Produkte für einen Stationsverkauf nur nach Veranstaltung gefiltert, nicht nach Station in der Datenbankabfrage", async () => {
     await service.createQuickSale("station-user-1", stationSaleDto());
 
-    expect(prisma.product.findMany).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: expect.objectContaining({
-          OR: [
-            { targetStationId: "station-grill" },
-            {
-              targetStationId: null,
-              category: { targetStationId: "station-grill" },
-            },
-          ],
-        }),
-      }),
-    );
+    const call = prisma.product.findMany.mock.calls[0][0];
+    // Kein OR/Stationsfilter mehr in der where-Klausel - die
+    // Stationszugehörigkeit wird als zweiter, eigener Schritt mit
+    // resolveTargetStationId geprüft (siehe orders.service.ts), damit ihre
+    // Ablehnung eine eigene, präzise Meldung tragen kann.
+    expect(call.where).toEqual({
+      id: { in: [stationProduct.id] },
+      eventId: "event-1",
+    });
+    // category wird für resolveTargetStationId mitgeladen.
+    expect(call.include.category).toEqual({
+      select: { targetStationId: true },
+    });
   });
 
   it("lässt den zentralen Schnellverkauf ohne stationId unangetastet: kein Stationsfilter auf dem Sortiment", async () => {
