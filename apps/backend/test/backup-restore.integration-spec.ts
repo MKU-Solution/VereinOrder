@@ -46,14 +46,13 @@ describe("BackupService.restoreBackup – Wiederherstellung gegen echtes Postgre
       path.join(os.tmpdir(), "vereinorder-restore-integration-"),
     );
     process.env.BACKUP_DIR = backupDir;
-    // Issue #67: BackupService braucht seither MaintenanceStateService, um
-    // den stuendlichen Lauf bei LOCKED auszusetzen. Dieser Test prueft
-    // ausschliesslich restoreBackup/createBackup direkt, nie onModuleInit -
-    // eine simple OPEN-Attrappe reicht.
+    // Legacy-Wiederherstellung ist ausschließlich im gesperrten
+    // Wartungsmodus zulässig. Der Test ruft den internen Legacy-Weg bewusst
+    // direkt auf und bildet deshalb die verbindliche LOCKED-Vorbedingung ab.
     backupService = new BackupService(
       prisma as any,
       {
-        read: () => ({ phase: "OPEN" }),
+        read: () => ({ phase: "LOCKED" }),
       } as any,
     );
   });

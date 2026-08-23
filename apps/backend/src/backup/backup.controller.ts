@@ -6,6 +6,7 @@ import {
   UseGuards,
   Request,
   Res,
+  ConflictException,
 } from "@nestjs/common";
 import { BackupService } from "./backup.service";
 import { JwtAuthGuard } from "../auth/jwt-auth.guard";
@@ -14,6 +15,7 @@ import { Roles } from "../common/decorators/roles.decorator";
 import { MaintenancePublic } from "../maintenance/maintenance.decorator";
 import * as fs from "fs";
 import { BackupFilenameParamDto } from "./backup.dto";
+import { NativeBackupService } from "./native-backup.service";
 
 // Issue #67: "alles unter /backup" bleibt laut Entwurf Abschnitt 6 auch bei
 // LOCKED erreichbar, weiterhin nur fuer ADMINISTRATOR (JwtAuthGuard +
@@ -23,19 +25,24 @@ import { BackupFilenameParamDto } from "./backup.dto";
 @Controller("backup")
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class BackupController {
-  constructor(private readonly backupService: BackupService) {}
+  constructor(
+    private readonly backupService: BackupService,
+    private readonly nativeBackupService: NativeBackupService,
+  ) {}
 
   @Post("create")
   @Roles("ADMINISTRATOR")
   async createBackup(@Request() req: any) {
-    const userId = req.user?.userId;
-    return this.backupService.createBackup(userId);
+    return this.nativeBackupService.createBackup("MANUAL", {
+      userId: req.user.userId,
+      username: req.user.username,
+    });
   }
 
   @Get("list")
   @Roles("ADMINISTRATOR")
   async listBackups() {
-    return this.backupService.listBackups();
+    return this.nativeBackupService.listBackups();
   }
 
   @Get("download/:filename")
@@ -45,15 +52,19 @@ export class BackupController {
     @Res() res: any,
   ) {
     const { filename } = params;
-    const filePath = this.backupService.getBackupFilePath(filename);
+    const filePath =
+      await this.nativeBackupService.getDownloadFilePath(filename);
     const stat = fs.statSync(filePath);
+    const contentType = filename.endsWith(".dump")
+      ? "application/octet-stream"
+      : "application/json; charset=utf-8";
 
     if (res.header) {
-      res.header("Content-Type", "application/json; charset=utf-8");
+      res.header("Content-Type", contentType);
       res.header("Content-Disposition", `attachment; filename="${filename}"`);
       res.header("Content-Length", stat.size);
     } else if (res.setHeader) {
-      res.setHeader("Content-Type", "application/json; charset=utf-8");
+      res.setHeader("Content-Type", contentType);
       res.setHeader(
         "Content-Disposition",
         `attachment; filename="${filename}"`,
@@ -71,6 +82,14 @@ export class BackupController {
     @Request() req: any,
     @Param() params: BackupFilenameParamDto,
   ) {
+    if (
+      !params.filename.endsWith(".json") ||
+      params.filename.endsWith(".manifest.json")
+    ) {
+      throw new ConflictException(
+        "Native PostgreSQL-Sicherungen können erst mit dem abgesicherten Restore-Folgeschnitt wiederhergestellt werden.",
+      );
+    }
     const userId = req.user?.userId;
     return this.backupService.restoreBackup(params.filename, userId);
   }

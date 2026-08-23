@@ -1,8 +1,8 @@
 import {
+  ConflictException,
   Injectable,
   Inject,
   NotFoundException,
-  OnModuleInit,
 } from "@nestjs/common";
 import { Prisma, PrismaClient } from "@vereinorder/database";
 import { PRISMA_CLIENT } from "../prisma/prisma.module";
@@ -30,7 +30,7 @@ export interface BackupMetadata {
 }
 
 @Injectable()
-export class BackupService implements OnModuleInit {
+export class BackupService {
   private backupDir: string;
 
   constructor(
@@ -41,39 +41,6 @@ export class BackupService implements OnModuleInit {
       process.env.BACKUP_DIR || path.join(process.cwd(), "backups");
     if (!fs.existsSync(this.backupDir)) {
       fs.mkdirSync(this.backupDir, { recursive: true });
-    }
-  }
-
-  onModuleInit() {
-    // Automatic backup every 60 minutes
-    const intervalMs = 60 * 60 * 1000;
-    setInterval(() => this.runScheduledBackupIfDue(), intervalMs);
-  }
-
-  /**
-   * Als eigene Methode ausgelagert (statt Rumpf des `setInterval` oben),
-   * damit sie in Tests direkt aufgerufen werden kann, ohne 60 Minuten
-   * abzuwarten oder Zeitgeber zu verstellen — Vorbild:
-   * `PrintJobsReaperService.sweepExpiredLeases`.
-   */
-  async runScheduledBackupIfDue(): Promise<void> {
-    try {
-      // Issue #67 (Wartungsmodus): Bei LOCKED laeuft moeglicherweise
-      // gerade eine Wiederherstellung. Der stuendliche Lauf darf die
-      // Datenbank in diesem Moment nicht anfassen - weder lesend fuer eine
-      // neue Sicherung noch schreibend.
-      if (this.maintenanceState.read().phase === "LOCKED") return;
-      const activeEvents = await this.prisma.event.count({
-        where: { status: "ACTIVE" },
-      });
-      if (activeEvents > 0) {
-        console.log(
-          "[BackupService] Automatisches Stündliches Backup wird erstellt...",
-        );
-        await this.createBackup("SYSTEM_CRON");
-      }
-    } catch (err) {
-      console.error("[BackupService] Fehler beim automatischen Backup:", err);
     }
   }
 
@@ -252,6 +219,11 @@ export class BackupService implements OnModuleInit {
   }
 
   async restoreBackup(filename: string, userId?: string) {
+    if (this.maintenanceState.read().phase !== "LOCKED") {
+      throw new ConflictException(
+        "Wiederherstellung ist ausschließlich im gesperrten Wartungsmodus zulässig.",
+      );
+    }
     const filePath = this.getBackupFilePath(filename);
     const content = fs.readFileSync(filePath, "utf-8");
     // Der komplette Strukturvertrag wird vor Sicherheitssicherung und

@@ -87,12 +87,24 @@ interface EventItem {
 }
 
 interface BackupItem {
+  format: "POSTGRES_CUSTOM" | "LEGACY_JSON" | "CORRUPT";
   filename: string;
+  artifacts: string[];
   sizeBytes: number;
   createdAt: string;
   checksumSha256: string;
   version: string;
   counts: Record<string, number>;
+  trigger?: string | null;
+  verification?:
+    | "STRUCTURE_VERIFIED"
+    | "RESTORE_VERIFIED"
+    | "LEGACY"
+    | "CORRUPT";
+  compatibility?: "CURRENT" | "OLDER" | "NEWER" | "DIVERGED" | "UNKNOWN";
+  restoreAvailable?: boolean;
+  restoreUnavailableReason?: string | null;
+  downloadFiles?: string[];
 }
 
 interface AuditLogItem {
@@ -2248,8 +2260,9 @@ export const AdminDashboard = () => {
                     Automatische & Manuelle Datensicherung
                   </h3>
                   <p className="text-xs text-slate-400 mt-0.5">
-                    Stündliche automatische Sicherung während aktiver Feste.
-                    JSON-Snapshots mit SHA256-Integritätsprüfung.
+                    Stündliche PostgreSQL-Sicherung unabhängig vom
+                    Veranstaltungsstatus. Custom-Dump und Manifest werden mit
+                    SHA-256 und pg_restore geprüft.
                   </p>
                 </div>
               </div>
@@ -2285,7 +2298,17 @@ export const AdminDashboard = () => {
                       className="hover:bg-slate-800/30 transition-colors"
                     >
                       <td className="py-4 font-mono font-medium text-indigo-300">
-                        {b.filename}
+                        <div>{b.filename}</div>
+                        <div className="mt-1 font-sans text-[11px] text-slate-500">
+                          {b.format === "POSTGRES_CUSTOM"
+                            ? "PostgreSQL Custom-Dump"
+                            : b.format === "LEGACY_JSON"
+                              ? "Altbestand (JSON)"
+                              : "Beschädigt oder unvollständig"}
+                          {b.trigger && b.trigger !== "LEGACY"
+                            ? ` · ${b.trigger}`
+                            : ""}
+                        </div>
                       </td>
                       <td className="py-4 text-slate-300">
                         {new Date(b.createdAt).toLocaleString("de-AT")}
@@ -2296,8 +2319,9 @@ export const AdminDashboard = () => {
                       <td className="py-4 text-xs text-slate-400">
                         {b.counts ? (
                           <span>
-                            {b.counts.orders || 0} Bestellungen,{" "}
-                            {b.counts.products || 0} Artikel
+                            {b.counts.Order || b.counts.orders || 0}{" "}
+                            Bestellungen,{" "}
+                            {b.counts.Product || b.counts.products || 0} Artikel
                           </span>
                         ) : (
                           "-"
@@ -2307,28 +2331,56 @@ export const AdminDashboard = () => {
                         className="py-4 font-mono text-xs text-slate-500"
                         title={b.checksumSha256}
                       >
-                        {b.checksumSha256
-                          ? `${b.checksumSha256.slice(0, 12)}...`
-                          : "Geprüft"}
+                        <div>
+                          {b.verification === "RESTORE_VERIFIED"
+                            ? "Wiederherstellungsgeprüft"
+                            : b.verification === "STRUCTURE_VERIFIED"
+                              ? "Strukturgeprüft"
+                              : b.verification === "LEGACY"
+                                ? "Legacy-Prüfsumme"
+                                : "Nicht verwendbar"}
+                        </div>
+                        {b.checksumSha256 && (
+                          <div title={b.checksumSha256}>
+                            {b.checksumSha256.slice(0, 12)}...
+                          </div>
+                        )}
                       </td>
                       <td className="py-4 text-right">
                         <div className="flex justify-end gap-2">
-                          <button
-                            onClick={() => handleDownloadBackup(b.filename)}
-                            className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 rounded-lg text-slate-300 transition text-xs font-bold flex items-center gap-1.5 border border-slate-700"
-                            title="Auf USB-Stick / PC herunterladen"
-                          >
-                            <Download className="w-3.5 h-3.5" />
-                            Download
-                          </button>
-                          <button
-                            onClick={() => handleRestoreBackup(b.filename)}
-                            className="px-3 py-1.5 bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 rounded-lg transition text-xs font-bold flex items-center gap-1.5 border border-rose-500/30"
-                            title="Datenbank auf diesen Stand zurücksetzen"
-                          >
-                            <RotateCcw className="w-3.5 h-3.5" />
-                            Wiederherstellen
-                          </button>
+                          {(b.downloadFiles || []).map((downloadFile) => (
+                            <button
+                              key={downloadFile}
+                              onClick={() => handleDownloadBackup(downloadFile)}
+                              className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 rounded-lg text-slate-300 transition text-xs font-bold flex items-center gap-1.5 border border-slate-700"
+                              title={`${downloadFile} herunterladen`}
+                            >
+                              <Download className="w-3.5 h-3.5" />
+                              {downloadFile.endsWith(".manifest.json")
+                                ? "Manifest"
+                                : downloadFile.endsWith(".dump")
+                                  ? "Dump"
+                                  : "Download"}
+                            </button>
+                          ))}
+                          {b.restoreAvailable ? (
+                            <button
+                              onClick={() => handleRestoreBackup(b.filename)}
+                              className="px-3 py-1.5 bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 rounded-lg transition text-xs font-bold flex items-center gap-1.5 border border-rose-500/30"
+                              title="Nur im gesperrten Wartungsmodus wiederherstellen"
+                            >
+                              <RotateCcw className="w-3.5 h-3.5" />
+                              Legacy wiederherstellen
+                            </button>
+                          ) : (
+                            <span
+                              className="max-w-52 text-left text-[11px] leading-snug text-slate-500"
+                              title={b.restoreUnavailableReason || undefined}
+                            >
+                              {b.restoreUnavailableReason ||
+                                "Wiederherstellung nicht verfügbar"}
+                            </span>
+                          )}
                         </div>
                       </td>
                     </tr>

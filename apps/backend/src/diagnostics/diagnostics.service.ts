@@ -2,7 +2,7 @@ import { Injectable, Inject } from "@nestjs/common";
 import * as net from "net";
 import { PrismaClient } from "@vereinorder/database";
 import { PRISMA_CLIENT } from "../prisma/prisma.module";
-import { BackupService } from "../backup/backup.service";
+import { NativeBackupService } from "../backup/native-backup.service";
 
 /** Zeitbudget einer einzelnen TCP-Erreichbarkeitspruefung gegen einen CUPS-Host. */
 const CUPS_PROBE_TIMEOUT_MS = 800;
@@ -18,7 +18,7 @@ export interface Recommendation {
 export class DiagnosticsService {
   constructor(
     @Inject(PRISMA_CLIENT) private prisma: PrismaClient,
-    private backupService: BackupService,
+    private backupService: NativeBackupService,
   ) {}
 
   async getStatus() {
@@ -84,6 +84,7 @@ export class DiagnosticsService {
     // 3. Backup Status
     const backups = await this.backupService.listBackups();
     const latestBackup = backups.length > 0 ? backups[0] : null;
+    const backupToolStatus = this.backupService.getToolStatus();
     let backupAgeHours: number | null = null;
     if (latestBackup) {
       const backupTime = new Date(latestBackup.createdAt).getTime();
@@ -134,6 +135,15 @@ export class DiagnosticsService {
       });
     }
 
+    if (!backupToolStatus.enabled) {
+      recommendations.push({
+        level: "ERROR",
+        title: "Datenbanksicherung ist deaktiviert",
+        message: backupToolStatus.message,
+        actionTab: "backups",
+      });
+    }
+
     if (unresolvedPrintJobs > 0) {
       recommendations.push({
         level: "WARNING",
@@ -165,7 +175,11 @@ export class DiagnosticsService {
 
     // Overall health determination
     let overallHealth: "GREEN" | "YELLOW" | "RED" = "GREEN";
-    if (dbStatus === "ERROR" || failedPrintJobs > 0) {
+    if (
+      dbStatus === "ERROR" ||
+      failedPrintJobs > 0 ||
+      !backupToolStatus.enabled
+    ) {
       overallHealth = "RED";
     } else if (recommendations.some((r) => r.level === "WARNING")) {
       overallHealth = "YELLOW";
@@ -226,6 +240,7 @@ export class DiagnosticsService {
       backup: {
         totalBackups: backups.length,
         latestBackup,
+        toolStatus: backupToolStatus,
       },
       recommendations,
     };

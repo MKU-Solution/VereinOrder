@@ -1,0 +1,133 @@
+import { fireEvent, render, screen, within } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { api } from "../lib/api";
+import { useAuthStore } from "../store/useAuthStore";
+import { AdminDashboard } from "./AdminDashboard";
+
+vi.mock("../lib/api", () => ({
+  api: {
+    get: vi.fn(),
+    post: vi.fn(),
+    patch: vi.fn(),
+    delete: vi.fn(),
+  },
+}));
+
+const nativeBackup = {
+  format: "POSTGRES_CUSTOM",
+  filename: "vereinorder_2026-08-24T08-30-00.000Z_manual.dump",
+  artifacts: [
+    "vereinorder_2026-08-24T08-30-00.000Z_manual.dump",
+    "vereinorder_2026-08-24T08-30-00.000Z_manual.manifest.json",
+  ],
+  sizeBytes: 4096,
+  createdAt: "2026-08-24T08:30:00.000Z",
+  checksumSha256: "a".repeat(64),
+  version: "1 / 0.1.0",
+  counts: { Order: 12, Product: 5 },
+  trigger: "MANUAL",
+  verification: "STRUCTURE_VERIFIED",
+  compatibility: "CURRENT",
+  restoreAvailable: false,
+  restoreUnavailableReason:
+    "Native Wiederherstellung folgt im nächsten abgesicherten #67-Schnitt.",
+  downloadFiles: [
+    "vereinorder_2026-08-24T08-30-00.000Z_manual.dump",
+    "vereinorder_2026-08-24T08-30-00.000Z_manual.manifest.json",
+  ],
+};
+
+const legacyBackup = {
+  format: "LEGACY_JSON",
+  filename: "vereinorder_backup_2026-08-23.json",
+  artifacts: ["vereinorder_backup_2026-08-23.json"],
+  sizeBytes: 2048,
+  createdAt: "2026-08-23T08:30:00.000Z",
+  checksumSha256: "b".repeat(64),
+  version: "0.1.0",
+  counts: { orders: 4, products: 2 },
+  trigger: "LEGACY",
+  verification: "LEGACY",
+  compatibility: "UNKNOWN",
+  restoreAvailable: true,
+  restoreUnavailableReason: null,
+  downloadFiles: ["vereinorder_backup_2026-08-23.json"],
+};
+
+const mockedApi = api as unknown as {
+  get: ReturnType<typeof vi.fn>;
+  post: ReturnType<typeof vi.fn>;
+};
+
+beforeEach(() => {
+  useAuthStore.setState({
+    user: { username: "admin", userId: "admin-id", role: "ADMINISTRATOR" },
+    token: "test-token",
+  });
+  mockedApi.get.mockImplementation((url: string) => {
+    if (url === "/events") return Promise.resolve({ data: [] });
+    if (url === "/backup/list")
+      return Promise.resolve({ data: [nativeBackup, legacyBackup] });
+    return Promise.resolve({ data: [] });
+  });
+  mockedApi.post.mockResolvedValue({ data: {} });
+});
+
+afterEach(() => {
+  useAuthStore.setState({ user: null, token: null });
+  vi.clearAllMocks();
+});
+
+async function openBackupTab() {
+  render(<AdminDashboard />);
+  fireEvent.click(
+    screen.getByRole("button", { name: /Backups & Datensicherung/ }),
+  );
+  await screen.findByText(nativeBackup.filename);
+}
+
+describe("Native Datensicherung V1 in der Administration (Issue #67)", () => {
+  it("zeigt Custom-Dump und Manifest ehrlich als strukturgeprüft, aber noch nicht wiederherstellbar", async () => {
+    await openBackupTab();
+
+    expect(
+      screen.getByText(/Stündliche PostgreSQL-Sicherung unabhängig/),
+    ).toBeInTheDocument();
+    const nativeRow = screen.getByText(nativeBackup.filename).closest("tr")!;
+    expect(
+      within(nativeRow).getByText(/PostgreSQL Custom-Dump/),
+    ).toBeInTheDocument();
+    expect(within(nativeRow).getByText("Strukturgeprüft")).toBeInTheDocument();
+    expect(
+      within(nativeRow).getByRole("button", { name: "Dump" }),
+    ).toBeInTheDocument();
+    expect(
+      within(nativeRow).getByRole("button", { name: "Manifest" }),
+    ).toBeInTheDocument();
+    expect(
+      within(nativeRow).queryByRole("button", { name: /Wiederherstellen/ }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(nativeRow).getByText(/Native Wiederherstellung folgt/),
+    ).toBeInTheDocument();
+  });
+
+  it("kennzeichnet JSON-Dateien als Altbestand und bietet nur dafür den gesperrten Legacy-Weg an", async () => {
+    await openBackupTab();
+
+    const legacyRow = screen.getByText(legacyBackup.filename).closest("tr")!;
+    expect(
+      within(legacyRow).getByText("Altbestand (JSON)"),
+    ).toBeInTheDocument();
+    expect(within(legacyRow).getByText("Legacy-Prüfsumme")).toBeInTheDocument();
+    expect(
+      within(legacyRow).getByRole("button", {
+        name: "Legacy wiederherstellen",
+      }),
+    ).toHaveAttribute(
+      "title",
+      "Nur im gesperrten Wartungsmodus wiederherstellen",
+    );
+  });
+});

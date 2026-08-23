@@ -35,7 +35,7 @@ FROM node:20-alpine AS runner
 
 WORKDIR /app
 ENV NODE_ENV=production
-RUN apk add --no-cache openssl
+RUN apk add --no-cache openssl postgresql16-client
 
 RUN corepack enable && corepack prepare pnpm@9.15.4 --activate
 
