@@ -43,6 +43,26 @@ ausgegeben:
 Fachliche Fehleingaben verwenden `code: "BAD_REQUEST"`, einen serverseitig
 definierten Meldungstext und eine leere `errors`-Liste.
 
+Ausnahme ist ausschließlich die Bestellannahme `POST /orders`: Ihre fachlichen
+4xx-Antworten verwenden seit Issue #93 eine stabile Kennung, damit die
+Offline-Warteschlange nicht vom Wortlaut abhängt:
+
+```json
+{
+  "statusCode": 400,
+  "error": "Bad Request",
+  "code": "PRODUCT_UNAVAILABLE",
+  "message": "Ein lesbarer Hinweis für das Bedienpersonal.",
+  "errors": []
+}
+```
+
+Erlaubt sind `AUTH_EXPIRED`, `FORBIDDEN`, `EVENT_MODE`, `SESSION_CLOSED`,
+`PRODUCT_UNAVAILABLE`, `PRICE_OR_OPTION`, `DUPLICATE_KEY_MISMATCH` und
+`VALIDATION`. Statuscodes und NestJS-Ausnahmeklassen bleiben unverändert. Die
+Kennungen gelten nicht automatisch für Schnellverkauf, Stationsverkauf oder
+andere Endpunkte.
+
 ## Authentifizierung und Benutzer
 
 | Endpunkt               | Erlaubter Body                                           |
@@ -127,4 +147,6 @@ ohne den später ergänzten Gutscheinblock bleiben lesbar.
 - Zahlen und Booleanwerte werden als JSON-Zahlen beziehungsweise JSON-Booleans
   gesendet, nicht als Strings.
 - Die Event-Aktivierung sendet `{ "confirmed": true }`.
-- Das Frontend liest weiterhin ein stringförmiges `message`-Feld aus 400-Antworten.
+- Bei `POST /orders` wertet das Frontend zuerst den stabilen `code` aus. Fehlt
+  er bei einer älteren Serverfassung, nutzt es weiterhin HTTP-Status und das
+  stringförmige `message`-Feld als Rückfall.

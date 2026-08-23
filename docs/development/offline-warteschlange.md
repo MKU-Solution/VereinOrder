@@ -188,6 +188,17 @@ als "Übertragung unterbrochen, Ergebnis wird geprüft".
 Leitregel: **Ein fachliches 4xx wird nie automatisch wiederholt.** Netzfehler, 408, 425,
 429 und 5xx werden wiederholt, höchstens sechsmal je Eintrag.
 
+Seit Issue #93 führt `POST /orders` bei fachlichen 4xx zusätzlich zum lesbaren
+`message` eine stabile Kennung im Feld `code`. Die Warteschlange wertet diese
+Kennung zuerst aus. Fehlt sie oder ist sie unbekannt, bleibt die bisherige
+Zuordnung über HTTP-Status und Meldungstext als Rückfall für ältere
+Serverfassungen erhalten. Die Retry-Entscheidung hängt weiterhin ausschließlich
+an Netzwerkfehler und HTTP-Status; ein Body-Code kann sie nicht verändern.
+
+Der Kennungsvertrag umfasst `AUTH_EXPIRED`, `FORBIDDEN`, `EVENT_MODE`,
+`SESSION_CLOSED`, `PRODUCT_UNAVAILABLE`, `PRICE_OR_OPTION`,
+`DUPLICATE_KEY_MISMATCH` und `VALIDATION`.
+
 | Antwort                                                                    | Konkreter Fall                                                                             | Zustand                               | Automatisch wiederholen        |
 | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ | ------------------------------------- | ------------------------------ |
 | 200/201, `idempotencyKey` passt                                            | angelegt **oder** Wiederholung, `orders.service.ts:777-779`                                | `CONFIRMED`                           | entfällt                       |
@@ -556,11 +567,10 @@ Warteschlangenzustände, eine serverseitige Warteschlange.
    `LOCAL_PENDING`, `CONFLICT` oder `FAILED` liegen? Fachlich naheliegend, berührt aber
    `sessions.controller.ts:55-66` und den Veranstaltungsabschluss und ist daher hier
    nicht enthalten.
-4. **Maschinenlesbare Fehlerkennungen.** Dieser Entwurf kommt ohne sie aus: der Zustand
-   hängt nur an der Statusklasse, Meldungstexte steuern ausschließlich die Anzeige.
-   Dauerhaft wäre eine stabile `code`-Eigenschaft in den 4xx-Antworten von `POST /orders`
-   besser. Das ist ein Eingriff in `resolveOrderItemPricing` und `createOrder` und sollte
-   ein eigenes Issue sein.
+4. **Maschinenlesbare Fehlerkennungen.** Im ursprünglichen Schnitt bewusst
+   zurückgestellt; mit Issue #93 als stabile `code`-Eigenschaft für die
+   fachlichen 4xx-Antworten von `POST /orders` umgesetzt. Der Textweg bleibt
+   ausschließlich als Abwärtskompatibilitäts-Fallback erhalten.
 5. **Wer darf verwerfen?** Vorschlag: der erfassende Benutzer oder `ADMINISTRATOR`;
    Altbestände nur `ADMINISTRATOR`. Zu bestätigen.
 6. **Darf eine Vormerkung mit Zahlungen überhaupt verworfen werden**, oder muss sie
@@ -581,7 +591,11 @@ Verbindlich. Ersetzen die Vorschläge in Abschnitt 10.
 
 3. **Offene Einträge sperren weder den Sitzungsschluss noch den Abschluss einer Veranstaltung.** Das berührt fremden Umfang. Als eigener Vorgang festzuhalten; hier nicht umsetzen.
 
-4. **Eine stabile `code`-Eigenschaft in den 4xx-Antworten** kommt nicht in diesen Schnitt. Der Entwurf hängt die Zustandswechsel bewusst allein an der Statusklasse auf; das trägt ohne sie. Eigenes Issue.
+4. **Eine stabile `code`-Eigenschaft in den 4xx-Antworten** wurde mit Issue #93
+   ergänzt. Zustandswechsel und Wiederholungsentscheidungen hängen weiterhin
+   allein an Statusklasse beziehungsweise Netzwerkfehler; die Kennung steuert
+   nur die konkrete Konfliktursache. Fehlt sie bei einem alten Server, greift
+   der Text-Fallback.
 
 5. **Verwerfen darf der erfassende Benutzer oder `ADMINISTRATOR`.** Übernommene Altbestände darf nur `ADMINISTRATOR` oder `EVENT_MANAGER` verwerfen.
 

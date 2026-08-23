@@ -11,7 +11,10 @@ import {
 // hat wegdriften lassen), wird die tatsaechliche Quelle aus dem gemeinsam
 // genutzten Paket importiert - siehe packages/shared/index.ts fuer die
 // Begruendung dieser Kopplung und ihre Grenzen.
-import { ORDER_REJECTION_MESSAGES } from "@vereinorder/shared";
+import {
+  ORDER_REJECTION_CODES,
+  ORDER_REJECTION_MESSAGES,
+} from "@vereinorder/shared";
 
 const RECORD = { idempotencyKey: "key-1", eventId: "event-1" };
 
@@ -77,6 +80,52 @@ describe("Einordnung der Serverantworten (Abschnitt 3)", () => {
     }
   });
 
+  it.each([
+    [401, ORDER_REJECTION_CODES.AUTH_EXPIRED, "AUTH_EXPIRED"],
+    [403, ORDER_REJECTION_CODES.FORBIDDEN, "FORBIDDEN"],
+    [400, ORDER_REJECTION_CODES.EVENT_MODE, "EVENT_MODE"],
+    [409, ORDER_REJECTION_CODES.SESSION_CLOSED, "SESSION_CLOSED"],
+    [400, ORDER_REJECTION_CODES.PRODUCT_UNAVAILABLE, "PRODUCT_UNAVAILABLE"],
+    [400, ORDER_REJECTION_CODES.PRICE_OR_OPTION, "PRICE_OR_OPTION"],
+    [
+      400,
+      ORDER_REJECTION_CODES.DUPLICATE_KEY_MISMATCH,
+      "DUPLICATE_KEY_MISMATCH",
+    ],
+    [400, ORDER_REJECTION_CODES.VALIDATION, "VALIDATION"],
+  ] as const)(
+    "ordnet Status %i mit stabiler Kennung %s textunabhaengig als %s ein",
+    (status, code, expectedKind) => {
+      expect(
+        classifyConflictKind(
+          status,
+          "Dieser lesbare Meldungstext wurde vollständig umformuliert.",
+          code,
+        ),
+      ).toBe(expectedKind);
+    },
+  );
+
+  it("gibt einer bekannten Kennung Vorrang vor einem widersprüchlichen Text", () => {
+    expect(
+      classifyConflictKind(
+        400,
+        "Die erfasste Kassensitzung ist nicht mehr aktiv.",
+        ORDER_REJECTION_CODES.PRODUCT_UNAVAILABLE,
+      ),
+    ).toBe("PRODUCT_UNAVAILABLE");
+  });
+
+  it("fällt bei unbekannter Kennung auf den bisherigen Textweg zurück", () => {
+    expect(
+      classifyConflictKind(
+        400,
+        ORDER_REJECTION_MESSAGES.PRODUCT_OUT_OF_STOCK("Saft"),
+        "SERVER_V2_UNKNOWN_CODE",
+      ),
+    ).toBe("PRODUCT_UNAVAILABLE");
+  });
+
   it("markiert 409 wegen abweichendem Betriebsmodus als EVENT_MODE, nicht als SESSION_CLOSED", () => {
     const kind = classifyConflictKind(
       409,
@@ -96,7 +145,12 @@ describe("Einordnung der Serverantworten (Abschnitt 3)", () => {
     (status) => {
       const outcome = classifySubmissionOutcome(RECORD, {
         success: false,
-        error: { response: { status, data: {} } },
+        error: {
+          response: {
+            status,
+            data: { code: ORDER_REJECTION_CODES.PRODUCT_UNAVAILABLE },
+          },
+        },
       });
       expect(outcome.nextState).toBe("RETRY");
     },
@@ -128,24 +182,11 @@ describe("Einordnung der Serverantworten (Abschnitt 3)", () => {
   });
 });
 
-// Issue #89: die Zuordnung Backend-Text -> Ursache in classifyConflictKind
-// laeuft ausschliesslich ueber Text-Matching und hat keinen Compiler, der bei
-// einer Textaenderung im Backend automatisch mitzoege. Genau das ist beim
-// ersten Anlauf von Issue #89 passiert: die Meldungen wurden von Englisch
-// auf Deutsch umgestellt, die Muster oben blieben aber auf den alten
-// englischen Texten stehen - sechs Ursachen fielen dadurch lautlos auf den
-// generischen UNKNOWN_4XX-Text zurueck ("Der Server hat die Bestellung
-// abgelehnt.") statt ihre eigene Ursachenzeile zu zeigen. Bemerkt wurde das
-// nur durch eine manuelle Abnahme der Konfliktansicht, nicht durch einen
-// roten Test.
-//
-// Dieser Block importiert die tatsaechlichen Backend-Texte (siehe Import
-// oben) und prueft jede Zuordnung gegenueber der echten Quelle, statt einer
-// hier erneut abgetippten Kopie. Faellt eine dieser Pruefungen auf
-// UNKNOWN_4XX statt der erwarteten Ursache, ist entweder ein Muster oben
-// veraltet oder ein Backend-Text hat sich geaendert, ohne dass das Muster
-// nachgezogen wurde.
-describe("classifyConflictKind haelt mit den deutschen Backend-Texten Schritt (Issue #89)", () => {
+// Issue #93 macht den Code zur primaeren Schnittstelle. Dieser Waechter aus
+// Issue #89 bleibt bewusst fuer alte Serverfassungen erhalten, die noch
+// keinen Code mitsenden. Textaenderungen im aktuellen Server sind davon
+// entkoppelt; nur der Legacy-Fallback muss diese bekannten Texte tragen.
+describe("classifyConflictKind unterstützt weiterhin Backend-Texte ohne Code (Legacy-Fallback)", () => {
   it.each([
     [
       "Veranstaltung nicht aktiv (Bestellannahme)",

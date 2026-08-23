@@ -1,3 +1,22 @@
+// Issue #93: stabiler, textunabhaengiger Vertrag fuer die fachlichen
+// Ablehnungen von POST /orders. Die Werte entsprechen bewusst den
+// ConflictKind-Ursachen der Offline-Warteschlange. Der Server sendet sie im
+// Feld `code`; das Frontend prueft diese Allowlist, bevor es fuer alte
+// Serverstaende auf die Meldungstexte zurueckfaellt.
+export const ORDER_REJECTION_CODES = {
+  AUTH_EXPIRED: "AUTH_EXPIRED",
+  FORBIDDEN: "FORBIDDEN",
+  EVENT_MODE: "EVENT_MODE",
+  SESSION_CLOSED: "SESSION_CLOSED",
+  PRODUCT_UNAVAILABLE: "PRODUCT_UNAVAILABLE",
+  PRICE_OR_OPTION: "PRICE_OR_OPTION",
+  DUPLICATE_KEY_MISMATCH: "DUPLICATE_KEY_MISMATCH",
+  VALIDATION: "VALIDATION",
+} as const;
+
+export type OrderRejectionCode =
+  (typeof ORDER_REJECTION_CODES)[keyof typeof ORDER_REJECTION_CODES];
+
 // Issue #89: benannte Texte fuer die fachlichen Ablehnungen der
 // Bestellannahme, die tatsaechlich beim Bedienpersonal ankommen (siehe
 // apps/backend/src/orders/orders.service.ts fuer die vollstaendige
@@ -24,10 +43,9 @@
 // Prisma, kein React) - siehe Dockerfiles beider Anwendungen, die es analog
 // zu packages/database kopieren und bauen.
 //
-// Das ist ein Notbehelf gegen Text-Drift zwischen den beiden Anwendungen,
-// keine stabile, textunabhaengige Fehlerkennung. Letzteres ist Entscheidung
-// 11.4 aus docs/development/offline-warteschlange.md und bleibt einem
-// eigenen Vorgang vorbehalten - siehe Issue #89, Abschnitt "Nicht-Ziele".
+// Seit Issue #93 sind diese Texte nicht mehr die primaere Schnittstelle.
+// Sie bleiben geteilt, weil der Frontend-Fallback weiterhin Antworten alter
+// Serverfassungen korrekt einordnen muss.
 export const ORDER_REJECTION_MESSAGES = {
   EVENT_NOT_ACTIVE_FOR_ORDERS:
     "Diese Veranstaltung ist derzeit nicht aktiv. Bestellungen sind erst möglich, wenn sie gestartet wurde.",

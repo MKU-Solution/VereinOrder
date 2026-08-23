@@ -1,4 +1,5 @@
 import { BadRequestException } from "@nestjs/common";
+import { ORDER_REJECTION_CODES } from "@vereinorder/shared";
 import { OrdersService } from "./orders.service";
 import { createAuditServiceStub } from "./test-support/audit-service.stub";
 
@@ -91,13 +92,86 @@ describe("OrdersService – eventgebundener Betriebsmodus", () => {
     prisma.product.findMany.mockResolvedValue([]);
     const service = new OrdersService(prisma, createAuditServiceStub() as any);
 
+    const promise = service.createOrder("waiter-1", {
+      eventId: "event-1",
+      items: [{ productId: "foreign-product", quantity: 1 }],
+    });
+    await expect(promise).rejects.toBeInstanceOf(BadRequestException);
+    await expect(promise).rejects.toMatchObject({
+      response: expect.objectContaining({
+        code: ORDER_REJECTION_CODES.PRODUCT_UNAVAILABLE,
+      }),
+    });
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    expect(prisma.order.create).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { status: "PLANNED", testMode: false },
+    { status: "COMPLETED", testMode: false },
+    { status: "ACTIVE", testMode: true },
+    { status: "TEST_MODE", testMode: false },
+  ])(
+    "kennzeichnet den nicht bestellbaren Eventzustand $status/$testMode als EVENT_MODE",
+    async (event) => {
+      const prisma = createPrisma(event);
+      const service = new OrdersService(
+        prisma,
+        createAuditServiceStub() as any,
+      );
+      const promise = service.createOrder("waiter-1", {
+        eventId: "event-1",
+        items: [{ productId: "product-1", quantity: 1 }],
+      });
+
+      await expect(promise).rejects.toMatchObject({
+        response: expect.objectContaining({
+          code: ORDER_REJECTION_CODES.EVENT_MODE,
+        }),
+      });
+      expect(prisma.order.create).not.toHaveBeenCalled();
+    },
+  );
+
+  it("kennzeichnet ein ausverkauftes Produkt als PRODUCT_UNAVAILABLE", async () => {
+    const prisma = createPrisma({ status: "TEST_MODE", testMode: true });
+    prisma.product.findMany.mockResolvedValue([
+      { ...product, availability: "OUT_OF_STOCK" },
+    ]);
+    const service = new OrdersService(prisma, createAuditServiceStub() as any);
+
     await expect(
       service.createOrder("waiter-1", {
         eventId: "event-1",
-        items: [{ productId: "foreign-product", quantity: 1 }],
+        items: [{ productId: "product-1", quantity: 1 }],
       }),
-    ).rejects.toBeInstanceOf(BadRequestException);
-    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({
+        code: ORDER_REJECTION_CODES.PRODUCT_UNAVAILABLE,
+      }),
+    });
+    expect(prisma.order.create).not.toHaveBeenCalled();
+  });
+
+  it("kennzeichnet ein inzwischen gesperrtes Benutzerkonto als FORBIDDEN", async () => {
+    const prisma = createPrisma({ status: "TEST_MODE", testMode: true });
+    prisma.user.findUnique.mockResolvedValue({
+      id: "waiter-1",
+      username: "kellner1",
+      isActive: false,
+    });
+    const service = new OrdersService(prisma, createAuditServiceStub() as any);
+
+    await expect(
+      service.createOrder("waiter-1", {
+        eventId: "event-1",
+        items: [{ productId: "product-1", quantity: 1 }],
+      }),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({
+        code: ORDER_REJECTION_CODES.FORBIDDEN,
+      }),
+    });
     expect(prisma.order.create).not.toHaveBeenCalled();
   });
 
