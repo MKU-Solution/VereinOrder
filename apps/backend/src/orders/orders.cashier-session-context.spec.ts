@@ -1,4 +1,5 @@
 import { ConflictException } from "@nestjs/common";
+import { ORDER_REJECTION_CODES } from "@vereinorder/shared";
 import { OrdersService } from "./orders.service";
 import { createAuditServiceStub } from "./test-support/audit-service.stub";
 
@@ -98,22 +99,8 @@ describe("OrdersService – erfasste Kassensitzung in createOrder für Issue #65
     );
   });
 
-  it("weist eine erfasste Kassensitzung zurück, die inzwischen geschlossen wurde", async () => {
-    const prisma = createPrisma(null);
-    const service = new OrdersService(prisma, createAuditServiceStub() as any);
-
-    await expect(
-      service.createOrder("waiter-1", {
-        eventId: "event-1",
-        items: [{ productId: "product-1", quantity: 1 }],
-        cashierSessionId: "session-that-is-now-closed",
-      }),
-    ).rejects.toBeInstanceOf(ConflictException);
-    expect(prisma.order.create).not.toHaveBeenCalled();
-  });
-
-  it("weist eine erfasste Kassensitzung zurück, die durch eine andere ersetzt wurde", async () => {
-    const prisma = createPrisma({ id: "session-2", dataMode: "TEST" });
+  it("kennzeichnet eine aktive Sitzung im anderen Betriebsmodus als EVENT_MODE", async () => {
+    const prisma = createPrisma({ id: "session-1", dataMode: "LIVE" });
     const service = new OrdersService(prisma, createAuditServiceStub() as any);
 
     await expect(
@@ -122,7 +109,47 @@ describe("OrdersService – erfasste Kassensitzung in createOrder für Issue #65
         items: [{ productId: "product-1", quantity: 1 }],
         cashierSessionId: "session-1",
       }),
-    ).rejects.toBeInstanceOf(ConflictException);
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({
+        code: ORDER_REJECTION_CODES.EVENT_MODE,
+      }),
+    });
+    expect(prisma.order.create).not.toHaveBeenCalled();
+  });
+
+  it("weist eine erfasste Kassensitzung zurück, die inzwischen geschlossen wurde", async () => {
+    const prisma = createPrisma(null);
+    const service = new OrdersService(prisma, createAuditServiceStub() as any);
+
+    const promise = service.createOrder("waiter-1", {
+      eventId: "event-1",
+      items: [{ productId: "product-1", quantity: 1 }],
+      cashierSessionId: "session-that-is-now-closed",
+    });
+    await expect(promise).rejects.toBeInstanceOf(ConflictException);
+    await expect(promise).rejects.toMatchObject({
+      response: expect.objectContaining({
+        code: ORDER_REJECTION_CODES.SESSION_CLOSED,
+      }),
+    });
+    expect(prisma.order.create).not.toHaveBeenCalled();
+  });
+
+  it("weist eine erfasste Kassensitzung zurück, die durch eine andere ersetzt wurde", async () => {
+    const prisma = createPrisma({ id: "session-2", dataMode: "TEST" });
+    const service = new OrdersService(prisma, createAuditServiceStub() as any);
+
+    const promise = service.createOrder("waiter-1", {
+      eventId: "event-1",
+      items: [{ productId: "product-1", quantity: 1 }],
+      cashierSessionId: "session-1",
+    });
+    await expect(promise).rejects.toBeInstanceOf(ConflictException);
+    await expect(promise).rejects.toMatchObject({
+      response: expect.objectContaining({
+        code: ORDER_REJECTION_CODES.SESSION_CLOSED,
+      }),
+    });
     expect(prisma.order.create).not.toHaveBeenCalled();
   });
 });

@@ -1,4 +1,5 @@
 import { BadRequestException } from "@nestjs/common";
+import { ORDER_REJECTION_CODES } from "@vereinorder/shared";
 import { OrdersService } from "./orders.service";
 import { createAuditServiceStub } from "./test-support/audit-service.stub";
 
@@ -145,24 +146,28 @@ describe("OrdersService – Idempotenzpruefung von createOrder für Issue #86", 
     const prisma = createPrisma(existingOrderBase);
     const service = new OrdersService(prisma, createAuditServiceStub() as any);
 
-    await expect(
-      service.createOrder("other-user", {
-        eventId: "event-1",
-        idempotencyKey: "same-request-key",
-        items: [
-          { productId: "product-1", quantity: 2 },
-          {
-            productId: "product-2",
-            quantity: 1,
-            optionIds: ["variant-a", "extra-1"],
-          },
-        ],
-        payments: [
-          { amount: 700, method: "CASH" },
-          { amount: 100, method: "CARD" },
-        ],
+    const promise = service.createOrder("other-user", {
+      eventId: "event-1",
+      idempotencyKey: "same-request-key",
+      items: [
+        { productId: "product-1", quantity: 2 },
+        {
+          productId: "product-2",
+          quantity: 1,
+          optionIds: ["variant-a", "extra-1"],
+        },
+      ],
+      payments: [
+        { amount: 700, method: "CASH" },
+        { amount: 100, method: "CARD" },
+      ],
+    });
+    await expect(promise).rejects.toBeInstanceOf(BadRequestException);
+    await expect(promise).rejects.toMatchObject({
+      response: expect.objectContaining({
+        code: ORDER_REJECTION_CODES.DUPLICATE_KEY_MISMATCH,
       }),
-    ).rejects.toBeInstanceOf(BadRequestException);
+    });
     expect(prisma.order.create).not.toHaveBeenCalled();
   });
 

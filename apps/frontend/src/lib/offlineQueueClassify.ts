@@ -4,9 +4,12 @@
 // Leitregel: Ein fachliches 4xx wird nie automatisch wiederholt. Netzfehler,
 // 408, 425, 429 und 5xx werden wiederholt, höchstens sechsmal je Eintrag.
 // Die Zuordnung zu einem Zustand hängt ausschließlich von der Statusklasse
-// ab; Meldungstexte steuern nachrangig nur den Anzeigetext (`conflictKind`).
+// ab. Bei fachlichen 4xx steuert primaer der stabile Servercode den
+// Anzeigetext (`conflictKind`); Meldungstexte bleiben Fallback fuer alte
+// Serverfassungen.
 
 import type { ConflictKind, OfflineError } from "./offlineQueueTypes";
+import type { OrderRejectionCode } from "@vereinorder/shared";
 
 /** Höchstens so viele automatische Versuche, danach `FAILED` (Abschnitt 2). */
 export const MAX_AUTOMATIC_ATTEMPTS = 6;
@@ -17,6 +20,24 @@ const RETRY_JITTER_RATIO = 0.2;
 
 const MAX_OPERATOR_MESSAGE_LENGTH = 300;
 
+const SERVER_CODE_TO_CONFLICT_KIND: Record<OrderRejectionCode, ConflictKind> = {
+  AUTH_EXPIRED: "AUTH_EXPIRED",
+  FORBIDDEN: "FORBIDDEN",
+  EVENT_MODE: "EVENT_MODE",
+  SESSION_CLOSED: "SESSION_CLOSED",
+  PRODUCT_UNAVAILABLE: "PRODUCT_UNAVAILABLE",
+  PRICE_OR_OPTION: "PRICE_OR_OPTION",
+  DUPLICATE_KEY_MISMATCH: "DUPLICATE_KEY_MISMATCH",
+  VALIDATION: "VALIDATION",
+};
+
+function isOrderRejectionCode(value: unknown): value is OrderRejectionCode {
+  return (
+    typeof value === "string" &&
+    Object.prototype.hasOwnProperty.call(SERVER_CODE_TO_CONFLICT_KIND, value)
+  );
+}
+
 /** Form eines minimalen, axios-ähnlichen Fehlers — es wird nie mehr gelesen als das hier. */
 export interface HttpLikeError {
   code?: string;
@@ -24,7 +45,7 @@ export interface HttpLikeError {
   response?: {
     status?: number;
     headers?: Record<string, unknown> | unknown;
-    data?: { message?: unknown } | unknown;
+    data?: { code?: unknown; message?: unknown } | unknown;
   };
 }
 
@@ -103,28 +124,27 @@ function networkMessage(code: string | undefined): string {
 }
 
 /**
- * Ordnet eine 4xx-Antwort einer Konfliktursache zu (Abschnitt 3, Spalte
- * "Ursache"). Reihenfolge ist bewusst: spezifischere Muster stehen vor
- * allgemeineren (z. B. "anderen Betriebsmodus" vor dem allgemeinen
- * "Sitzung"-Muster, weil der tatsächliche Servertext beide Wörter enthält).
- * Trifft kein Muster, gilt `UNKNOWN_4XX` mit dem unveränderten Servertext.
+ * Ordnet eine 4xx-Antwort einer Konfliktursache zu. Der stabile Code aus
+ * Issue #93 gewinnt vor dem Meldungstext. 401/403 bleiben statusgebunden,
+ * damit ein widerspruechlicher Serverbody nie die erforderliche Anmeldung
+ * oder Berechtigung verdeckt. Fehlt eine bekannte Kennung, greift fuer alte
+ * Serverfassungen die bisherige Textzuordnung.
  */
 export function classifyConflictKind(
   httpStatus: number,
   rawMessage: string,
+  rawCode?: unknown,
 ): ConflictKind {
   if (httpStatus === 401) return "AUTH_EXPIRED";
   if (httpStatus === 403) return "FORBIDDEN";
+  if (isOrderRejectionCode(rawCode)) {
+    return SERVER_CODE_TO_CONFLICT_KIND[rawCode];
+  }
   if (httpStatus === 404 || httpStatus === 405) return "VALIDATION";
 
-  // Issue #89: die Backend-Texte sind deutsch. Diese Muster sind bewusst auf
-  // kurze, in orders.messages.ts (Backend) eindeutig vorkommende Fragmente
-  // zugeschnitten - nicht auf den vollen Satz -, damit eine spaetere
-  // Umformulierung der handlungsleitenden Zusatzsaetze nicht sofort das
-  // Muster bricht. Trotzdem bleiben Muster und Backend-Text zwei getrennte
-  // Stellen: offlineQueueClassify.test.ts importiert ORDER_REJECTION_MESSAGES
-  // direkt aus dem Backend und schlaegt fehl, wenn beide auseinanderlaufen
-  // (siehe Kommentar dort und in orders.messages.ts).
+  // Legacy-Fallback aus Issue #89: alte Server liefern noch keinen Code.
+  // Spezifische Muster stehen vor allgemeinen, damit etwa der andere
+  // Betriebsmodus nicht als bloss geschlossene Sitzung eingeordnet wird.
   const patterns: [RegExp, ConflictKind][] = [
     [/anderen Betriebsmodus/i, "EVENT_MODE"],
     [/Bestellungen sind erst möglich/i, "EVENT_MODE"],
@@ -258,7 +278,9 @@ function classifyError(error: unknown, now: number): SubmissionOutcome {
     };
   }
 
-  const rawData = httpError.response?.data as { message?: unknown } | undefined;
+  const rawData = httpError.response?.data as
+    | { code?: unknown; message?: unknown }
+    | undefined;
   const rawMessage =
     typeof rawData?.message === "string" ? rawData.message : null;
   const operatorMessage = sanitizeOperatorMessage(rawMessage, status);
@@ -283,7 +305,11 @@ function classifyError(error: unknown, now: number): SubmissionOutcome {
     };
   }
 
-  const conflictKind = classifyConflictKind(status, rawMessage ?? "");
+  const conflictKind = classifyConflictKind(
+    status,
+    rawMessage ?? "",
+    rawData?.code,
+  );
   return {
     nextState: "CONFLICT",
     conflictKind,

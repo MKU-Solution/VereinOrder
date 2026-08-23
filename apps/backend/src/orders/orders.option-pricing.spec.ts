@@ -1,4 +1,5 @@
 import { BadRequestException } from "@nestjs/common";
+import { ORDER_REJECTION_CODES } from "@vereinorder/shared";
 import { OrdersService } from "./orders.service";
 import { createAuditServiceStub } from "./test-support/audit-service.stub";
 
@@ -220,6 +221,63 @@ describe("OrdersService – resolveOrderItemPricing (Issue #75)", () => {
   });
 
   describe("Validierungsfehler", () => {
+    it.each([
+      ["Pflichtauswahl", schnitzel, []],
+      [
+        "Höchstauswahl",
+        schnitzel,
+        [
+          "option-pommes",
+          "option-ohne-salat",
+          "option-extra-sosse",
+          "option-extra-kaese",
+        ],
+      ],
+      ["fremde Antwort", schnitzel, ["option-pommes", "option-gross"]],
+      ["unbekannte Antwort", schnitzel, ["option-pommes", "does-not-exist"]],
+      ["inaktive Antwort", schnitzel, ["option-inaktiv"]],
+      [
+        "negativer Endpreis",
+        {
+          id: "product-negative",
+          name: "Negativpreis",
+          price: 0,
+          optionGroups: [
+            {
+              id: "group-discount",
+              name: "Abschlag",
+              minSelect: 0,
+              maxSelect: 1,
+              priceMode: "SURCHARGE" as const,
+              options: [
+                {
+                  id: "option-discount",
+                  name: "Abschlag",
+                  priceEffect: -1,
+                  isActive: true,
+                },
+              ],
+            },
+          ],
+        },
+        ["option-discount"],
+      ],
+    ] as const)(
+      "kennzeichnet %s stabil als PRICE_OR_OPTION",
+      (_label, product, optionIds) => {
+        try {
+          resolve(product, [...optionIds]);
+          throw new Error("Ablehnung erwartet");
+        } catch (error) {
+          expect(error).toBeInstanceOf(BadRequestException);
+          expect((error as BadRequestException).getResponse()).toMatchObject({
+            code: ORDER_REJECTION_CODES.PRICE_OR_OPTION,
+            message: expect.any(String),
+          });
+        }
+      },
+    );
+
     it("wirft einen Fehler bei einer unbeantworteten Pflichtgruppe", () => {
       expect(() => resolve(schnitzel, [])).toThrow(BadRequestException);
       expect(() => resolve(schnitzel, [])).toThrow(/Beilage/);

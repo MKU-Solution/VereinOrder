@@ -8,6 +8,7 @@ import {
   Param,
   Query,
   UseGuards,
+  UseFilters,
   Request,
 } from "@nestjs/common";
 import { OrdersService } from "./orders.service";
@@ -24,6 +25,7 @@ import {
   DiscardOfflineQueueDto,
   UpdatePriorityDto,
 } from "./dto/orders.dto";
+import { OrderSubmissionExceptionFilter } from "./order-submission-exception.filter";
 
 interface AuthenticatedRequest {
   user?: { userId?: string; role?: string };
@@ -81,6 +83,7 @@ export class OrdersController {
 
   @Post()
   @Roles("ADMINISTRATOR", "WAITER", "CASHIER")
+  @UseFilters(OrderSubmissionExceptionFilter)
   async createOrder(
     @Request() req: AuthenticatedRequest,
     @Body() body: CreateOrderDto,

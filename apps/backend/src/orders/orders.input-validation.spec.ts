@@ -1,4 +1,5 @@
 import { BadRequestException } from "@nestjs/common";
+import { ORDER_REJECTION_CODES } from "@vereinorder/shared";
 import { OrdersService } from "./orders.service";
 import { createAuditServiceStub } from "./test-support/audit-service.stub";
 
@@ -10,13 +11,17 @@ describe("OrdersService – Eingabegrenzen und Atomizität", () => {
       createAuditServiceStub() as any,
     );
 
-    await expect(
-      service.createOrder("waiter-1", {
-        eventId: "event-1",
-        items: [{ productId: "product-1", quantity: 1 }],
-        payments: [{ amount: -1, method: "CASH" }],
+    const promise = service.createOrder("waiter-1", {
+      eventId: "event-1",
+      items: [{ productId: "product-1", quantity: 1 }],
+      payments: [{ amount: -1, method: "CASH" }],
+    });
+    await expect(promise).rejects.toBeInstanceOf(BadRequestException);
+    await expect(promise).rejects.toMatchObject({
+      response: expect.objectContaining({
+        code: ORDER_REJECTION_CODES.VALIDATION,
       }),
-    ).rejects.toBeInstanceOf(BadRequestException);
+    });
     expect(prisma.$transaction).not.toHaveBeenCalled();
     expect(prisma.order.create).not.toHaveBeenCalled();
   });
@@ -87,12 +92,16 @@ describe("OrdersService – Eingabegrenzen und Atomizität", () => {
     };
     const service = new OrdersService(prisma, createAuditServiceStub() as any);
 
-    await expect(
-      service.createOrder("waiter-1", {
-        eventId: "event-1",
-        items: [{ productId: "foreign-product", quantity: 1 }],
+    const promise = service.createOrder("waiter-1", {
+      eventId: "event-1",
+      items: [{ productId: "foreign-product", quantity: 1 }],
+    });
+    await expect(promise).rejects.toBeInstanceOf(BadRequestException);
+    await expect(promise).rejects.toMatchObject({
+      response: expect.objectContaining({
+        code: ORDER_REJECTION_CODES.PRODUCT_UNAVAILABLE,
       }),
-    ).rejects.toBeInstanceOf(BadRequestException);
+    });
     expect(prisma.$transaction).toHaveBeenCalledTimes(1);
     expect(prisma.order.create).not.toHaveBeenCalled();
   });
@@ -119,13 +128,17 @@ describe("OrdersService – Eingabegrenzen und Atomizität", () => {
     };
     const service = new OrdersService(prisma, createAuditServiceStub() as any);
 
-    await expect(
-      service.createOrder("waiter-1", {
-        eventId: "event-1",
-        areaId: "foreign-area",
-        items: [{ productId: product.id, quantity: 1 }],
+    const promise = service.createOrder("waiter-1", {
+      eventId: "event-1",
+      areaId: "foreign-area",
+      items: [{ productId: product.id, quantity: 1 }],
+    });
+    await expect(promise).rejects.toBeInstanceOf(BadRequestException);
+    await expect(promise).rejects.toMatchObject({
+      response: expect.objectContaining({
+        code: ORDER_REJECTION_CODES.VALIDATION,
       }),
-    ).rejects.toBeInstanceOf(BadRequestException);
+    });
     expect(prisma.order.create).not.toHaveBeenCalled();
   });
 });

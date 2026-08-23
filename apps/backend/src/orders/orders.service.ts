@@ -12,13 +12,17 @@ import { randomBytes } from "crypto";
 import { resolveTargetStationId } from "../common/target-station";
 import { drawPickupNumber } from "../common/pickup-number";
 import { AuditService } from "../audit/audit.service";
-import { ORDER_REJECTION_MESSAGES } from "@vereinorder/shared";
+import {
+  ORDER_REJECTION_CODES,
+  ORDER_REJECTION_MESSAGES,
+} from "@vereinorder/shared";
 import {
   CreateOrderDto,
   DiscardOfflineQueueDto,
   PaymentInputDto,
   QuickSaleServiceDto,
 } from "./dto/orders.dto";
+import { orderRejection } from "./order-rejection";
 
 // Snapshot einer aufgeloesten Bestellposition. variantId/variantName/extras
 // entsprechen exakt den gleichnamigen OrderItem-Spalten (unveraendert seit
@@ -105,7 +109,10 @@ export class OrdersService {
   ): number {
     if (!Array.isArray(items) || items.length === 0 || items.length > 50) {
       throw new BadRequestException(
-        "Eine Bestellung braucht mindestens eine und höchstens 50 Positionen.",
+        orderRejection(
+          ORDER_REJECTION_CODES.VALIDATION,
+          "Eine Bestellung braucht mindestens eine und höchstens 50 Positionen.",
+        ),
       );
     }
 
@@ -122,7 +129,10 @@ export class OrdersService {
             item.optionIds.some((optionId) => typeof optionId !== "string")))
       ) {
         throw new BadRequestException(
-          "Jede Position braucht ein Produkt und eine Menge zwischen 1 und 100.",
+          orderRejection(
+            ORDER_REJECTION_CODES.VALIDATION,
+            "Jede Position braucht ein Produkt und eine Menge zwischen 1 und 100.",
+          ),
         );
       }
       return sum + item.quantity;
@@ -130,7 +140,10 @@ export class OrdersService {
 
     if (totalQuantity > 100) {
       throw new BadRequestException(
-        "Eine Bestellung darf insgesamt höchstens 100 Einheiten enthalten.",
+        orderRejection(
+          ORDER_REJECTION_CODES.VALIDATION,
+          "Eine Bestellung darf insgesamt höchstens 100 Einheiten enthalten.",
+        ),
       );
     }
     return totalQuantity;
@@ -139,7 +152,12 @@ export class OrdersService {
   /** Validiert Centbeträge und ihre Summe, bevor irgendeine Zahlung entsteht. */
   private validatePayments(payments: PaymentInputDto[]): number {
     if (!Array.isArray(payments) || payments.length > 50) {
-      throw new BadRequestException("Ungültige Anzahl an Zahlungen.");
+      throw new BadRequestException(
+        orderRejection(
+          ORDER_REJECTION_CODES.VALIDATION,
+          "Ungültige Anzahl an Zahlungen.",
+        ),
+      );
     }
 
     let total = 0;
@@ -152,13 +170,19 @@ export class OrdersService {
         !["CASH", "CARD", "VOUCHER"].includes(payment.method)
       ) {
         throw new BadRequestException(
-          "Zahlungen müssen positive ganzzahlige Centbeträge mit gültiger Zahlungsart sein.",
+          orderRejection(
+            ORDER_REJECTION_CODES.VALIDATION,
+            "Zahlungen müssen positive ganzzahlige Centbeträge mit gültiger Zahlungsart sein.",
+          ),
         );
       }
       total += payment.amount;
       if (!Number.isSafeInteger(total) || total > 2_147_483_647) {
         throw new BadRequestException(
-          "Die Summe der Zahlungen überschreitet den zulässigen Centbetrag.",
+          orderRejection(
+            ORDER_REJECTION_CODES.VALIDATION,
+            "Die Summe der Zahlungen überschreitet den zulässigen Centbetrag.",
+          ),
         );
       }
     }
@@ -377,7 +401,10 @@ export class OrdersService {
       // zur Zusage, deshalb wird abgewiesen statt still repariert.
       if (seenOptionIds.has(optionId)) {
         throw new BadRequestException(
-          `Die Antwort ${optionId} wurde für ${product.name} mehrfach angegeben.`,
+          orderRejection(
+            ORDER_REJECTION_CODES.PRICE_OR_OPTION,
+            `Die Antwort ${optionId} wurde für ${product.name} mehrfach angegeben.`,
+          ),
         );
       }
       seenOptionIds.add(optionId);
@@ -385,7 +412,10 @@ export class OrdersService {
       const found = optionsById.get(optionId);
       if (!found || !found.option.isActive) {
         throw new BadRequestException(
-          `Die Antwort ${optionId} gehört zu keiner aktiven Auswahlgruppe von ${product.name}.`,
+          orderRejection(
+            ORDER_REJECTION_CODES.PRICE_OR_OPTION,
+            `Die Antwort ${optionId} gehört zu keiner aktiven Auswahlgruppe von ${product.name}.`,
+          ),
         );
       }
       const entry = selectedByGroup.get(found.group.id) ?? {
@@ -400,12 +430,18 @@ export class OrdersService {
       const selectedCount = selectedByGroup.get(group.id)?.options.length ?? 0;
       if (selectedCount < group.minSelect) {
         throw new BadRequestException(
-          `Die Auswahlgruppe „${group.name}" von ${product.name} braucht mindestens ${group.minSelect} Antwort(en).`,
+          orderRejection(
+            ORDER_REJECTION_CODES.PRICE_OR_OPTION,
+            `Die Auswahlgruppe „${group.name}" von ${product.name} braucht mindestens ${group.minSelect} Antwort(en).`,
+          ),
         );
       }
       if (group.maxSelect !== null && selectedCount > group.maxSelect) {
         throw new BadRequestException(
-          `Die Auswahlgruppe „${group.name}" von ${product.name} erlaubt höchstens ${group.maxSelect} Antwort(en).`,
+          orderRejection(
+            ORDER_REJECTION_CODES.PRICE_OR_OPTION,
+            `Die Auswahlgruppe „${group.name}" von ${product.name} erlaubt höchstens ${group.maxSelect} Antwort(en).`,
+          ),
         );
       }
     }
@@ -438,7 +474,10 @@ export class OrdersService {
     const priceAtTime = basePrice + surcharge;
     if (!Number.isInteger(priceAtTime) || priceAtTime < 0) {
       throw new BadRequestException(
-        `Der Endpreis für ${product.name} darf nicht negativ sein.`,
+        orderRejection(
+          ORDER_REJECTION_CODES.PRICE_OR_OPTION,
+          `Der Endpreis für ${product.name} darf nicht negativ sein.`,
+        ),
       );
     }
 
@@ -537,7 +576,10 @@ export class OrdersService {
       (Boolean(dto.stationId) && (existingOrder.pickupNumber ?? null) === null)
     ) {
       throw new BadRequestException(
-        ORDER_REJECTION_MESSAGES.IDEMPOTENCY_KEY_CONFLICT,
+        orderRejection(
+          ORDER_REJECTION_CODES.DUPLICATE_KEY_MISMATCH,
+          ORDER_REJECTION_MESSAGES.IDEMPOTENCY_KEY_CONFLICT,
+        ),
       );
     }
     return {
@@ -1177,7 +1219,10 @@ export class OrdersService {
       !samePayments
     ) {
       throw new BadRequestException(
-        ORDER_REJECTION_MESSAGES.IDEMPOTENCY_KEY_CONFLICT,
+        orderRejection(
+          ORDER_REJECTION_CODES.DUPLICATE_KEY_MISMATCH,
+          ORDER_REJECTION_MESSAGES.IDEMPOTENCY_KEY_CONFLICT,
+        ),
       );
     }
     return existingOrder;
@@ -1207,7 +1252,10 @@ export class OrdersService {
               : null;
         if (!orderDataMode)
           throw new BadRequestException(
-            ORDER_REJECTION_MESSAGES.EVENT_NOT_ACTIVE_FOR_ORDERS,
+            orderRejection(
+              ORDER_REJECTION_CODES.EVENT_MODE,
+              ORDER_REJECTION_MESSAGES.EVENT_NOT_ACTIVE_FOR_ORDERS,
+            ),
           );
 
         // Alle eventgebundenen Referenzen werden in derselben Transaktion
@@ -1227,7 +1275,10 @@ export class OrdersService {
         if (productMap.size !== productIds.length) {
           const missingProductId = productIds.find((id) => !productMap.has(id));
           throw new BadRequestException(
-            ORDER_REJECTION_MESSAGES.PRODUCT_NOT_IN_EVENT(missingProductId),
+            orderRejection(
+              ORDER_REJECTION_CODES.PRODUCT_UNAVAILABLE,
+              ORDER_REJECTION_MESSAGES.PRODUCT_NOT_IN_EVENT(missingProductId),
+            ),
           );
         }
 
@@ -1238,7 +1289,10 @@ export class OrdersService {
           });
           if (!area) {
             throw new BadRequestException(
-              ORDER_REJECTION_MESSAGES.AREA_NOT_IN_EVENT,
+              orderRejection(
+                ORDER_REJECTION_CODES.VALIDATION,
+                ORDER_REJECTION_MESSAGES.AREA_NOT_IN_EVENT,
+              ),
             );
           }
         }
@@ -1250,7 +1304,10 @@ export class OrdersService {
           : null;
         if (activeSession && activeSession.dataMode !== orderDataMode)
           throw new ConflictException(
-            "Die aktive Kassensitzung gehört zu einem anderen Betriebsmodus.",
+            orderRejection(
+              ORDER_REJECTION_CODES.EVENT_MODE,
+              "Die aktive Kassensitzung gehört zu einem anderen Betriebsmodus.",
+            ),
           );
         // Issue #65, Abschnitt 8 Punkt 5 (Befund B7): ist eine erfasste
         // Kassensitzung angegeben, muss sie der heute aktiven Sitzung
@@ -1262,7 +1319,10 @@ export class OrdersService {
           dto.cashierSessionId !== activeSession?.id
         ) {
           throw new ConflictException(
-            "Die erfasste Kassensitzung ist nicht mehr aktiv.",
+            orderRejection(
+              ORDER_REJECTION_CODES.SESSION_CLOSED,
+              "Die erfasste Kassensitzung ist nicht mehr aktiv.",
+            ),
           );
         }
         const cashierSessionId = activeSession?.id || null;
@@ -1271,7 +1331,10 @@ export class OrdersService {
           : null;
         if (!user?.isActive) {
           throw new BadRequestException(
-            ORDER_REJECTION_MESSAGES.USER_NOT_ACTIVE,
+            orderRejection(
+              ORDER_REJECTION_CODES.FORBIDDEN,
+              ORDER_REJECTION_MESSAGES.USER_NOT_ACTIVE,
+            ),
           );
         }
 
@@ -1283,7 +1346,10 @@ export class OrdersService {
             product.availability === "DISABLED"
           ) {
             throw new BadRequestException(
-              ORDER_REJECTION_MESSAGES.PRODUCT_OUT_OF_STOCK(product.name),
+              orderRejection(
+                ORDER_REJECTION_CODES.PRODUCT_UNAVAILABLE,
+                ORDER_REJECTION_MESSAGES.PRODUCT_OUT_OF_STOCK(product.name),
+              ),
             );
           }
 
@@ -1295,7 +1361,10 @@ export class OrdersService {
             totalAmount > 2_147_483_647
           ) {
             throw new BadRequestException(
-              "Der Gesamtbetrag der Bestellung überschreitet den zulässigen Centbetrag.",
+              orderRejection(
+                ORDER_REJECTION_CODES.VALIDATION,
+                "Der Gesamtbetrag der Bestellung überschreitet den zulässigen Centbetrag.",
+              ),
             );
           }
 

@@ -1,5 +1,6 @@
 import { BadRequestException } from "@nestjs/common";
 import { Prisma } from "@vereinorder/database";
+import { ORDER_REJECTION_CODES } from "@vereinorder/shared";
 import { OrdersService } from "./orders.service";
 import { createAuditServiceStub } from "./test-support/audit-service.stub";
 
@@ -167,12 +168,16 @@ describe("OrdersService – P2002 auf idempotencyKey als Wiederholung für Issue
     const prisma = createPrisma({ findUniqueSequence: [null, foreignOrder] });
     const service = new OrdersService(prisma, createAuditServiceStub() as any);
 
-    await expect(
-      service.createOrder("waiter-1", {
-        eventId: "event-1",
-        idempotencyKey: "race-key",
-        items: [{ productId: "product-1", quantity: 2 }],
+    const promise = service.createOrder("waiter-1", {
+      eventId: "event-1",
+      idempotencyKey: "race-key",
+      items: [{ productId: "product-1", quantity: 2 }],
+    });
+    await expect(promise).rejects.toBeInstanceOf(BadRequestException);
+    await expect(promise).rejects.toMatchObject({
+      response: expect.objectContaining({
+        code: ORDER_REJECTION_CODES.DUPLICATE_KEY_MISMATCH,
       }),
-    ).rejects.toBeInstanceOf(BadRequestException);
+    });
   });
 });
