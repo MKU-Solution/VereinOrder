@@ -122,6 +122,10 @@ model Station {
   redeemedVouchers ProductVoucher[]  @relation("VoucherRedemptionStation")
   // An dieser Station kassierte Verkaeufe (Stationskasse, Issue #66).
   stationSales     Order[]
+
+  // Ermoeglicht zusammengesetzte Fremdschluessel, die die Veranstaltung
+  // gemeinsam mit einer Stationsreferenz absichern (Issue #96).
+  @@unique([id, eventId])
 }
 
 // Die Warengruppe traegt die Zielstation ihrer Produkte (Issue #84). Speisen
@@ -137,12 +141,16 @@ model ProductCategory {
   // Vorgabe-Zielstation der Warengruppe. Gilt fuer jedes Produkt der Gruppe,
   // das keine eigene Ausnahme traegt. NULL bedeutet zentrale Ausgabe.
   targetStationId String?
-  targetStation   Station? @relation(fields: [targetStationId], references: [id], onDelete: SetNull)
+  targetStation   Station? @relation(fields: [targetStationId, eventId], references: [id, eventId], onDelete: SetNull, onUpdate: NoAction)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   products Product[]
+
+  // Ermoeglicht, dass Produkte ihre Kategorie nur innerhalb derselben
+  // Veranstaltung referenzieren (Issue #96).
+  @@unique([id, eventId])
 }
 
 enum ProductAvailability {
@@ -171,13 +179,13 @@ model Product {
   // SetNull, weil eine Pflichtspalte nicht auf NULL gesetzt werden kann. Eine
   // Kategorie mit Produkten laesst sich damit erst nach dem Umhaengen loeschen.
   categoryId String
-  category   ProductCategory @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  category   ProductCategory @relation(fields: [categoryId, eventId], references: [id, eventId], onDelete: Restrict, onUpdate: NoAction)
 
   // Ausnahme von der Zielstation der Kategorie, nicht die Regel. NULL ist der
   // Normalfall und bedeutet: es gilt die Station der Kategorie. Ein Eintrag
   // hier weicht bewusst davon ab und ueberstimmt die Kategorie.
   targetStationId String?
-  targetStation   Station? @relation(fields: [targetStationId], references: [id], onDelete: SetNull)
+  targetStation   Station? @relation(fields: [targetStationId, eventId], references: [id, eventId], onDelete: SetNull, onUpdate: NoAction)
 
   eventId String
   event   Event  @relation(fields: [eventId], references: [id], onDelete: Cascade)

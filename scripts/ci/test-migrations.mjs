@@ -7,6 +7,7 @@ const CONFIRMATION = "VEREINORDER_TEST_ONLY";
 const EMPTY_DATABASE = "vereinorder_ci_test_empty";
 const UPGRADE_DATABASE = "vereinorder_ci_test_upgrade";
 const DUPLICATE_DATABASE = "vereinorder_ci_test_duplicate";
+const INVALID_EVENT_DATABASE = "vereinorder_ci_test_invalid_event_refs";
 const repoRoot = resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const migrationsDir = resolve(repoRoot, "packages/database/prisma/migrations");
 const pnpmEntryPoint = process.env.npm_execpath;
@@ -121,6 +122,18 @@ const ORDER_NUMBER_SEED = {
   orderNumber: 900000,
 };
 
+// Gueltiger Altstand unmittelbar vor Issue #96. Alle drei abgesicherten
+// Referenzen werden belegt, damit das Upgrade nicht nur auf einer leeren
+// Datenbank durchlaeuft.
+const EVENT_INTEGRITY_SEED = {
+  eventId: "e0000000-0000-4000-8000-000000000001",
+  otherEventId: "e0000000-0000-4000-8000-000000000002",
+  stationId: "e0000000-0000-4000-8000-000000000010",
+  otherStationId: "e0000000-0000-4000-8000-000000000011",
+  categoryId: "e0000000-0000-4000-8000-000000000020",
+  productId: "e0000000-0000-4000-8000-000000000030",
+};
+
 function fail(message) {
   throw new Error(message);
 }
@@ -222,6 +235,7 @@ function psqlExpectFailure(target, database, sql, expectedMessage) {
       `Die Migration scheiterte ohne die erwartete verständliche Meldung: ${expectedMessage}`,
     );
   }
+  return output;
 }
 
 function databaseUrl(target, database) {
@@ -250,7 +264,12 @@ function prisma(args, targetUrl) {
 
 function recreateDatabase(target, database) {
   if (
-    ![EMPTY_DATABASE, UPGRADE_DATABASE, DUPLICATE_DATABASE].includes(database)
+    ![
+      EMPTY_DATABASE,
+      UPGRADE_DATABASE,
+      DUPLICATE_DATABASE,
+      INVALID_EVENT_DATABASE,
+    ].includes(database)
   ) {
     fail(`Unerlaubtes destruktives Datenbankziel: ${database}`);
   }
@@ -932,6 +951,124 @@ END $$;
 `;
 }
 
+function seedLegacyEventIntegritySql(ids) {
+  return `
+INSERT INTO "Event" (id, name, "createdAt", "updatedAt") VALUES
+  ('${ids.eventId}', 'Migration Eventintegritaet', now(), now()),
+  ('${ids.otherEventId}', 'Andere Migration Eventintegritaet', now(), now());
+
+INSERT INTO "Station" (id, name, "sortOrder", "eventId", "createdAt", "updatedAt") VALUES
+  ('${ids.stationId}', 'Ausgabe Hauptveranstaltung', 0, '${ids.eventId}', now(), now()),
+  ('${ids.otherStationId}', 'Ausgabe andere Veranstaltung', 0, '${ids.otherEventId}', now(), now());
+
+INSERT INTO "ProductCategory" (
+  id, name, "eventId", "targetStationId", "createdAt", "updatedAt"
+) VALUES (
+  '${ids.categoryId}', 'Migration Kategorie', '${ids.eventId}', '${ids.stationId}', now(), now()
+);
+
+INSERT INTO "Product" (
+  id, name, price, "categoryId", "targetStationId", "eventId", "createdAt", "updatedAt"
+) VALUES (
+  '${ids.productId}', 'Migration Produkt', 100, '${ids.categoryId}', '${ids.stationId}', '${ids.eventId}', now(), now()
+);
+`;
+}
+
+function verifyEventIntegrityMigrationSql(ids) {
+  return `
+-- Der gueltige Altbestand bleibt unveraendert referenzierbar.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM "Product" p
+    JOIN "ProductCategory" c ON c.id = p."categoryId"
+    JOIN "Station" product_station ON product_station.id = p."targetStationId"
+    JOIN "Station" category_station ON category_station.id = c."targetStationId"
+    WHERE p.id = '${ids.productId}'
+      AND p."eventId" = '${ids.eventId}'
+      AND c."eventId" = '${ids.eventId}'
+      AND product_station."eventId" = '${ids.eventId}'
+      AND category_station."eventId" = '${ids.eventId}'
+  ) THEN
+    RAISE EXCEPTION 'Der gueltige Altbestand fuer die Eventintegritaet wurde nicht unveraendert erhalten.';
+  END IF;
+END $$;
+
+-- Jede der drei Beziehungen wird unmittelbar von der Datenbank abgewiesen,
+-- auch wenn ein Direktzugriff den Anwendungscode umgeht.
+DO $$
+DECLARE
+  category_rejected boolean := false;
+  category_station_rejected boolean := false;
+  product_station_rejected boolean := false;
+  station_reparent_rejected boolean := false;
+BEGIN
+  BEGIN
+    UPDATE "Station"
+    SET "eventId" = '${ids.otherEventId}'
+    WHERE id = '${ids.stationId}';
+  EXCEPTION WHEN foreign_key_violation THEN
+    station_reparent_rejected := true;
+  END;
+
+  BEGIN
+    UPDATE "Product"
+    SET "eventId" = '${ids.otherEventId}'
+    WHERE id = '${ids.productId}';
+  EXCEPTION WHEN foreign_key_violation THEN
+    category_rejected := true;
+  END;
+
+  BEGIN
+    UPDATE "ProductCategory"
+    SET "targetStationId" = '${ids.otherStationId}'
+    WHERE id = '${ids.categoryId}';
+  EXCEPTION WHEN foreign_key_violation THEN
+    category_station_rejected := true;
+  END;
+
+  BEGIN
+    UPDATE "Product"
+    SET "targetStationId" = '${ids.otherStationId}'
+    WHERE id = '${ids.productId}';
+  EXCEPTION WHEN foreign_key_violation THEN
+    product_station_rejected := true;
+  END;
+
+  IF NOT category_rejected THEN
+    RAISE EXCEPTION 'Ein Produkt konnte seine Kategorie ueber eine andere Veranstaltung hinweg referenzieren.';
+  END IF;
+  IF NOT category_station_rejected THEN
+    RAISE EXCEPTION 'Eine Kategorie konnte ihre Zielstation ueber eine andere Veranstaltung hinweg referenzieren.';
+  END IF;
+  IF NOT product_station_rejected THEN
+    RAISE EXCEPTION 'Ein Produkt konnte seine Zielstation ueber eine andere Veranstaltung hinweg referenzieren.';
+  END IF;
+  IF NOT station_reparent_rejected THEN
+    RAISE EXCEPTION 'Eine Stationsaenderung hat referenzierende Daten still in eine andere Veranstaltung verschoben.';
+  END IF;
+END $$;
+
+-- Das bisherige Verhalten beim Loeschen einer Station bleibt: nur die
+-- optionale Zielstation wird geloescht, die Veranstaltung bleibt erhalten.
+DO $$
+BEGIN
+  DELETE FROM "Station" WHERE id = '${ids.stationId}';
+
+  IF (SELECT "targetStationId" FROM "ProductCategory" WHERE id = '${ids.categoryId}') IS NOT NULL
+     OR (SELECT "targetStationId" FROM "Product" WHERE id = '${ids.productId}') IS NOT NULL THEN
+    RAISE EXCEPTION 'Das Loeschen einer Station hat die optionalen Zielstationen nicht auf NULL gesetzt.';
+  END IF;
+  IF (SELECT "eventId" FROM "ProductCategory" WHERE id = '${ids.categoryId}') IS DISTINCT FROM '${ids.eventId}'
+     OR (SELECT "eventId" FROM "Product" WHERE id = '${ids.productId}') IS DISTINCT FROM '${ids.eventId}' THEN
+    RAISE EXCEPTION 'Das Loeschen einer Station hat die Eventzugehoerigkeit veraendert.';
+  END IF;
+END $$;
+`;
+}
+
 function dropDatabase(target, database) {
   const literal = database.replaceAll("'", "''");
   psql(
@@ -989,6 +1126,13 @@ const DATA_MIGRATION_CHECKS = [
     verifyLabel: "Eindeutigkeit und Sequenz der Bestellnummer prüfen",
     verify: () => verifyOrderNumberMigrationSql(ORDER_NUMBER_SEED),
   },
+  {
+    migration: "20260823120000_enforce_event_referential_integrity",
+    seedLabel: "gueltigen Altstand fuer Eventintegritaet einspielen",
+    seed: () => seedLegacyEventIntegritySql(EVENT_INTEGRITY_SEED),
+    verifyLabel: "Eventintegritaet und Stationsloeschung pruefen",
+    verify: () => verifyEventIntegrityMigrationSql(EVENT_INTEGRITY_SEED),
+  },
 ];
 
 for (const check of DATA_MIGRATION_CHECKS) {
@@ -1007,6 +1151,14 @@ const orderNumberMigration = "20260823110000_enforce_unique_order_number";
 const orderNumberMigrationIndex = migrationNames.indexOf(orderNumberMigration);
 if (orderNumberMigrationIndex < 0) {
   fail(`Migration ${orderNumberMigration} fehlt.`);
+}
+const eventIntegrityMigration =
+  "20260823120000_enforce_event_referential_integrity";
+const eventIntegrityMigrationIndex = migrationNames.indexOf(
+  eventIntegrityMigration,
+);
+if (eventIntegrityMigrationIndex < 0) {
+  fail(`Migration ${eventIntegrityMigration} fehlt.`);
 }
 
 try {
@@ -1100,10 +1252,80 @@ try {
   );
 
   console.log(
-    "Migrationstest erfolgreich: leerer Stand, Upgrade-Stand und verständlicher Duplikatabbruch sind geprüft.",
+    `Migrationstest auf ${target.hostname}: veranstaltungsfremde Bestandsreferenzen`,
+  );
+  recreateDatabase(target, INVALID_EVENT_DATABASE);
+  for (const migrationName of migrationNames.slice(
+    0,
+    eventIntegrityMigrationIndex,
+  )) {
+    const sql = readFileSync(
+      resolve(migrationsDir, migrationName, "migration.sql"),
+      "utf8",
+    );
+    psql(target, INVALID_EVENT_DATABASE, sql);
+  }
+  psql(
+    target,
+    INVALID_EVENT_DATABASE,
+    seedLegacyEventIntegritySql(EVENT_INTEGRITY_SEED),
+  );
+  psql(
+    target,
+    INVALID_EVENT_DATABASE,
+    `UPDATE "Product"
+       SET "eventId" = '${EVENT_INTEGRITY_SEED.otherEventId}'
+       WHERE id = '${EVENT_INTEGRITY_SEED.productId}';
+     UPDATE "ProductCategory"
+       SET "targetStationId" = '${EVENT_INTEGRITY_SEED.otherStationId}'
+       WHERE id = '${EVENT_INTEGRITY_SEED.categoryId}';`,
+  );
+  const invalidEventOutput = psqlExpectFailure(
+    target,
+    INVALID_EVENT_DATABASE,
+    readFileSync(
+      resolve(migrationsDir, eventIntegrityMigration, "migration.sql"),
+      "utf8",
+    ),
+    "Gleiche Eventzugehoerigkeit fuer Produkte, Kategorien und Zielstationen kann nicht aktiviert werden",
+  );
+  for (const expectedDetail of [
+    "Product->ProductCategory",
+    "ProductCategory->Station",
+    "Product->Station",
+    EVENT_INTEGRITY_SEED.productId,
+    EVENT_INTEGRITY_SEED.categoryId,
+  ]) {
+    if (!invalidEventOutput.includes(expectedDetail)) {
+      fail(
+        `Der verständliche Migrationsabbruch nennt das erwartete Detail nicht: ${expectedDetail}`,
+      );
+    }
+  }
+  psql(
+    target,
+    INVALID_EVENT_DATABASE,
+    `DO $$
+     BEGIN
+       IF to_regclass('"Station_id_eventId_key"') IS NOT NULL
+          OR to_regclass('"ProductCategory_id_eventId_key"') IS NOT NULL THEN
+         RAISE EXCEPTION 'Nach dem erwarteten Migrationsabbruch blieb ein Teilindex zurück.';
+       END IF;
+       IF (SELECT "eventId" FROM "Product" WHERE id = '${EVENT_INTEGRITY_SEED.productId}')
+            IS DISTINCT FROM '${EVENT_INTEGRITY_SEED.otherEventId}'
+          OR (SELECT "targetStationId" FROM "ProductCategory" WHERE id = '${EVENT_INTEGRITY_SEED.categoryId}')
+            IS DISTINCT FROM '${EVENT_INTEGRITY_SEED.otherStationId}' THEN
+         RAISE EXCEPTION 'Der Migrationsabbruch hat den absichtlich ungültigen Altbestand verändert.';
+       END IF;
+     END $$;`,
+  );
+
+  console.log(
+    "Migrationstest erfolgreich: leerer Stand, Upgrade-Stand und verständliche Abbrüche bei Duplikaten sowie veranstaltungsfremden Referenzen sind geprüft.",
   );
 } finally {
   dropDatabase(target, EMPTY_DATABASE);
   dropDatabase(target, UPGRADE_DATABASE);
   dropDatabase(target, DUPLICATE_DATABASE);
+  dropDatabase(target, INVALID_EVENT_DATABASE);
 }
