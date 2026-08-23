@@ -46,7 +46,16 @@ describe("BackupService.restoreBackup – Wiederherstellung gegen echtes Postgre
       path.join(os.tmpdir(), "vereinorder-restore-integration-"),
     );
     process.env.BACKUP_DIR = backupDir;
-    backupService = new BackupService(prisma as any);
+    // Issue #67: BackupService braucht seither MaintenanceStateService, um
+    // den stuendlichen Lauf bei LOCKED auszusetzen. Dieser Test prueft
+    // ausschliesslich restoreBackup/createBackup direkt, nie onModuleInit -
+    // eine simple OPEN-Attrappe reicht.
+    backupService = new BackupService(
+      prisma as any,
+      {
+        read: () => ({ phase: "OPEN" }),
+      } as any,
+    );
   });
 
   afterAll(async () => {

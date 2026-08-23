@@ -25,7 +25,12 @@ describe("PrintJobs – Datenbank-Invarianten gegen echtes PostgreSQL (Issue #64
 
   const audit = new AuditService(prisma);
   const service = new PrintJobsService(prisma, audit);
-  const reaper = new PrintJobsReaperService(prisma, audit);
+  // Issue #67: der Reaper braucht seither MaintenanceStateService, um bei
+  // LOCKED auszusetzen. Diese Tests prüfen die Übergänge 8/9 unabhängig vom
+  // Wartungsmodus - eine simple OPEN-Attrappe reicht.
+  const reaper = new PrintJobsReaperService(prisma, audit, {
+    read: () => ({ phase: "OPEN" }),
+  } as any);
 
   const printerIds: string[] = [];
   const jobIds: string[] = [];

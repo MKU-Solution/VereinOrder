@@ -11,8 +11,14 @@ import { BackupService } from "./backup.service";
 import { JwtAuthGuard } from "../auth/jwt-auth.guard";
 import { RolesGuard } from "../common/guards/roles.guard";
 import { Roles } from "../common/decorators/roles.decorator";
+import { MaintenancePublic } from "../maintenance/maintenance.decorator";
 import * as fs from "fs";
 
+// Issue #67: "alles unter /backup" bleibt laut Entwurf Abschnitt 6 auch bei
+// LOCKED erreichbar, weiterhin nur fuer ADMINISTRATOR (JwtAuthGuard +
+// RolesGuard unten bleiben unveraendert in Kraft) - der Wartungsmodus nimmt
+// nur die eigene Sperre zurueck, nicht Anmeldung oder Rolle.
+@MaintenancePublic()
 @Controller("backup")
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class BackupController {

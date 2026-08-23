@@ -8,7 +8,8 @@ import { DeliveryContext, PrinterAdapter } from "./adapters";
 // über einen statischen Import (der würde vor dieser Zeile ausgeführt).
 process.env.PRINT_WORKER_TOKEN = "x".repeat(40);
 process.env.BACKEND_URL = "http://backend.invalid";
-const { processJob } = require("./index") as typeof import("./index");
+const { processJob, claimNextJob } =
+  require("./index") as typeof import("./index");
 
 const job = {
   id: "job-1",
@@ -29,6 +30,18 @@ function conflictError() {
   return Object.assign(new Error("Conflict"), {
     isAxiosError: true,
     response: { status: 409, data: {} },
+  });
+}
+
+/** Löst 503 aus, wie ihn der Wartungsguard liefert (Issue #67). */
+function maintenanceError() {
+  return Object.assign(new Error("Service Unavailable"), {
+    isAxiosError: true,
+    response: {
+      status: 503,
+      data: { message: "Wartungsmodus aktiv" },
+      headers: { "retry-after": "30" },
+    },
   });
 }
 
@@ -179,5 +192,45 @@ describe("Lease-Protokoll in processJob", () => {
     } finally {
       jest.useRealTimers();
     }
+  });
+});
+
+/**
+ * Issue #67 (Wartungsmodus): der Entwurf verlangt ausdrücklich einen
+ * Testnachweis, keine Annahme ("Testanforderung und keine Annahme"), dass
+ * der Druck-Arbeiter ein 503 vom Backend übersteht und sich beim Ende der
+ * Wartung von selbst erholt. `claimNextJob` fängt jeden Fehler ab (siehe
+ * Kommentar in `index.ts`) und liefert `null` — die Poll-Schleife in
+ * `main()` wertet das als "gerade nichts zu tun" und versucht es beim
+ * nächsten Umlauf erneut, ohne Sonderfall für 503 im Code. Diese Tests
+ * belegen genau das Verhalten von `claimNextJob` selbst, ohne die
+ * Endlosschleife in `main()` laufen zu lassen.
+ */
+describe("Druck-Arbeiter übersteht den Wartungsmodus (Issue #67)", () => {
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it("wirft nicht bei 503 vom Backend, sondern liefert null", async () => {
+    jest.spyOn(axios, "post").mockRejectedValueOnce(maintenanceError());
+
+    await expect(claimNextJob()).resolves.toBeNull();
+  });
+
+  it("erholt sich im nächsten Umlauf von selbst, sobald die Wartung endet", async () => {
+    const postSpy = jest
+      .spyOn(axios, "post")
+      .mockRejectedValueOnce(maintenanceError()) // während LOCKED
+      .mockResolvedValueOnce({ data: job }); // Wartung beendet, Backend antwortet wieder
+
+    // Simuliert zwei Umläufe der Poll-Schleife aus main(): ohne Absturz und
+    // ohne dass irgendein Zustand zwischen den Aufrufen zurückgesetzt werden
+    // muss.
+    const duringMaintenance = await claimNextJob();
+    const afterMaintenance = await claimNextJob();
+
+    expect(duringMaintenance).toBeNull();
+    expect(afterMaintenance).toEqual(job);
+    expect(postSpy).toHaveBeenCalledTimes(2);
   });
 });

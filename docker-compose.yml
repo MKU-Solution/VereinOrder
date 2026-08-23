@@ -29,9 +29,17 @@ services:
       JWT_SECRET: ${JWT_SECRET:-vereinorder_super_secret_production_key_festbetrieb_2026}
       PRINT_WORKER_TOKEN: ${PRINT_WORKER_TOKEN:?PRINT_WORKER_TOKEN muss gesetzt sein}
       BACKUP_DIR: /app/backups
+      # Wartungsmodus (#67): Der Zustand liegt bewusst ausserhalb der
+      # Datenbank, weil eine Wiederherstellung die Datenbank ersetzt - ein
+      # Feld darin wuerde im gefaehrlichsten Augenblick ueberschrieben. Das
+      # eigene Volume sorgt dafuer, dass der Zustand auch ein Neuanlegen des
+      # Containers ueberlebt: ein Backend, das waehrend einer Wartung neu
+      # aufgesetzt wird, kommt geschlossen wieder hoch, nicht offen.
+      STATE_DIR: /app/state
       PORT: 3000
     volumes:
       - backup_data:/app/backups
+      - state_data:/app/state
     ports:
       - "3000:3000"
     depends_on:
@@ -74,3 +82,5 @@ volumes:
     name: vereinorder_postgres_data
   backup_data:
     name: vereinorder_backup_data
+  state_data:
+    name: vereinorder_state_data

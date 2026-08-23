@@ -14,6 +14,7 @@ import { SessionsService } from "./sessions.service";
 import { JwtAuthGuard } from "../auth/jwt-auth.guard";
 import { RolesGuard } from "../common/guards/roles.guard";
 import { Roles } from "../common/decorators/roles.decorator";
+import { MaintenanceBlockedDuringDraining } from "../maintenance/maintenance.decorator";
 
 // Issue #66, Stationskasse: STATION ergänzt, sonst kann diese Rolle keine
 // eigene Kassensitzung öffnen - ohne Sitzung weist createQuickSale jeden
@@ -30,6 +31,10 @@ import { Roles } from "../common/decorators/roles.decorator";
 export class SessionsController {
   constructor(private readonly sessionsService: SessionsService) {}
 
+  // Issue #67 (Wartungsmodus), Entscheidung der Projektleitung Runde 2:
+  // dieser Endpunkt bleibt auch in DRAINING gesperrt, nicht erst ab LOCKED -
+  // siehe die Begründung bei @MaintenanceBlockedDuringDraining().
+  @MaintenanceBlockedDuringDraining()
   @Get("context")
   async getContext(@Request() req: any) {
     return this.sessionsService.getContext(req.user.userId);
