@@ -15,6 +15,12 @@ import { JwtAuthGuard } from "../auth/jwt-auth.guard";
 import { RolesGuard } from "../common/guards/roles.guard";
 import { Roles } from "../common/decorators/roles.decorator";
 import { MaintenanceBlockedDuringDraining } from "../maintenance/maintenance.decorator";
+import { IdParamDto } from "../common/validation/request.dto";
+import { CloseSessionDto, StartSessionDto } from "./dto/sessions.dto";
+
+interface AuthenticatedRequest {
+  user: { userId: string };
+}
 
 // Issue #66, Stationskasse: STATION ergänzt, sonst kann diese Rolle keine
 // eigene Kassensitzung öffnen - ohne Sitzung weist createQuickSale jeden
@@ -36,13 +42,13 @@ export class SessionsController {
   // siehe die Begründung bei @MaintenanceBlockedDuringDraining().
   @MaintenanceBlockedDuringDraining()
   @Get("context")
-  async getContext(@Request() req: any) {
+  async getContext(@Request() req: AuthenticatedRequest) {
     return this.sessionsService.getContext(req.user.userId);
   }
 
   @Get("active")
   async getActiveSession(
-    @Request() req: any,
+    @Request() req: AuthenticatedRequest,
     @Query("eventId") eventId: string,
   ) {
     if (!eventId) throw new BadRequestException("eventId required");
@@ -51,8 +57,8 @@ export class SessionsController {
 
   @Post()
   async startSession(
-    @Request() req: any,
-    @Body() body: { eventId: string; startingBalance: number },
+    @Request() req: AuthenticatedRequest,
+    @Body() body: StartSessionDto,
   ) {
     return this.sessionsService.startSession(
       req.user.userId,
@@ -62,18 +68,21 @@ export class SessionsController {
   }
 
   @Get(":id/summary")
-  async getSummary(@Request() req: any, @Param("id") id: string) {
-    return this.sessionsService.getSummary(id, req.user.userId);
+  async getSummary(
+    @Request() req: AuthenticatedRequest,
+    @Param() params: IdParamDto,
+  ) {
+    return this.sessionsService.getSummary(params.id, req.user.userId);
   }
 
   @Patch(":id/close")
   async closeSession(
-    @Request() req: any,
-    @Param("id") id: string,
-    @Body() body: { closingBalance: number },
+    @Request() req: AuthenticatedRequest,
+    @Param() params: IdParamDto,
+    @Body() body: CloseSessionDto,
   ) {
     return this.sessionsService.closeSession(
-      id,
+      params.id,
       req.user.userId,
       body.closingBalance,
     );

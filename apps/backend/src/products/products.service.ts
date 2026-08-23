@@ -9,6 +9,12 @@ import { PRISMA_CLIENT } from "../prisma/prisma.module";
 import { RealtimeService } from "../realtime/realtime.service";
 import { GroupInput, saveOptionGroups } from "./product-option-groups";
 import { productAtStationFilter } from "../common/target-station";
+import {
+  CreateCategoryDto,
+  CreateProductDto,
+  UpdateCategoryDto,
+  UpdateProductDto,
+} from "./dto/product.dto";
 
 // Sortierung laut docs/development/produktoptionen-datenmodell.md
 // ("Sortierung"): sortOrder, dann name, dann id, jeweils aufsteigend.
@@ -22,7 +28,7 @@ const OPTION_ORDER_BY = [
 // createProduct/updateProduct wird ausdruecklich auf diese Felder begrenzt,
 // damit `optionGroups` (verschachtelte Pflege, Issue #75) nicht ungefiltert
 // an Prisma durchgereicht wird.
-const PRODUCT_FIELD_KEYS = [
+const PRODUCT_CREATE_FIELD_KEYS = [
   "name",
   "shortName",
   "description",
@@ -36,10 +42,26 @@ const PRODUCT_FIELD_KEYS = [
   "targetStationId",
   "eventId",
 ] as const;
+const PRODUCT_UPDATE_FIELD_KEYS = [
+  "name",
+  "shortName",
+  "description",
+  "price",
+  "taxRate",
+  "color",
+  "sortOrder",
+  "imageUrl",
+  "availability",
+  "categoryId",
+  "targetStationId",
+] as const;
 
-function pickProductFields(data: Record<string, any>): Record<string, any> {
-  const result: Record<string, any> = {};
-  for (const key of PRODUCT_FIELD_KEYS) {
+function pickProductFields<T extends object, K extends readonly (keyof T)[]>(
+  data: T,
+  keys: K,
+): Pick<T, K[number]> {
+  const result = {} as Pick<T, K[number]>;
+  for (const key of keys) {
     if (key in data) {
       result[key] = data[key];
     }
@@ -58,16 +80,24 @@ const PRODUCT_CATEGORY_REQUIRED_MESSAGE =
 // PRODUCT_FIELD_KEYS: die Nutzlast von createCategory/updateCategory wird auf
 // diese Felder begrenzt, statt den Anfragekoerper ungefiltert an Prisma
 // durchzureichen.
-const CATEGORY_FIELD_KEYS = [
+const CATEGORY_CREATE_FIELD_KEYS = [
   "name",
   "sortOrder",
   "eventId",
   "targetStationId",
 ] as const;
+const CATEGORY_UPDATE_FIELD_KEYS = [
+  "name",
+  "sortOrder",
+  "targetStationId",
+] as const;
 
-function pickCategoryFields(data: Record<string, any>): Record<string, any> {
-  const result: Record<string, any> = {};
-  for (const key of CATEGORY_FIELD_KEYS) {
+function pickCategoryFields<T extends object, K extends readonly (keyof T)[]>(
+  data: T,
+  keys: K,
+): Pick<T, K[number]> {
+  const result = {} as Pick<T, K[number]>;
+  for (const key of keys) {
     if (key in data) {
       result[key] = data[key];
     }
@@ -190,16 +220,21 @@ export class ProductsService {
     });
   }
 
-  async createProduct(data: any, userId?: string) {
-    const { optionGroups, ...rest } = data ?? {};
-    const productFields = pickProductFields(rest);
+  async createProduct(data: CreateProductDto, userId?: string) {
+    const { optionGroups, ...rest } = data;
+    const productFields = pickProductFields(rest, PRODUCT_CREATE_FIELD_KEYS);
 
     if (!productFields.categoryId) {
       throw new BadRequestException(PRODUCT_CATEGORY_REQUIRED_MESSAGE);
     }
 
+    await this.assertProductRelations(
+      productFields.categoryId,
+      productFields.targetStationId,
+      productFields.eventId,
+    );
     const product = await this.prisma.$transaction(async (tx) => {
-      const created = await tx.product.create({ data: productFields as any });
+      const created = await tx.product.create({ data: productFields });
 
       if (optionGroups !== undefined) {
         await saveOptionGroups(tx, created.id, optionGroups as GroupInput[]);
@@ -227,12 +262,12 @@ export class ProductsService {
     return (await this.findProductAdmin(product.id)) ?? product;
   }
 
-  async updateProduct(id: string, data: any, userId?: string) {
+  async updateProduct(id: string, data: UpdateProductDto, userId?: string) {
     const existing = await this.prisma.product.findUnique({ where: { id } });
     if (!existing) throw new NotFoundException("Product not found");
 
-    const { optionGroups, ...rest } = data ?? {};
-    const productFields = pickProductFields(rest);
+    const { optionGroups, ...rest } = data;
+    const productFields = pickProductFields(rest, PRODUCT_UPDATE_FIELD_KEYS);
 
     // categoryId ist Pflicht (Issue #84): ein Update darf das Feld nicht auf
     // leer setzen. Fehlt der Schlüssel ganz, wird die Kategorie schlicht
@@ -241,6 +276,12 @@ export class ProductsService {
       throw new BadRequestException(PRODUCT_CATEGORY_REQUIRED_MESSAGE);
     }
 
+    await this.assertProductRelations(
+      productFields.categoryId,
+      productFields.targetStationId,
+      existing.eventId,
+      existing.categoryId,
+    );
     const updated = await this.prisma.$transaction(async (tx) => {
       const result = await tx.product.update({
         where: { id },
@@ -305,12 +346,21 @@ export class ProductsService {
     }
   }
 
-  async createCategory(data: any) {
-    const categoryFields = pickCategoryFields(data ?? {});
+  async createCategory(data: CreateCategoryDto) {
+    const categoryFields = pickCategoryFields(data, CATEGORY_CREATE_FIELD_KEYS);
 
     if (!categoryFields.eventId) {
       throw new BadRequestException(
         "Eine Kategorie muss einer Veranstaltung zugeordnet sein.",
+      );
+    }
+    const event = await this.prisma.event.findUnique({
+      where: { id: categoryFields.eventId },
+      select: { id: true },
+    });
+    if (!event) {
+      throw new BadRequestException(
+        "Die gewählte Veranstaltung existiert nicht.",
       );
     }
     if (categoryFields.targetStationId) {
@@ -320,21 +370,20 @@ export class ProductsService {
       );
     }
 
-    return this.prisma.productCategory.create({ data: categoryFields as any });
+    return this.prisma.productCategory.create({ data: categoryFields });
   }
 
-  async updateCategory(id: string, data: any) {
+  async updateCategory(id: string, data: UpdateCategoryDto) {
     const existing = await this.prisma.productCategory.findUnique({
       where: { id },
     });
     if (!existing) throw new NotFoundException("Kategorie nicht gefunden");
 
-    const categoryFields = pickCategoryFields(data ?? {});
+    const categoryFields = pickCategoryFields(data, CATEGORY_UPDATE_FIELD_KEYS);
     if (categoryFields.targetStationId) {
-      const eventId = categoryFields.eventId ?? existing.eventId;
       await this.assertStationBelongsToEvent(
         categoryFields.targetStationId,
-        eventId,
+        existing.eventId,
       );
     }
 
@@ -342,5 +391,26 @@ export class ProductsService {
       where: { id },
       data: categoryFields,
     });
+  }
+
+  private async assertProductRelations(
+    categoryId: string | undefined,
+    targetStationId: string | null | undefined,
+    eventId: string,
+    fallbackCategoryId?: string,
+  ) {
+    const resolvedCategoryId = categoryId ?? fallbackCategoryId;
+    if (!resolvedCategoryId)
+      throw new BadRequestException(PRODUCT_CATEGORY_REQUIRED_MESSAGE);
+    const category = await this.prisma.productCategory.findUnique({
+      where: { id: resolvedCategoryId },
+      select: { eventId: true },
+    });
+    if (!category || category.eventId !== eventId)
+      throw new BadRequestException(
+        "Die gewählte Kategorie gehört nicht zu dieser Veranstaltung.",
+      );
+    if (targetStationId)
+      await this.assertStationBelongsToEvent(targetStationId, eventId);
   }
 }

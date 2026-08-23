@@ -14,7 +14,17 @@ import { EventsService } from "./events.service";
 import { JwtAuthGuard } from "../auth/jwt-auth.guard";
 import { RolesGuard } from "../common/guards/roles.guard";
 import { Roles } from "../common/decorators/roles.decorator";
-import { EventStatus } from "@vereinorder/database";
+import { IdParamDto, SourceIdParamDto } from "../common/validation/request.dto";
+import {
+  ActivateEventDto,
+  ChangeEventStatusDto,
+  CleanTestDataDto,
+  CopyAssortmentDto,
+  CreateEventDto,
+  DuplicateEventDto,
+  EventConfigImportPayload,
+  UpdateEventDto,
+} from "./events.dto";
 
 @Controller("events")
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -28,20 +38,20 @@ export class EventsController {
   }
 
   @Get(":id")
-  async findOne(@Param("id") id: string) {
-    return this.eventsService.findOne(id);
+  async findOne(@Param() params: IdParamDto) {
+    return this.eventsService.findOne(params.id);
   }
 
   @Post(":sourceId/duplicate")
   @Roles("ADMINISTRATOR")
   async duplicate(
     @Request() req,
-    @Param("sourceId") sourceId: string,
-    @Body() body: { name?: string },
+    @Param() params: SourceIdParamDto,
+    @Body() body: DuplicateEventDto,
     @Headers("idempotency-key") idempotencyKey: string,
   ) {
     return this.eventsService.duplicate(
-      sourceId,
+      params.sourceId,
       req.user?.userId,
       idempotencyKey,
       body,
@@ -52,16 +62,12 @@ export class EventsController {
   @Roles("ADMINISTRATOR")
   async copyAssortment(
     @Request() req,
-    @Param("sourceId") sourceId: string,
-    @Body()
-    body: {
-      targetEventId: string;
-      stationMappings: Record<string, string | null>;
-    },
+    @Param() params: SourceIdParamDto,
+    @Body() body: CopyAssortmentDto,
     @Headers("idempotency-key") idempotencyKey: string,
   ) {
     return this.eventsService.copyAssortment(
-      sourceId,
+      params.sourceId,
       req.user?.userId,
       idempotencyKey,
       body,
@@ -70,15 +76,17 @@ export class EventsController {
 
   @Get(":id/config-export")
   @Roles("ADMINISTRATOR")
-  async exportConfig(@Param("id") id: string) {
-    return this.eventsService.exportConfig(id);
+  async exportConfig(@Param() params: IdParamDto) {
+    return this.eventsService.exportConfig(params.id);
   }
 
   @Post("config-import")
   @Roles("ADMINISTRATOR")
   async importConfig(
     @Request() req,
-    @Body() body: unknown,
+    // Der versionsabhaengige Payload wird ausschliesslich vom bestehenden
+    // EventsService-Parser validiert und darf hier nicht vorzeitig whitelisted werden.
+    @Body() body: EventConfigImportPayload,
     @Headers("idempotency-key") idempotencyKey: string,
   ) {
     return this.eventsService.importConfig(
@@ -90,68 +98,71 @@ export class EventsController {
 
   @Get(":id/test-data-summary")
   @Roles("ADMINISTRATOR")
-  async testDataSummary(@Param("id") id: string) {
-    return this.eventsService.testDataSummary(id);
+  async testDataSummary(@Param() params: IdParamDto) {
+    return this.eventsService.testDataSummary(params.id);
   }
 
   @Post()
-  async create(@Request() req, @Body() data: any) {
+  async create(@Request() req, @Body() data: CreateEventDto) {
     const userId = req.user?.userId;
     return this.eventsService.create(data, userId);
   }
 
   @Patch(":id")
-  async update(@Request() req, @Param("id") id: string, @Body() data: any) {
+  async update(
+    @Request() req,
+    @Param() params: IdParamDto,
+    @Body() data: UpdateEventDto,
+  ) {
     const userId = req.user?.userId;
-    return this.eventsService.update(id, data, userId);
+    return this.eventsService.update(params.id, data, userId);
   }
 
   @Post(":id/activate")
   async activate(
     @Request() req,
-    @Param("id") id: string,
-    @Body("confirmed") confirmed: boolean,
-    @Body("disclaimerVersion") disclaimerVersion?: string,
+    @Param() params: IdParamDto,
+    @Body() body: ActivateEventDto,
   ) {
     const userId = req.user?.userId;
     return this.eventsService.activate(
-      id,
+      params.id,
       userId,
-      confirmed,
-      disclaimerVersion || "1.0",
+      body.confirmed,
+      body.disclaimerVersion || "1.0",
     );
   }
 
   @Patch(":id/status")
   async changeStatus(
     @Request() req,
-    @Param("id") id: string,
-    @Body("status") status: EventStatus,
+    @Param() params: IdParamDto,
+    @Body() body: ChangeEventStatusDto,
   ) {
     const userId = req.user?.userId;
-    return this.eventsService.changeStatus(id, status, userId);
+    return this.eventsService.changeStatus(params.id, body.status, userId);
   }
 
   @Post(":id/clean-test-data")
   @Roles("ADMINISTRATOR")
   async cleanTestData(
     @Request() req,
-    @Param("id") id: string,
-    @Body("confirmationName") confirmationName: string,
+    @Param() params: IdParamDto,
+    @Body() body: CleanTestDataDto,
     @Headers("idempotency-key") idempotencyKey: string,
   ) {
     const userId = req.user?.userId;
     return this.eventsService.cleanTestData(
-      id,
+      params.id,
       userId,
-      confirmationName,
+      body.confirmationName,
       idempotencyKey,
     );
   }
 
   @Delete(":id")
-  async remove(@Request() req, @Param("id") id: string) {
+  async remove(@Request() req, @Param() params: IdParamDto) {
     const userId = req.user?.userId;
-    return this.eventsService.remove(id, userId);
+    return this.eventsService.remove(params.id, userId);
   }
 }

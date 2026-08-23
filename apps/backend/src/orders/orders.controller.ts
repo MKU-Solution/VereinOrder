@@ -14,6 +14,20 @@ import { OrdersService } from "./orders.service";
 import { JwtAuthGuard } from "../auth/jwt-auth.guard";
 import { RolesGuard } from "../common/guards/roles.guard";
 import { Roles } from "../common/decorators/roles.decorator";
+import { IdParamDto, ItemIdParamDto } from "../common/validation/request.dto";
+import {
+  AddPaymentsDto,
+  CancelOrderDto,
+  CreateOrderDto,
+  CreateQuickSaleDto,
+  CreateStationSaleDto,
+  DiscardOfflineQueueDto,
+  UpdatePriorityDto,
+} from "./dto/orders.dto";
+
+interface AuthenticatedRequest {
+  user?: { userId?: string; role?: string };
+}
 
 @Controller("orders")
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -22,22 +36,15 @@ export class OrdersController {
 
   @Get("quick-sale/context")
   @Roles("ADMINISTRATOR", "CASHIER")
-  async getQuickSaleContext(@Request() req: any) {
+  async getQuickSaleContext(@Request() req: AuthenticatedRequest) {
     return this.ordersService.getQuickSaleContext(req.user?.userId);
   }
 
   @Post("quick-sale")
   @Roles("ADMINISTRATOR", "CASHIER")
   async createQuickSale(
-    @Request() req: any,
-    @Body()
-    body: {
-      eventId: string;
-      idempotencyKey: string;
-      items: { productId: string; quantity: number; optionIds?: string[] }[];
-      paymentMethod: "CASH" | "CARD";
-      tenderedAmount?: number;
-    },
+    @Request() req: AuthenticatedRequest,
+    @Body() body: CreateQuickSaleDto,
   ) {
     // Stationskasse (Issue #66, docs/development/stationskasse.md
     // Abschnitt 2): stationId ist ausschließlich über POST
@@ -59,30 +66,25 @@ export class OrdersController {
   // docs/development/stationskasse.md, Abschnitt 2.
   @Get("station-sale/context")
   @Roles("ADMINISTRATOR", "CASHIER", "STATION")
-  async getStationSaleContext(@Request() req: any) {
+  async getStationSaleContext(@Request() req: AuthenticatedRequest) {
     return this.ordersService.getStationSaleContext(req.user?.userId);
   }
 
   @Post("station-sale")
   @Roles("ADMINISTRATOR", "CASHIER", "STATION")
   async createStationSale(
-    @Request() req: any,
-    @Body()
-    body: {
-      eventId: string;
-      idempotencyKey: string;
-      items: { productId: string; quantity: number; optionIds?: string[] }[];
-      paymentMethod: "CASH";
-      tenderedAmount?: number;
-      stationId: string;
-    },
+    @Request() req: AuthenticatedRequest,
+    @Body() body: CreateStationSaleDto,
   ) {
     return this.ordersService.createQuickSale(req.user?.userId, body);
   }
 
   @Post()
   @Roles("ADMINISTRATOR", "WAITER", "CASHIER")
-  async createOrder(@Request() req: any, @Body() body: any) {
+  async createOrder(
+    @Request() req: AuthenticatedRequest,
+    @Body() body: CreateOrderDto,
+  ) {
     const userId = req.user?.userId;
     return this.ordersService.createOrder(userId, body);
   }
@@ -103,7 +105,7 @@ export class OrdersController {
   @Get("by-idempotency-key/:key")
   @Roles("ADMINISTRATOR", "EVENT_MANAGER", "WAITER", "CASHIER")
   async getOrderByIdempotencyKey(
-    @Request() req: any,
+    @Request() req: AuthenticatedRequest,
     @Param("key") key: string,
   ) {
     return this.ordersService.getOrderByIdempotencyKey(
@@ -121,7 +123,10 @@ export class OrdersController {
   // nicht im Rollen-Gate.
   @Post("offline-queue/discard")
   @Roles("ADMINISTRATOR", "EVENT_MANAGER", "WAITER", "CASHIER")
-  async discardOfflineQueueEntry(@Request() req: any, @Body() body: any) {
+  async discardOfflineQueueEntry(
+    @Request() req: AuthenticatedRequest,
+    @Body() body: DiscardOfflineQueueDto,
+  ) {
     return this.ordersService.discardOfflineQueueEntry(
       req.user?.userId,
       req.user?.role,
@@ -138,50 +143,60 @@ export class OrdersController {
   @Post(":id/payments")
   @Roles("ADMINISTRATOR", "WAITER", "CASHIER")
   async addPayments(
-    @Request() req: any,
-    @Param("id") id: string,
-    @Body("payments")
-    payments: { amount: number; method: "CASH" | "CARD" | "VOUCHER" }[],
+    @Request() req: AuthenticatedRequest,
+    @Param() params: IdParamDto,
+    @Body() body: AddPaymentsDto,
   ) {
     const userId = req.user?.userId;
-    return this.ordersService.addPaymentsToOrder(id, payments, userId);
+    return this.ordersService.addPaymentsToOrder(
+      params.id,
+      body.payments,
+      userId,
+    );
   }
 
   @Post(":id/reprint")
   @Roles("ADMINISTRATOR", "WAITER", "CASHIER", "STATION")
-  async reprintOrder(@Request() req: any, @Param("id") id: string) {
+  async reprintOrder(
+    @Request() req: AuthenticatedRequest,
+    @Param() params: IdParamDto,
+  ) {
     const userId = req.user?.userId;
-    return this.ordersService.reprintOrder(id, userId);
+    return this.ordersService.reprintOrder(params.id, userId);
   }
 
   @Post(":id/cancel")
   @Roles("ADMINISTRATOR", "WAITER", "CASHIER")
   async cancelOrder(
-    @Request() req: any,
-    @Param("id") id: string,
-    @Body("reason") reason: string,
+    @Request() req: AuthenticatedRequest,
+    @Param() params: IdParamDto,
+    @Body() body: CancelOrderDto,
   ) {
     const userId = req.user?.userId;
-    return this.ordersService.cancelOrder(id, reason, userId);
+    return this.ordersService.cancelOrder(params.id, body.reason, userId);
   }
 
   @Post("items/:itemId/cancel")
   @Roles("ADMINISTRATOR", "WAITER", "CASHIER")
   async cancelOrderItem(
-    @Request() req: any,
-    @Param("itemId") itemId: string,
-    @Body("reason") reason: string,
+    @Request() req: AuthenticatedRequest,
+    @Param() params: ItemIdParamDto,
+    @Body() body: CancelOrderDto,
   ) {
     const userId = req.user?.userId;
-    return this.ordersService.cancelOrderItem(itemId, reason, userId);
+    return this.ordersService.cancelOrderItem(
+      params.itemId,
+      body.reason,
+      userId,
+    );
   }
 
   @Patch(":id/priority")
   @Roles("ADMINISTRATOR", "WAITER", "CASHIER", "STATION")
   async updatePriority(
-    @Param("id") id: string,
-    @Body("isPriority") isPriority: boolean,
+    @Param() params: IdParamDto,
+    @Body() body: UpdatePriorityDto,
   ) {
-    return this.ordersService.updatePriority(id, isPriority);
+    return this.ordersService.updatePriority(params.id, body.isPriority);
   }
 }

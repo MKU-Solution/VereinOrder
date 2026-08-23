@@ -2,6 +2,7 @@ import { Injectable, Inject, NotFoundException } from "@nestjs/common";
 import { PrismaClient } from "@vereinorder/database";
 import { PRISMA_CLIENT } from "../prisma/prisma.module";
 import * as bcrypt from "bcryptjs";
+import { CreateUserDto, UpdateUserDto } from "./users.dto";
 
 @Injectable()
 export class UsersService {
@@ -21,7 +22,7 @@ export class UsersService {
     });
   }
 
-  async create(data: any, createdByUserId?: string) {
+  async create(data: CreateUserDto, createdByUserId?: string) {
     const salt = await bcrypt.genSalt(10);
     const pinHash = await bcrypt.hash(data.pin, salt);
 
@@ -53,16 +54,19 @@ export class UsersService {
     return user;
   }
 
-  async update(id: string, data: any, updatedByUserId?: string) {
+  async update(id: string, data: UpdateUserDto, updatedByUserId?: string) {
     const existing = await this.prisma.user.findUnique({ where: { id } });
     if (!existing) throw new NotFoundException("User not found");
 
+    // Explizite Allowlist: weder PIN-Hash noch Audit-/Identitaetsfelder
+    // duerfen ueber das allgemeine Benutzer-Update beschreibbar werden.
+    const { username, role, isActive } = data;
     const updated = await this.prisma.user.update({
       where: { id },
       data: {
-        username: data.username,
-        role: data.role,
-        isActive: data.isActive,
+        username,
+        role,
+        isActive,
       },
       select: { id: true, username: true, role: true, isActive: true },
     });

@@ -3,6 +3,7 @@ import {
   Get,
   Patch,
   Param,
+  ParseUUIDPipe,
   Query,
   Request,
   UseGuards,
@@ -45,13 +46,19 @@ export class RunnerController {
 
   @Patch("orders/:orderId/claim")
   @Roles("RUNNER", "ADMINISTRATOR")
-  claimOrder(@Request() req: any, @Param("orderId") orderId: string) {
+  claimOrder(
+    @Request() req: any,
+    @Param("orderId", new ParseUUIDPipe({ version: "4" })) orderId: string,
+  ) {
     return this.runnerService.claimOrder(req.user, orderId);
   }
 
   @Patch("orders/:orderId/deliver")
   @Roles("RUNNER", "ADMINISTRATOR")
-  deliverOrder(@Request() req: any, @Param("orderId") orderId: string) {
+  deliverOrder(
+    @Request() req: any,
+    @Param("orderId", new ParseUUIDPipe({ version: "4" })) orderId: string,
+  ) {
     return this.runnerService.deliverOrder(req.user, orderId);
   }
 }

@@ -725,7 +725,27 @@ export class PrintJobsService {
       await this.assertFallbackAssignmentAllowed(null, data.fallbackPrinterId);
       values.fallbackPrinterId = data.fallbackPrinterId;
     }
-    const printer = await this.prisma.printer.create({ data: values as any });
+    if (!values.name || !values.type) {
+      throw new BadRequestException(
+        "Druckername und Druckertyp sind erforderlich.",
+      );
+    }
+    const printer = await this.prisma.printer.create({
+      data: {
+        name: values.name,
+        type: values.type,
+        ipAddress: values.ipAddress,
+        port: values.port,
+        isActive: values.isActive,
+        paperWidth: values.paperWidth,
+        codepage: values.codepage,
+        cutMode: values.cutMode,
+        copies: values.copies,
+        timeoutMs: values.timeoutMs,
+        queueName: values.queueName,
+        fallbackPrinterId: values.fallbackPrinterId,
+      },
+    });
     if (data.fallbackPrinterId) {
       await this.auditService.log({
         action: "PRINTER_FALLBACK_CHANGED",
@@ -760,7 +780,20 @@ export class PrintJobsService {
     }
     const printer = await this.prisma.printer.update({
       where: { id },
-      data: values as any,
+      data: {
+        name: values.name,
+        type: values.type,
+        ipAddress: values.ipAddress,
+        port: values.port,
+        isActive: values.isActive,
+        paperWidth: values.paperWidth,
+        codepage: values.codepage,
+        cutMode: values.cutMode,
+        copies: values.copies,
+        timeoutMs: values.timeoutMs,
+        queueName: values.queueName,
+        fallbackPrinterId: values.fallbackPrinterId,
+      },
     });
     if (
       data.fallbackPrinterId !== undefined &&
@@ -877,17 +910,22 @@ export class PrintJobsService {
       data[key] !== undefined && data[key] !== null;
 
     if (has("name") || !options.partial) {
-      const name = String(data.name ?? "").trim();
+      if (typeof data.name !== "string") {
+        throw new BadRequestException("Der Druckername muss Text sein.");
+      }
+      const name = data.name.trim();
       if (name.length === 0) {
         throw new BadRequestException("Der Druckername darf nicht leer sein.");
       }
       values.name = name;
     }
 
-    const providedType =
-      data.type !== undefined ? String(data.type).toUpperCase() : undefined;
+    if (data.type !== undefined && typeof data.type !== "string") {
+      throw new BadRequestException("Der Druckertyp muss Text sein.");
+    }
+    const providedType = data.type?.toUpperCase();
     if (providedType !== undefined || !options.partial) {
-      if (!SUPPORTED_PRINTER_TYPES.includes(providedType as any)) {
+      if (!SUPPORTED_PRINTER_TYPES.some((type) => type === providedType)) {
         throw new BadRequestException(
           `Druckertyp "${providedType ?? ""}" wird nicht unterstützt. Erlaubt: ${SUPPORTED_PRINTER_TYPES.join(", ")}.`,
         );
@@ -898,7 +936,7 @@ export class PrintJobsService {
     // Adresse/Warteschlange nur prüfen, wenn Typ oder das Feld selbst
     // geändert werden.
     const effectiveType =
-      providedType ?? String(options.existingType ?? "").toUpperCase();
+      providedType ?? (options.existingType ?? "").toUpperCase();
     const touchesTransport =
       providedType !== undefined || data.ipAddress !== undefined;
     const touchesQueue =
@@ -906,7 +944,10 @@ export class PrintJobsService {
 
     if (effectiveType === "ESC_POS_NETWORK") {
       if (touchesTransport) {
-        const host = String(data.ipAddress ?? "").trim();
+        if (typeof data.ipAddress !== "string") {
+          throw new BadRequestException("Die IP-Adresse muss Text sein.");
+        }
+        const host = data.ipAddress.trim();
         if (host.length === 0) {
           throw new BadRequestException(
             "Netzwerkdrucker brauchen eine IP-Adresse oder einen Hostnamen.",
@@ -922,7 +963,10 @@ export class PrintJobsService {
     } else if (effectiveType === "CUPS_IPP") {
       // ipAddress ist bei CUPS_IPP optional (abweichender CUPS-Host).
       if (data.ipAddress !== undefined) {
-        const host = String(data.ipAddress ?? "").trim();
+        if (data.ipAddress !== null && typeof data.ipAddress !== "string") {
+          throw new BadRequestException("Die Druckeradresse muss Text sein.");
+        }
+        const host = data.ipAddress?.trim() ?? "";
         if (host.length === 0) {
           values.ipAddress = null;
         } else if (!HOST_PATTERN.test(host)) {
@@ -934,7 +978,12 @@ export class PrintJobsService {
         }
       }
       if (touchesQueue || !options.partial) {
-        const queueName = String(data.queueName ?? "").trim();
+        if (typeof data.queueName !== "string") {
+          throw new BadRequestException(
+            "Einen Warteschlangennamen bitte als Text angeben.",
+          );
+        }
+        const queueName = data.queueName.trim();
         if (queueName.length === 0) {
           throw new BadRequestException(
             "CUPS-Drucker brauchen einen Warteschlangennamen (queueName).",
@@ -967,7 +1016,7 @@ export class PrintJobsService {
       );
     }
     if (has("paperWidth")) {
-      const width = Number(data.paperWidth);
+      const width = data.paperWidth;
       if (!SUPPORTED_PAPER_WIDTHS.includes(width)) {
         throw new BadRequestException(
           `Papierbreite muss ${SUPPORTED_PAPER_WIDTHS.join(" oder ")} Millimeter sein.`,
@@ -976,7 +1025,10 @@ export class PrintJobsService {
       values.paperWidth = width;
     }
     if (has("codepage")) {
-      const codepage = String(data.codepage).toUpperCase();
+      if (typeof data.codepage !== "string") {
+        throw new BadRequestException("Der Zeichensatz muss Text sein.");
+      }
+      const codepage = data.codepage.toUpperCase();
       if (!SUPPORTED_CODEPAGES.includes(codepage)) {
         throw new BadRequestException(
           `Zeichensatz muss einer von ${SUPPORTED_CODEPAGES.join(", ")} sein.`,
@@ -985,7 +1037,10 @@ export class PrintJobsService {
       values.codepage = codepage;
     }
     if (has("cutMode")) {
-      const cutMode = String(data.cutMode).toUpperCase();
+      if (typeof data.cutMode !== "string") {
+        throw new BadRequestException("Die Schnittart muss Text sein.");
+      }
+      const cutMode = data.cutMode.toUpperCase();
       if (!SUPPORTED_CUT_MODES.includes(cutMode)) {
         throw new BadRequestException(
           `Schnittart muss einer von ${SUPPORTED_CUT_MODES.join(", ")} sein.`,
@@ -994,7 +1049,10 @@ export class PrintJobsService {
       values.cutMode = cutMode;
     }
     if (data.isActive !== undefined) {
-      values.isActive = Boolean(data.isActive);
+      if (typeof data.isActive !== "boolean") {
+        throw new BadRequestException("isActive muss ein Wahrheitswert sein.");
+      }
+      values.isActive = data.isActive;
     }
 
     // Vorgabe-Port 631 für neu angelegte CUPS_IPP-Drucker ohne expliziten Port.
@@ -1015,12 +1073,16 @@ export class PrintJobsService {
     min: number,
     max: number,
   ): number {
-    const parsed = Math.trunc(Number(value));
-    if (!Number.isFinite(parsed) || parsed < min || parsed > max) {
+    if (
+      typeof value !== "number" ||
+      !Number.isInteger(value) ||
+      value < min ||
+      value > max
+    ) {
       throw new BadRequestException(
         `${label} muss zwischen ${min} und ${max} liegen.`,
       );
     }
-    return parsed;
+    return value;
   }
 }

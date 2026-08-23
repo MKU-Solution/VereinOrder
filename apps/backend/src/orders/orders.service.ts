@@ -13,58 +13,12 @@ import { resolveTargetStationId } from "../common/target-station";
 import { drawPickupNumber } from "../common/pickup-number";
 import { AuditService } from "../audit/audit.service";
 import { ORDER_REJECTION_MESSAGES } from "@vereinorder/shared";
-
-interface CreateOrderDto {
-  eventId: string;
-  items: {
-    productId: string;
-    quantity: number;
-    optionIds?: string[];
-  }[];
-  payments?: { amount: number; method: "CASH" | "CARD" | "VOUCHER" }[];
-  idempotencyKey?: string;
-  tableName?: string;
-  areaId?: string;
-  // Issue #65, Abschnitt 8 Punkt 5: von der Bedienmaske erfasste
-  // Kassensitzung. Optional, damit heutige Online-Bestellungen ohne
-  // Sitzung unveraendert weiterlaufen (siehe createOrder weiter unten).
-  cashierSessionId?: string;
-}
-
-// Issue #65, Abschnitt 8 Punkt 2: Eingabe fuer das Verwerfen einer
-// lokalen Vormerkung, nachdem der Server bestaetigt hat, dass er die
-// Bestellung nicht kennt. capturedByUserId und legacy stammen aus dem in
-// IndexedDB gehaltenen Kontext des Eintrags (Abschnitt 4/6 des Entwurfs)
-// und werden hier ausschliesslich zur Autorisierung und fuer das
-// Audit-Ereignis verwendet, nie zur Auswahl einer Bestellung.
-interface DiscardOfflineQueueDto {
-  idempotencyKey: string;
-  reason: string;
-  capturedByUserId?: string | null;
-  legacy?: boolean;
-  eventId?: string;
-  payments?: { amount: number; method: "CASH" | "CARD" | "VOUCHER" }[];
-  totalAtCapture?: number;
-}
-
-interface QuickSaleDto {
-  eventId: string;
-  idempotencyKey: string;
-  items: {
-    productId: string;
-    quantity: number;
-    optionIds?: string[];
-  }[];
-  paymentMethod: "CASH" | "CARD";
-  tenderedAmount?: number;
-  // Stationskasse (Issue #66). Gesetzt macht createQuickSale zur einzigen
-  // Vergabestelle des Stationsverkaufs: Sortiment auf die Station
-  // eingeschraenkt, Abholnummer gezogen, Station auf der Bestellung
-  // vermerkt, nur Barzahlung. Ungesetzt entspricht dem zentralen
-  // Schnellverkauf von heute, unveraendert. Siehe
-  // docs/development/stationskasse.md, Abschnitt 2.
-  stationId?: string;
-}
+import {
+  CreateOrderDto,
+  DiscardOfflineQueueDto,
+  PaymentInputDto,
+  QuickSaleServiceDto,
+} from "./dto/orders.dto";
 
 // Snapshot einer aufgeloesten Bestellposition. variantId/variantName/extras
 // entsprechen exakt den gleichnamigen OrderItem-Spalten (unveraendert seit
@@ -144,6 +98,82 @@ export class OrdersService {
     // unverhandelbaren Projektregeln zu auditierbaren Aktionen mit Geldbezug.
     private readonly auditService: AuditService,
   ) {}
+
+  /** Zweite Verteidigung hinter den Request-DTOs für direkte Serviceaufrufe. */
+  private validateItems(
+    items: { productId: string; quantity: number; optionIds?: string[] }[],
+  ): number {
+    if (!Array.isArray(items) || items.length === 0 || items.length > 50) {
+      throw new BadRequestException(
+        "Eine Bestellung braucht mindestens eine und höchstens 50 Positionen.",
+      );
+    }
+
+    const totalQuantity = items.reduce((sum, item) => {
+      if (
+        !item ||
+        typeof item.productId !== "string" ||
+        !Number.isInteger(item.quantity) ||
+        item.quantity < 1 ||
+        item.quantity > 100 ||
+        (item.optionIds !== undefined &&
+          (!Array.isArray(item.optionIds) ||
+            item.optionIds.length > 50 ||
+            item.optionIds.some((optionId) => typeof optionId !== "string")))
+      ) {
+        throw new BadRequestException(
+          "Jede Position braucht ein Produkt und eine Menge zwischen 1 und 100.",
+        );
+      }
+      return sum + item.quantity;
+    }, 0);
+
+    if (totalQuantity > 100) {
+      throw new BadRequestException(
+        "Eine Bestellung darf insgesamt höchstens 100 Einheiten enthalten.",
+      );
+    }
+    return totalQuantity;
+  }
+
+  /** Validiert Centbeträge und ihre Summe, bevor irgendeine Zahlung entsteht. */
+  private validatePayments(payments: PaymentInputDto[]): number {
+    if (!Array.isArray(payments) || payments.length > 50) {
+      throw new BadRequestException("Ungültige Anzahl an Zahlungen.");
+    }
+
+    let total = 0;
+    for (const payment of payments) {
+      if (
+        !payment ||
+        !Number.isInteger(payment.amount) ||
+        payment.amount <= 0 ||
+        payment.amount > 2_147_483_647 ||
+        !["CASH", "CARD", "VOUCHER"].includes(payment.method)
+      ) {
+        throw new BadRequestException(
+          "Zahlungen müssen positive ganzzahlige Centbeträge mit gültiger Zahlungsart sein.",
+        );
+      }
+      total += payment.amount;
+      if (!Number.isSafeInteger(total) || total > 2_147_483_647) {
+        throw new BadRequestException(
+          "Die Summe der Zahlungen überschreitet den zulässigen Centbetrag.",
+        );
+      }
+    }
+    return total;
+  }
+
+  private normalizeCancellationReason(reason: string): string {
+    const normalized = typeof reason === "string" ? reason.trim() : "";
+    if (normalized.length === 0 || normalized.length > 500) {
+      throw new BadRequestException(
+        "Ein Stornogrund mit höchstens 500 Zeichen ist erforderlich.",
+      );
+    }
+    return normalized;
+  }
 
   async getQuickSaleContext(userId: string) {
     const [events, sessions, activePrinter] = await Promise.all([
@@ -440,7 +470,7 @@ export class OrdersService {
   private async resolveIdempotentQuickSale(
     tx: PrismaClient | Prisma.TransactionClient,
     userId: string,
-    dto: QuickSaleDto,
+    dto: QuickSaleServiceDto,
   ) {
     const existingOrder = await tx.order.findUnique({
       where: { idempotencyKey: dto.idempotencyKey },
@@ -520,7 +550,7 @@ export class OrdersService {
     };
   }
 
-  async createQuickSale(userId: string, dto: QuickSaleDto) {
+  async createQuickSale(userId: string, dto: QuickSaleServiceDto) {
     if (!userId)
       throw new BadRequestException("Authenticated user is required");
     if (!dto?.eventId) throw new BadRequestException("eventId is required");
@@ -531,15 +561,7 @@ export class OrdersService {
     ) {
       throw new BadRequestException("A valid idempotencyKey is required");
     }
-    if (
-      !Array.isArray(dto.items) ||
-      dto.items.length === 0 ||
-      dto.items.length > 50
-    ) {
-      throw new BadRequestException(
-        "Ein Schnellverkauf braucht mindestens eine und höchstens 50 Positionen. Bitte die Auswahl entsprechend anpassen.",
-      );
-    }
+    this.validateItems(dto.items);
     if (!["CASH", "CARD"].includes(dto.paymentMethod)) {
       throw new BadRequestException(
         "Only CASH and CARD are supported for quick sales",
@@ -553,25 +575,6 @@ export class OrdersService {
     if (dto.stationId && dto.paymentMethod !== "CASH") {
       throw new BadRequestException(
         "Ein Stationsverkauf ist nur mit Barzahlung möglich.",
-      );
-    }
-
-    const totalQuantity = dto.items.reduce((sum, item) => {
-      if (
-        !item?.productId ||
-        !Number.isInteger(item.quantity) ||
-        item.quantity < 1 ||
-        item.quantity > 100
-      ) {
-        throw new BadRequestException(
-          "Jede Position braucht eine Menge zwischen 1 und 100. Bitte die Menge korrigieren.",
-        );
-      }
-      return sum + item.quantity;
-    }, 0);
-    if (totalQuantity > 100) {
-      throw new BadRequestException(
-        "Pro Verkauf können höchstens 100 Produktbons ausgegeben werden. Bitte den Verkauf aufteilen.",
       );
     }
 
@@ -1181,70 +1184,12 @@ export class OrdersService {
   }
 
   async createOrder(userId: string, dto: CreateOrderDto) {
-    if (!dto.items || dto.items.length === 0) {
-      throw new BadRequestException(ORDER_REJECTION_MESSAGES.ORDER_EMPTY);
-    }
+    this.validateItems(dto?.items);
+    const requestedPayments = dto.payments ?? [];
+    const totalPaid = this.validatePayments(requestedPayments);
 
     const idempotentOrder = await this.resolveIdempotentOrder(userId, dto);
     if (idempotentOrder) return idempotentOrder;
-
-    const productIds = dto.items.map((i) => i.productId);
-    const products = await this.prisma.product.findMany({
-      where: { id: { in: productIds }, eventId: dto.eventId },
-      include: { optionGroups: { include: { options: true } } },
-    });
-
-    const productMap = new Map(products.map((p) => [p.id, p]));
-
-    let totalAmount = 0;
-    const orderItemsData = dto.items.map((item) => {
-      const product = productMap.get(item.productId);
-      if (!product)
-        throw new BadRequestException(
-          ORDER_REJECTION_MESSAGES.PRODUCT_NOT_IN_EVENT(item.productId),
-        );
-      if (
-        product.availability === "OUT_OF_STOCK" ||
-        product.availability === "DISABLED"
-      ) {
-        throw new BadRequestException(
-          ORDER_REJECTION_MESSAGES.PRODUCT_OUT_OF_STOCK(product.name),
-        );
-      }
-
-      const { priceAtTime, variantId, variantName, extras } =
-        this.resolveOrderItemPricing(product, item.optionIds ?? []);
-      totalAmount += priceAtTime * item.quantity;
-
-      return {
-        productId: product.id,
-        quantity: item.quantity,
-        priceAtTime,
-        status: "PENDING" as any,
-        variantId,
-        variantName,
-        extras: extras.length > 0 ? (extras as any) : undefined,
-      };
-    });
-
-    const totalPaid = dto.payments?.reduce((sum, p) => sum + p.amount, 0) || 0;
-    const initialPaymentStatus =
-      totalPaid >= totalAmount
-        ? "PAID"
-        : totalPaid > 0
-          ? "PARTIALLY_PAID"
-          : "OPEN";
-
-    if (dto.areaId) {
-      const area = await this.prisma.area.findFirst({
-        where: { id: dto.areaId, eventId: dto.eventId },
-        select: { id: true },
-      });
-      if (!area)
-        throw new BadRequestException(
-          ORDER_REJECTION_MESSAGES.AREA_NOT_IN_EVENT,
-        );
-    }
 
     try {
       return await this.prisma.$transaction(async (prisma) => {
@@ -1264,6 +1209,40 @@ export class OrdersService {
           throw new BadRequestException(
             ORDER_REJECTION_MESSAGES.EVENT_NOT_ACTIVE_FOR_ORDERS,
           );
+
+        // Alle eventgebundenen Referenzen werden in derselben Transaktion
+        // wie der Write aufgelöst. So kann keine Position vor der Prüfung
+        // angelegt werden und ein Fehler führt stets zum vollständigen
+        // Rollback statt zu einer Teilbuchung.
+        const productIds = [
+          ...new Set(dto.items.map((item) => item.productId)),
+        ];
+        const products = await prisma.product.findMany({
+          where: { id: { in: productIds }, eventId: dto.eventId },
+          include: { optionGroups: { include: { options: true } } },
+        });
+        const productMap = new Map(
+          products.map((product) => [product.id, product]),
+        );
+        if (productMap.size !== productIds.length) {
+          const missingProductId = productIds.find((id) => !productMap.has(id));
+          throw new BadRequestException(
+            ORDER_REJECTION_MESSAGES.PRODUCT_NOT_IN_EVENT(missingProductId),
+          );
+        }
+
+        if (dto.areaId) {
+          const area = await prisma.area.findFirst({
+            where: { id: dto.areaId, eventId: dto.eventId },
+            select: { id: true },
+          });
+          if (!area) {
+            throw new BadRequestException(
+              ORDER_REJECTION_MESSAGES.AREA_NOT_IN_EVENT,
+            );
+          }
+        }
+
         const activeSession = userId
           ? await prisma.cashierSession.findFirst({
               where: { userId, eventId: dto.eventId, status: "ACTIVE" },
@@ -1295,6 +1274,49 @@ export class OrdersService {
             ORDER_REJECTION_MESSAGES.USER_NOT_ACTIVE,
           );
         }
+
+        let totalAmount = 0;
+        const orderItemsData = dto.items.map((item) => {
+          const product = productMap.get(item.productId);
+          if (
+            product.availability === "OUT_OF_STOCK" ||
+            product.availability === "DISABLED"
+          ) {
+            throw new BadRequestException(
+              ORDER_REJECTION_MESSAGES.PRODUCT_OUT_OF_STOCK(product.name),
+            );
+          }
+
+          const { priceAtTime, variantId, variantName, extras } =
+            this.resolveOrderItemPricing(product, item.optionIds ?? []);
+          totalAmount += priceAtTime * item.quantity;
+          if (
+            !Number.isSafeInteger(totalAmount) ||
+            totalAmount > 2_147_483_647
+          ) {
+            throw new BadRequestException(
+              "Der Gesamtbetrag der Bestellung überschreitet den zulässigen Centbetrag.",
+            );
+          }
+
+          return {
+            productId: product.id,
+            quantity: item.quantity,
+            priceAtTime,
+            status: "PENDING" as const,
+            variantId,
+            variantName,
+            extras: extras.length > 0 ? (extras as any) : undefined,
+          };
+        });
+
+        const initialPaymentStatus =
+          totalPaid >= totalAmount
+            ? "PAID"
+            : totalPaid > 0
+              ? "PARTIALLY_PAID"
+              : "OPEN";
+
         const order = await prisma.order.create({
           data: {
             totalAmount,
@@ -1312,9 +1334,9 @@ export class OrdersService {
               create: orderItemsData,
             },
             payments:
-              dto.payments && dto.payments.length > 0
+              requestedPayments.length > 0
                 ? {
-                    create: dto.payments.map((p) => ({
+                    create: requestedPayments.map((p) => ({
                       amount: p.amount,
                       method: p.method,
                       status: "COMPLETED",
@@ -1457,23 +1479,9 @@ export class OrdersService {
     ) {
       throw new BadRequestException("A valid idempotencyKey is required");
     }
-    if (
-      typeof dto.reason !== "string" ||
-      dto.reason.trim().length === 0 ||
-      dto.reason.length > 500
-    ) {
-      throw new BadRequestException("A reason is required");
-    }
-    const payments = Array.isArray(dto.payments) ? dto.payments : [];
-    for (const payment of payments) {
-      if (
-        !payment ||
-        typeof payment.amount !== "number" ||
-        !["CASH", "CARD", "VOUCHER"].includes(payment.method)
-      ) {
-        throw new BadRequestException("Invalid payment in discard request");
-      }
-    }
+    const reason = this.normalizeCancellationReason(dto.reason);
+    const payments = dto.payments ?? [];
+    this.validatePayments(payments);
 
     // Serverkontakt zuerst, aber auch hier erneut geprueft: existiert die
     // Bestellung bereits, wird nichts geloescht (Abschnitt 7 "Verwerfen").
@@ -1521,7 +1529,7 @@ export class OrdersService {
       entityType: "Order",
       userId,
       details: {
-        reason: dto.reason,
+        reason,
         capturedByUserId: dto.capturedByUserId ?? null,
         legacy: isLegacy,
         eventId: dto.eventId ?? null,
@@ -1694,12 +1702,13 @@ export class OrdersService {
 
   async addPaymentsToOrder(
     orderId: string,
-    payments: { amount: number; method: "CASH" | "CARD" | "VOUCHER" }[],
+    payments: PaymentInputDto[],
     userId: string,
   ) {
     if (!payments || payments.length === 0) {
       throw new BadRequestException("No payments provided");
     }
+    const newPaid = this.validatePayments(payments);
 
     return await this.prisma.$transaction(async (prisma) => {
       const order = await prisma.order.findUnique({
@@ -1712,8 +1721,12 @@ export class OrdersService {
         throw new BadRequestException("Order is already fully paid");
 
       const currentPaid = order.payments.reduce((sum, p) => sum + p.amount, 0);
-      const newPaid = payments.reduce((sum, p) => sum + p.amount, 0);
       const totalPaid = currentPaid + newPaid;
+      if (!Number.isSafeInteger(totalPaid) || totalPaid > 2_147_483_647) {
+        throw new BadRequestException(
+          "Die Summe aller Zahlungen überschreitet den zulässigen Centbetrag.",
+        );
+      }
 
       const newPaymentStatus =
         totalPaid >= order.totalAmount ? "PAID" : "PARTIALLY_PAID";
@@ -1764,6 +1777,7 @@ export class OrdersService {
   }
 
   async cancelOrder(orderId: string, reason: string, userId: string) {
+    const normalizedReason = this.normalizeCancellationReason(reason);
     return await this.prisma.$transaction(async (prisma) => {
       const order = await prisma.order.findUnique({
         where: { id: orderId },
@@ -1804,7 +1818,7 @@ export class OrdersService {
           entityType: "Order",
           userId,
           details: {
-            reason,
+            reason: normalizedReason,
             totalAmount: order.totalAmount,
             paymentsCount: order.payments.length,
             vouchersCancelled: cancelledVouchers.count,
@@ -1817,6 +1831,7 @@ export class OrdersService {
   }
 
   async cancelOrderItem(orderItemId: string, reason: string, userId: string) {
+    const normalizedReason = this.normalizeCancellationReason(reason);
     return await this.prisma.$transaction(async (prisma) => {
       const item = await prisma.orderItem.findUnique({
         where: { id: orderItemId },
@@ -1866,7 +1881,7 @@ export class OrdersService {
           entityType: "OrderItem",
           userId,
           details: {
-            reason,
+            reason: normalizedReason,
             orderId: order.id,
             productId: item.productId,
             itemPrice: item.priceAtTime,

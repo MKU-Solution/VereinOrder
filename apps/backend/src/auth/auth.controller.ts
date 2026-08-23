@@ -12,6 +12,7 @@ import {
 import { AuthService } from "./auth.service";
 import { JwtAuthGuard } from "./jwt-auth.guard";
 import { MaintenancePublic } from "../maintenance/maintenance.decorator";
+import { LoginDto, SwitchUserDto } from "./auth.dto";
 
 @Controller("auth")
 export class AuthController {
@@ -22,7 +23,7 @@ export class AuthController {
   @MaintenancePublic()
   @HttpCode(HttpStatus.OK)
   @Post("login")
-  async login(@Body() body: any) {
+  async login(@Body() body: LoginDto) {
     const { username, pin } = body;
     const user = await this.authService.validateUser(username, pin);
     if (!user) {
@@ -46,8 +47,8 @@ export class AuthController {
   @HttpCode(HttpStatus.OK)
   @UseGuards(JwtAuthGuard)
   @Post("switch")
-  async switchUser(@Request() req: any, @Body() body: any) {
-    const user = await this.authService.validateUser(body?.username, body?.pin);
+  async switchUser(@Request() req: any, @Body() body: SwitchUserDto) {
+    const user = await this.authService.validateUser(body.username, body.pin);
     if (!user) {
       throw new ForbiddenException("Ungültiger Benutzername oder PIN");
     }

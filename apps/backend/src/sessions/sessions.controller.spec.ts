@@ -24,10 +24,14 @@ describe("SessionsController – Identität und Rollen", () => {
       eventId: "event-1",
       startingBalance: 5000,
     });
-    await controller.getSummary(request, "session-1");
-    await controller.closeSession(request, "session-1", {
-      closingBalance: 7500,
-    });
+    await controller.getSummary(request, { id: "session-1" });
+    await controller.closeSession(
+      request,
+      { id: "session-1" },
+      {
+        closingBalance: 7500,
+      },
+    );
 
     expect(service.getContext).toHaveBeenCalledWith("cashier-1");
     expect(service.getActiveSession).toHaveBeenCalledWith(

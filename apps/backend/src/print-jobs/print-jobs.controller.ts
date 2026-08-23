@@ -6,17 +6,20 @@ import {
   Post,
   Patch,
   Param,
+  ParseUUIDPipe,
   Body,
   Request,
   UseGuards,
 } from "@nestjs/common";
+import { PrintJobsService } from "./print-jobs.service";
 import {
-  PrinterInput,
-  PrintAttemptPhaseTarget,
-  PrintJobsService,
-  ReportOutcomeInput,
-  ResolveJobInput,
-} from "./print-jobs.service";
+  CreatePrinterDto,
+  PrintHeartbeatDto,
+  ReportPrintOutcomeDto,
+  ResolvePrintJobDto,
+  TransitionPrintPhaseDto,
+  UpdatePrinterDto,
+} from "./print-jobs.dto";
 import { JwtAuthGuard } from "../auth/jwt-auth.guard";
 import { RolesGuard } from "../common/guards/roles.guard";
 import { Roles } from "../common/decorators/roles.decorator";
@@ -38,26 +41,32 @@ export class PrintJobsController {
   @Patch(":id/phase")
   @UseGuards(PrintWorkerGuard)
   async transitionPhase(
-    @Param("id") id: string,
-    @Body("leaseId") leaseId: string,
-    @Body("phase") phase: PrintAttemptPhaseTarget,
-    @Body("cupsJobId") cupsJobId?: number,
+    @Param("id", new ParseUUIDPipe({ version: "4" })) id: string,
+    @Body() body: TransitionPrintPhaseDto,
   ) {
-    return this.printJobsService.transitionPhase(id, leaseId, phase, cupsJobId);
+    return this.printJobsService.transitionPhase(
+      id,
+      body.leaseId,
+      body.phase,
+      body.cupsJobId,
+    );
   }
 
   @Post(":id/heartbeat")
   @HttpCode(HttpStatus.OK)
   @UseGuards(PrintWorkerGuard)
-  async heartbeat(@Param("id") id: string, @Body("leaseId") leaseId: string) {
-    return this.printJobsService.heartbeat(id, leaseId);
+  async heartbeat(
+    @Param("id", new ParseUUIDPipe({ version: "4" })) id: string,
+    @Body() body: PrintHeartbeatDto,
+  ) {
+    return this.printJobsService.heartbeat(id, body.leaseId);
   }
 
   @Patch(":id/status")
   @UseGuards(PrintWorkerGuard)
   async reportOutcome(
-    @Param("id") id: string,
-    @Body() body: ReportOutcomeInput,
+    @Param("id", new ParseUUIDPipe({ version: "4" })) id: string,
+    @Body() body: ReportPrintOutcomeDto,
   ) {
     return this.printJobsService.reportOutcome(id, body);
   }
@@ -76,8 +85,8 @@ export class PrintJobsController {
   @Roles("ADMINISTRATOR", "EVENT_MANAGER")
   async resolveJob(
     @Request() req,
-    @Param("id") id: string,
-    @Body() body: ResolveJobInput,
+    @Param("id", new ParseUUIDPipe({ version: "4" })) id: string,
+    @Body() body: ResolvePrintJobDto,
   ) {
     return this.printJobsService.resolveJob(
       id,
@@ -110,7 +119,7 @@ export class PrintJobsController {
   @Post("printers")
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles("ADMINISTRATOR", "EVENT_MANAGER")
-  async createPrinter(@Request() req, @Body() data: PrinterInput) {
+  async createPrinter(@Request() req, @Body() data: CreatePrinterDto) {
     return this.printJobsService.createPrinter(data, req.user?.userId);
   }
 
@@ -119,8 +128,8 @@ export class PrintJobsController {
   @Roles("ADMINISTRATOR", "EVENT_MANAGER")
   async updatePrinter(
     @Request() req,
-    @Param("id") id: string,
-    @Body() data: PrinterInput,
+    @Param("id", new ParseUUIDPipe({ version: "4" })) id: string,
+    @Body() data: UpdatePrinterDto,
   ) {
     return this.printJobsService.updatePrinter(id, data, req.user?.userId);
   }
@@ -128,7 +137,9 @@ export class PrintJobsController {
   @Post("printers/:id/test")
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles("ADMINISTRATOR", "EVENT_MANAGER")
-  async testPrinter(@Param("id") id: string) {
+  async testPrinter(
+    @Param("id", new ParseUUIDPipe({ version: "4" })) id: string,
+  ) {
     return this.printJobsService.createTestJob(id);
   }
 }
