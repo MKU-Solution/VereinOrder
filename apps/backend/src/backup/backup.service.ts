@@ -418,17 +418,20 @@ export class BackupService implements OnModuleInit {
           DO UPDATE SET "lastNumber" = EXCLUDED."lastNumber", "updatedAt" = now()
         `);
 
-        // Issue #103 (B6): "Order"."orderNumber" ist eine SERIAL. createMany
-        // schreibt die alten Werte zurueck, ruehrt die Sequenz dabei aber
-        // nicht an — der naechste Verkauf zoege sonst wieder die 1 und verg-
-        // aebe eine bereits vorhandene Bestellnummer ein zweites Mal (Issue
-        // #102). setval auf das tatsaechliche Maximum setzt sie nach.
+        // "Order"."orderNumber" ist eine SERIAL. createMany schreibt die
+        // historischen Werte zurueck, ruehrt die Sequenz dabei aber nicht an.
+        // Erst nachdem alle Bestellungen geschrieben sind, wird sie auf das
+        // tatsaechliche Maximum gesetzt. Fuer eine leere Sicherung oder nur
+        // importierte Nummern <= 0 muss is_called false sein: setval(..., 0,
+        // true) ist bei einer SERIAL mit MINVALUE 1 ungueltig; setval(..., 1,
+        // false) liefert beim naechsten nextval korrekt die 1.
         await tx.$executeRaw(Prisma.sql`
           SELECT setval(
             pg_get_serial_sequence('"Order"', 'orderNumber'),
-            COALESCE((SELECT MAX("orderNumber") FROM "Order"), 0),
-            true
+            GREATEST(COALESCE(MAX("orderNumber"), 1), 1),
+            COALESCE(MAX("orderNumber") >= 1, false)
           )
+          FROM "Order"
         `);
 
         return {
