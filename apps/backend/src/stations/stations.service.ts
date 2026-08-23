@@ -1,8 +1,47 @@
-import { Injectable, Inject, NotFoundException } from "@nestjs/common";
+import {
+  Injectable,
+  Inject,
+  BadRequestException,
+  NotFoundException,
+} from "@nestjs/common";
 import { PrismaClient } from "@vereinorder/database";
 import { PRISMA_CLIENT } from "../prisma/prisma.module";
 import { deriveFulfillmentStatus } from "../orders/fulfillment-status";
 import { productAtStationFilter } from "../common/target-station";
+import {
+  CreateStationDto,
+  MutableStationItemStatus,
+  UpdateStationDto,
+} from "./dto/station.dto";
+
+const STATION_CREATE_KEYS = [
+  "name",
+  "shortName",
+  "color",
+  "sortOrder",
+  "isActive",
+  "eventId",
+  "printerId",
+] as const;
+const STATION_UPDATE_KEYS = [
+  "name",
+  "shortName",
+  "color",
+  "sortOrder",
+  "isActive",
+  "printerId",
+] as const;
+
+function pickStationFields<T extends object, K extends readonly (keyof T)[]>(
+  data: T,
+  keys: K,
+): Pick<T, K[number]> {
+  const result = {} as Pick<T, K[number]>;
+  for (const key of keys) {
+    if (key in data) result[key] = data[key];
+  }
+  return result;
+}
 
 @Injectable()
 export class StationsService {
@@ -27,12 +66,41 @@ export class StationsService {
     });
   }
 
-  async create(data: any) {
-    return this.prisma.station.create({ data });
+  async create(data: CreateStationDto) {
+    const station = pickStationFields(data, STATION_CREATE_KEYS);
+    await this.assertEventExists(station.eventId);
+    await this.assertPrinterExists(station.printerId);
+    return this.prisma.station.create({ data: station });
   }
 
-  async update(id: string, data: any) {
-    return this.prisma.station.update({ where: { id }, data });
+  async update(id: string, data: UpdateStationDto) {
+    const existing = await this.prisma.station.findUnique({ where: { id } });
+    if (!existing) throw new NotFoundException("Station nicht gefunden");
+    const station = pickStationFields(data, STATION_UPDATE_KEYS);
+    if ("printerId" in station)
+      await this.assertPrinterExists(station.printerId);
+    return this.prisma.station.update({ where: { id }, data: station });
+  }
+
+  private async assertPrinterExists(printerId?: string | null) {
+    if (!printerId) return;
+    const printer = await this.prisma.printer.findUnique({
+      where: { id: printerId },
+      select: { id: true },
+    });
+    if (!printer)
+      throw new BadRequestException("Der gewählte Drucker existiert nicht.");
+  }
+
+  private async assertEventExists(eventId: string) {
+    const event = await this.prisma.event.findUnique({
+      where: { id: eventId },
+      select: { id: true },
+    });
+    if (!event)
+      throw new BadRequestException(
+        "Die gewählte Veranstaltung existiert nicht.",
+      );
   }
   async getPendingItems(stationId: string) {
     return this.prisma.orderItem.findMany({
@@ -50,7 +118,7 @@ export class StationsService {
     });
   }
 
-  async updateItemStatus(itemId: string, status: string) {
+  async updateItemStatus(itemId: string, status: MutableStationItemStatus) {
     if (!["PENDING", "PREPARING", "READY", "CANCELLED"].includes(status)) {
       throw new NotFoundException("Invalid status");
     }
@@ -71,7 +139,7 @@ export class StationsService {
 
       const updatedItem = await prisma.orderItem.update({
         where: { id: itemId },
-        data: { status: status as any },
+        data: { status },
         include: { order: { include: { items: true } } },
       });
 

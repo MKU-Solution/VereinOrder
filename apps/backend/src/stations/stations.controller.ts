@@ -6,12 +6,18 @@ import {
   Param,
   Body,
   Query,
+  ParseUUIDPipe,
   UseGuards,
 } from "@nestjs/common";
 import { StationsService } from "./stations.service";
 import { JwtAuthGuard } from "../auth/jwt-auth.guard";
 import { RolesGuard } from "../common/guards/roles.guard";
 import { Roles } from "../common/decorators/roles.decorator";
+import {
+  CreateStationDto,
+  UpdateOrderItemStatusDto,
+  UpdateStationDto,
+} from "./dto/station.dto";
 
 @Controller("stations")
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -26,33 +32,40 @@ export class StationsController {
 
   @Get(":id/items")
   @Roles("ADMINISTRATOR", "STATION", "WAITER")
-  async getPendingItems(@Param("id") id: string) {
+  async getPendingItems(
+    @Param("id", new ParseUUIDPipe({ version: "4" })) id: string,
+  ) {
     return this.stationsService.getPendingItems(id);
   }
 
   @Get("admin/all")
   @Roles("ADMINISTRATOR", "EVENT_MANAGER")
-  async findAllAdmin(@Query("eventId") eventId: string) {
+  async findAllAdmin(
+    @Query("eventId", new ParseUUIDPipe({ version: "4" })) eventId: string,
+  ) {
     return this.stationsService.findAllAdmin(eventId);
   }
 
   @Post()
   @Roles("ADMINISTRATOR", "EVENT_MANAGER")
-  async create(@Body() data: any) {
+  async create(@Body() data: CreateStationDto) {
     return this.stationsService.create(data);
   }
 
   @Patch(":id")
   @Roles("ADMINISTRATOR", "EVENT_MANAGER")
-  async update(@Param("id") id: string, @Body() data: any) {
+  async update(
+    @Param("id", new ParseUUIDPipe({ version: "4" })) id: string,
+    @Body() data: UpdateStationDto,
+  ) {
     return this.stationsService.update(id, data);
   }
   @Patch("items/:itemId/status")
   @Roles("ADMINISTRATOR", "STATION", "WAITER")
   async updateItemStatus(
-    @Param("itemId") itemId: string,
-    @Body("status") status: string,
+    @Param("itemId", new ParseUUIDPipe({ version: "4" })) itemId: string,
+    @Body() data: UpdateOrderItemStatusDto,
   ) {
-    return this.stationsService.updateItemStatus(itemId, status);
+    return this.stationsService.updateItemStatus(itemId, data.status);
   }
 }

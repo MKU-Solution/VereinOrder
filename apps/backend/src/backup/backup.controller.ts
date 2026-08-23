@@ -13,6 +13,7 @@ import { RolesGuard } from "../common/guards/roles.guard";
 import { Roles } from "../common/decorators/roles.decorator";
 import { MaintenancePublic } from "../maintenance/maintenance.decorator";
 import * as fs from "fs";
+import { BackupFilenameParamDto } from "./backup.dto";
 
 // Issue #67: "alles unter /backup" bleibt laut Entwurf Abschnitt 6 auch bei
 // LOCKED erreichbar, weiterhin nur fuer ADMINISTRATOR (JwtAuthGuard +
@@ -39,7 +40,11 @@ export class BackupController {
 
   @Get("download/:filename")
   @Roles("ADMINISTRATOR")
-  async downloadBackup(@Param("filename") filename: string, @Res() res: any) {
+  async downloadBackup(
+    @Param() params: BackupFilenameParamDto,
+    @Res() res: any,
+  ) {
+    const { filename } = params;
     const filePath = this.backupService.getBackupFilePath(filename);
     const stat = fs.statSync(filePath);
 
@@ -64,9 +69,9 @@ export class BackupController {
   @Roles("ADMINISTRATOR")
   async restoreBackup(
     @Request() req: any,
-    @Param("filename") filename: string,
+    @Param() params: BackupFilenameParamDto,
   ) {
     const userId = req.user?.userId;
-    return this.backupService.restoreBackup(filename, userId);
+    return this.backupService.restoreBackup(params.filename, userId);
   }
 }

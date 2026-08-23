@@ -873,4 +873,14 @@ describe("EventsService – Wächtervertrag für Issue #53", () => {
     ).rejects.toBeInstanceOf(ConflictException);
     expect(tx.eventPickupCounter.deleteMany).not.toHaveBeenCalled();
   });
+
+  it("weist eine zu tief verschachtelte Konfiguration vor Hash und Transaktion ab", async () => {
+    let payload: unknown = "Ende";
+    for (let depth = 0; depth < 22; depth += 1) payload = { next: payload };
+
+    await expect(
+      contract.importConfig("admin-1", "import-depth-key", payload),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
 });

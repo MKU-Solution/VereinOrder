@@ -2,7 +2,6 @@ import {
   Injectable,
   Inject,
   NotFoundException,
-  BadRequestException,
   OnModuleInit,
 } from "@nestjs/common";
 import { Prisma, PrismaClient } from "@vereinorder/database";
@@ -12,6 +11,7 @@ import * as path from "path";
 import * as crypto from "crypto";
 import { planFallbackCategory } from "../common/fallback-category";
 import { MaintenanceStateService } from "../maintenance/maintenance-state.service";
+import { parseBackupDocument } from "./backup-document";
 
 // Issue #103 (B9): Die Voreinstellung von Prisma fuer interaktive
 // Transaktionen ist 5 Sekunden. Vierzehn deleteMany und ebenso viele
@@ -254,13 +254,10 @@ export class BackupService implements OnModuleInit {
   async restoreBackup(filename: string, userId?: string) {
     const filePath = this.getBackupFilePath(filename);
     const content = fs.readFileSync(filePath, "utf-8");
-    const parsed = JSON.parse(content);
-
-    if (!parsed.data || !parsed.version) {
-      throw new BadRequestException(
-        "Ungültiges oder beschädigtes Backup-Dateiformat.",
-      );
-    }
+    // Der komplette Strukturvertrag wird vor Sicherheitssicherung und
+    // Transaktion geprüft. Manipulierte Dateien dürfen keinerlei Schreibzugriff
+    // auslösen – auch nicht über zusätzliche Prisma-Felder.
+    const parsed = parseBackupDocument(content);
 
     // 1. Sicherheitssicherung, bevor irgendetwas angefasst wird.
     // Issue #103 (B1): Der Parameter von createBackup ist userId, nicht der
@@ -271,7 +268,10 @@ export class BackupService implements OnModuleInit {
     // Sicherheitssicherung gehoert deshalb dem tatsaechlich Handelnden.
     await this.createBackup(userId);
 
-    const { data } = parsed;
+    // Der Parser hat jedes Tabellenobjekt bereits anhand seiner Allowlist
+    // geprüft. Ab hier übernimmt Prisma die konkreten CreateMany-Eingabetypen.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const data = parsed.data as Record<keyof typeof parsed.data, any[]>;
 
     // 2. Perform restoration in transactional sequence
     const restoreResult = await this.prisma.$transaction(

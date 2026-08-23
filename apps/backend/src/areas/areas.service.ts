@@ -1,6 +1,12 @@
-import { Injectable, Inject, NotFoundException } from "@nestjs/common";
+import {
+  BadRequestException,
+  Injectable,
+  Inject,
+  NotFoundException,
+} from "@nestjs/common";
 import { PrismaClient } from "@vereinorder/database";
 import { PRISMA_CLIENT } from "../prisma/prisma.module";
+import { CreateAreaDto, UpdateAreaDto } from "./dto/area.dto";
 
 @Injectable()
 export class AreasService {
@@ -13,17 +19,26 @@ export class AreasService {
     });
   }
 
-  async create(data: { name: string; sortOrder?: number; eventId: string }) {
+  async create(data: CreateAreaDto) {
+    const event = await this.prisma.event.findUnique({
+      where: { id: data.eventId },
+      select: { id: true },
+    });
+    if (!event) {
+      throw new BadRequestException(
+        "Die gewählte Veranstaltung existiert nicht.",
+      );
+    }
     return this.prisma.area.create({
       data: {
         name: data.name,
-        sortOrder: data.sortOrder || 0,
+        sortOrder: data.sortOrder ?? 0,
         eventId: data.eventId,
       },
     });
   }
 
-  async update(id: string, data: { name?: string; sortOrder?: number }) {
+  async update(id: string, data: UpdateAreaDto) {
     const area = await this.prisma.area.findUnique({ where: { id } });
     if (!area) throw new NotFoundException("Area not found");
 

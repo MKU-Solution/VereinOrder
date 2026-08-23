@@ -5,30 +5,30 @@ import { EventsController } from "./events.controller";
 type EventManagementControllerContract = {
   duplicate: (
     request: any,
-    sourceEventId: string,
+    sourceEventId: { sourceId: string },
     body: { name?: string },
     idempotencyKey: string,
   ) => Promise<unknown>;
   copyAssortment: (
     request: any,
-    sourceEventId: string,
+    sourceEventId: { sourceId: string },
     body: {
       targetEventId: string;
       stationMappings: Record<string, string | null>;
     },
     idempotencyKey: string,
   ) => Promise<unknown>;
-  exportConfig: (sourceEventId: string) => Promise<unknown>;
+  exportConfig: (sourceEventId: { id: string }) => Promise<unknown>;
   importConfig: (
     request: any,
     body: unknown,
     idempotencyKey: string,
   ) => Promise<unknown>;
-  testDataSummary: (eventId: string) => Promise<unknown>;
+  testDataSummary: (eventId: { id: string }) => Promise<unknown>;
   cleanTestData: (
     request: any,
-    eventId: string,
-    confirmationName: string,
+    eventId: { id: string },
+    confirmationName: { confirmationName: string },
     idempotencyKey: string,
   ) => Promise<unknown>;
 };
@@ -79,31 +79,43 @@ describe("EventsController – Verwaltungsvertrag für Issue #53", () => {
       stationMappings: { "station-1": "station-2" },
     };
     const importBody = { schemaVersion: 1, event: { name: "Import" } };
-    await contract.duplicate(request, "source-1", { name: "Kopie" }, key);
-    await contract.copyAssortment(request, "source-1", copyBody, key);
-    await contract.exportConfig("source-1");
+    const source = { sourceId: "2e5af1e2-3f1f-4ab2-bb07-cce2df311c34" };
+    const event = { id: "07942d75-977d-4d6b-923d-6e690f3b8a73" };
+    await contract.duplicate(request, source, { name: "Kopie" }, key);
+    await contract.copyAssortment(request, source, copyBody, key);
+    await contract.exportConfig(event);
     await contract.importConfig(request, importBody, key);
-    await contract.testDataSummary("test-event-1");
-    await contract.cleanTestData(request, "test-event-1", "Testfest", key);
+    await contract.testDataSummary(event);
+    await contract.cleanTestData(
+      request,
+      event,
+      { confirmationName: "Testfest" },
+      key,
+    );
 
-    expect(service.duplicate).toHaveBeenCalledWith("source-1", "admin-1", key, {
-      name: "Kopie",
-    });
+    expect(service.duplicate).toHaveBeenCalledWith(
+      source.sourceId,
+      "admin-1",
+      key,
+      {
+        name: "Kopie",
+      },
+    );
     expect(service.copyAssortment).toHaveBeenCalledWith(
-      "source-1",
+      source.sourceId,
       "admin-1",
       key,
       copyBody,
     );
-    expect(service.exportConfig).toHaveBeenCalledWith("source-1");
+    expect(service.exportConfig).toHaveBeenCalledWith(event.id);
     expect(service.importConfig).toHaveBeenCalledWith(
       "admin-1",
       key,
       importBody,
     );
-    expect(service.testDataSummary).toHaveBeenCalledWith("test-event-1");
+    expect(service.testDataSummary).toHaveBeenCalledWith(event.id);
     expect(service.cleanTestData).toHaveBeenCalledWith(
-      "test-event-1",
+      event.id,
       "admin-1",
       "Testfest",
       key,

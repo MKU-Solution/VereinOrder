@@ -86,7 +86,7 @@ describe("OrdersService – eventgebundener Betriebsmodus", () => {
     },
   );
 
-  it("weist Produkte eines anderen Events vor der Transaktion zurück", async () => {
+  it("weist Produkte eines anderen Events innerhalb der Schreibtransaktion zurück", async () => {
     const prisma = createPrisma({ status: "TEST_MODE", testMode: true });
     prisma.product.findMany.mockResolvedValue([]);
     const service = new OrdersService(prisma, createAuditServiceStub() as any);
@@ -97,15 +97,15 @@ describe("OrdersService – eventgebundener Betriebsmodus", () => {
         items: [{ productId: "foreign-product", quantity: 1 }],
       }),
     ).rejects.toBeInstanceOf(BadRequestException);
-    expect(prisma.$transaction).not.toHaveBeenCalled();
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
     expect(prisma.order.create).not.toHaveBeenCalled();
   });
 
   // Belegt Befund 2 aus der Pruefung der Projektleitung: eine doppelt
   // angegebene optionId darf nicht still entdoppelt werden, sonst zaehlt
   // sie in einer MULTIPLE-Gruppe ohne maxSelect doppelt und verdoppelt den
-  // Aufpreis. Die Ablehnung greift schon vor der Transaktion, weil
-  // resolveOrderItemPricing beim Aufbau von orderItemsData ausgefuehrt wird.
+  // Aufpreis. Die Ablehnung greift innerhalb derselben Transaktion wie der
+  // spätere Write und lässt dadurch keine Teilbuchung zurück.
   it("weist eine doppelt angegebene Antwortkennung ab, statt den Aufpreis stillschweigend zu verdoppeln", async () => {
     const productWithToppings = {
       ...product,
@@ -143,7 +143,7 @@ describe("OrdersService – eventgebundener Betriebsmodus", () => {
         ],
       }),
     ).rejects.toBeInstanceOf(BadRequestException);
-    expect(prisma.$transaction).not.toHaveBeenCalled();
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
     expect(prisma.order.create).not.toHaveBeenCalled();
   });
 });

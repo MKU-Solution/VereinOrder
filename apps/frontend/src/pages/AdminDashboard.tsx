@@ -282,6 +282,9 @@ export const AdminDashboard = () => {
     shortName?: string;
     sortOrder: number;
     printerId?: string;
+    role: string;
+    pin: string;
+    isActive: boolean;
     // Zielstation der Kategorie (Issue #84) - gilt für alle Produkte der
     // Kategorie ohne eigene Ausnahme. Nur für activeTab === "categories".
     targetStationId?: string;
@@ -290,6 +293,9 @@ export const AdminDashboard = () => {
     shortName: "",
     sortOrder: 0,
     printerId: "",
+    role: "WAITER",
+    pin: "",
+    isActive: true,
     targetStationId: "",
   });
   const [modalError, setModalError] = useState("");
@@ -655,6 +661,9 @@ export const AdminDashboard = () => {
         shortName: "",
         sortOrder: item?.sortOrder ?? 0,
         printerId: "",
+        role: "WAITER",
+        pin: "",
+        isActive: true,
         targetStationId: item?.targetStationId || "",
       });
       setIsModalOpen(true);
@@ -682,6 +691,9 @@ export const AdminDashboard = () => {
           shortName: item.shortName || "",
           sortOrder: item.sortOrder ?? 0,
           printerId: item.printerId || "",
+          role: item.role || "WAITER",
+          pin: "",
+          isActive: item.isActive ?? true,
           targetStationId: "",
         });
       } else {
@@ -691,6 +703,9 @@ export const AdminDashboard = () => {
           shortName: "",
           sortOrder: 0,
           printerId: "",
+          role: "WAITER",
+          pin: "",
+          isActive: true,
           targetStationId: "",
         });
       }
@@ -820,12 +835,26 @@ export const AdminDashboard = () => {
             await api.post(endpoint, { ...payload, eventId });
           }
         } else {
-          // Benutzer verwenden weiterhin den bisherigen, nicht erweiterten Modalumfang.
-          const payload = {
-            name: formData.name,
-            sortOrder: formData.sortOrder,
-            printerId: formData.printerId,
-          };
+          const username = formData.name.trim();
+          if (!username) {
+            setModalError("Bitte gib einen Benutzernamen ein.");
+            return;
+          }
+          if (!editingItem && !/^\d{4,12}$/.test(formData.pin)) {
+            setModalError("Die PIN muss aus 4 bis 12 Ziffern bestehen.");
+            return;
+          }
+          const payload = editingItem
+            ? {
+                username,
+                role: formData.role,
+                isActive: formData.isActive,
+              }
+            : {
+                username,
+                pin: formData.pin,
+                role: formData.role,
+              };
           if (editingItem) {
             await api.patch(`${endpoint}/${editingItem.id}`, payload);
           } else {
@@ -1227,7 +1256,7 @@ export const AdminDashboard = () => {
     setIsActivating(true);
     try {
       await api.post(`/events/${rksvTargetEvent.id}/activate`, {
-        confirmRksvExemption: true,
+        confirmed: true,
       });
       setRksvModalOpen(false);
       fetchData();
@@ -3533,7 +3562,7 @@ export const AdminDashboard = () => {
                   htmlFor="item-name"
                   className="text-xs font-bold text-slate-400 block mb-1"
                 >
-                  Bezeichnung
+                  {activeTab === "users" ? "Benutzername" : "Bezeichnung"}
                 </label>
                 <input
                   id="item-name"
@@ -3544,7 +3573,9 @@ export const AdminDashboard = () => {
                   onChange={(e) =>
                     setFormData({ ...formData, name: e.target.value })
                   }
-                  placeholder="Name..."
+                  placeholder={
+                    activeTab === "users" ? "Benutzername..." : "Name..."
+                  }
                   className="w-full min-h-11 bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 text-white"
                 />
               </div>
@@ -3629,27 +3660,98 @@ export const AdminDashboard = () => {
                 </div>
               )}
 
-              <div>
-                <label
-                  htmlFor="item-sort-order"
-                  className="text-xs font-bold text-slate-400 block mb-1"
-                >
-                  Sortierung
-                </label>
-                <input
-                  id="item-sort-order"
-                  type="number"
-                  step="1"
-                  value={formData.sortOrder}
-                  onChange={(e) =>
-                    setFormData({
-                      ...formData,
-                      sortOrder: Number(e.target.value),
-                    })
-                  }
-                  className="w-full min-h-11 bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 text-white"
-                />
-              </div>
+              {activeTab === "users" && (
+                <>
+                  <div>
+                    <label
+                      htmlFor="user-role"
+                      className="text-xs font-bold text-slate-400 block mb-1"
+                    >
+                      Rolle
+                    </label>
+                    <select
+                      id="user-role"
+                      value={formData.role}
+                      onChange={(e) =>
+                        setFormData({ ...formData, role: e.target.value })
+                      }
+                      className="w-full min-h-11 bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 text-white"
+                    >
+                      <option value="ADMINISTRATOR">Administrator</option>
+                      <option value="EVENT_MANAGER">
+                        Veranstaltungsleitung
+                      </option>
+                      <option value="WAITER">Kellner</option>
+                      <option value="CASHIER">Kasse</option>
+                      <option value="STATION">Station</option>
+                      <option value="RUNNER">Läufer</option>
+                      <option value="REVISION">Revision</option>
+                    </select>
+                  </div>
+                  {!editingItem && (
+                    <div>
+                      <label
+                        htmlFor="user-pin"
+                        className="text-xs font-bold text-slate-400 block mb-1"
+                      >
+                        PIN (4–12 Ziffern)
+                      </label>
+                      <input
+                        id="user-pin"
+                        type="password"
+                        inputMode="numeric"
+                        required
+                        minLength={4}
+                        maxLength={12}
+                        value={formData.pin}
+                        onChange={(e) =>
+                          setFormData({ ...formData, pin: e.target.value })
+                        }
+                        className="w-full min-h-11 bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 text-white"
+                      />
+                    </div>
+                  )}
+                  {editingItem && (
+                    <label className="flex min-h-11 items-center gap-3 text-sm text-slate-200">
+                      <input
+                        type="checkbox"
+                        checked={formData.isActive}
+                        onChange={(e) =>
+                          setFormData({
+                            ...formData,
+                            isActive: e.target.checked,
+                          })
+                        }
+                      />
+                      Benutzer ist aktiv
+                    </label>
+                  )}
+                </>
+              )}
+
+              {activeTab !== "users" && (
+                <div>
+                  <label
+                    htmlFor="item-sort-order"
+                    className="text-xs font-bold text-slate-400 block mb-1"
+                  >
+                    Sortierung
+                  </label>
+                  <input
+                    id="item-sort-order"
+                    type="number"
+                    step="1"
+                    value={formData.sortOrder}
+                    onChange={(e) =>
+                      setFormData({
+                        ...formData,
+                        sortOrder: Number(e.target.value),
+                      })
+                    }
+                    className="w-full min-h-11 bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 text-white"
+                  />
+                </div>
+              )}
               <div className="flex gap-2 justify-end pt-2">
                 <button
                   type="button"

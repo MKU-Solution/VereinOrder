@@ -14,6 +14,7 @@ import {
 import { PRISMA_CLIENT } from "../prisma/prisma.module";
 import { createHash } from "crypto";
 import { planFallbackCategory } from "../common/fallback-category";
+import { CreateEventDto, UpdateEventDto } from "./events.dto";
 
 @Injectable()
 export class EventsService {
@@ -137,7 +138,7 @@ export class EventsService {
     return event;
   }
 
-  async create(data: any, userId?: string) {
+  async create(data: CreateEventDto, userId?: string) {
     const event = await this.prisma.event.create({
       data: {
         name: data.name,
@@ -166,33 +167,32 @@ export class EventsService {
     return event;
   }
 
-  async update(id: string, data: any, userId?: string) {
-    if (data.status !== undefined || data.testMode !== undefined)
-      throw new BadRequestException(
-        "Betriebsmodus darf nur über die expliziten Lifecycle-Aktionen geändert werden.",
-      );
+  async update(id: string, data: UpdateEventDto, userId?: string) {
     const existing = await this.prisma.event.findUnique({ where: { id } });
     if (!existing) throw new NotFoundException("Event not found");
 
+    // Die DTO-Allowlist schliesst status/testMode und alle Auditfelder aus.
+    // Lifecycle-Aenderungen sind ausschliesslich activate() und changeStatus().
+    const { name, organizer, location, startTime, endTime, timezone } = data;
     const event = await this.prisma.event.update({
       where: { id },
       data: {
-        name: data.name !== undefined ? data.name : undefined,
-        organizer: data.organizer !== undefined ? data.organizer : undefined,
-        location: data.location !== undefined ? data.location : undefined,
+        name: name !== undefined ? name : undefined,
+        organizer: organizer !== undefined ? organizer : undefined,
+        location: location !== undefined ? location : undefined,
         startTime:
-          data.startTime !== undefined
-            ? data.startTime
-              ? new Date(data.startTime)
+          startTime !== undefined
+            ? startTime
+              ? new Date(startTime)
               : null
             : undefined,
         endTime:
-          data.endTime !== undefined
-            ? data.endTime
-              ? new Date(data.endTime)
+          endTime !== undefined
+            ? endTime
+              ? new Date(endTime)
               : null
             : undefined,
-        timezone: data.timezone !== undefined ? data.timezone : undefined,
+        timezone: timezone !== undefined ? timezone : undefined,
       },
     });
 
@@ -203,7 +203,7 @@ export class EventsService {
           entityId: event.id,
           entityType: "Event",
           userId,
-          details: { changes: data },
+          details: { changes: data as unknown as Prisma.InputJsonValue },
         },
       });
     }
@@ -1079,6 +1079,35 @@ export class EventsService {
   }
 
   private validateImport(input: unknown): any {
+    // Vor canonicalJson iterativ begrenzen: Sehr tiefe oder zyklische
+    // Direktaufrufe dürfen keinen Rekursionsabsturz auslösen.
+    const stack: Array<{ value: unknown; depth: number }> = [
+      { value: input, depth: 0 },
+    ];
+    const seen = new WeakSet<object>();
+    let nodes = 0;
+    while (stack.length) {
+      const current = stack.pop()!;
+      nodes += 1;
+      if (nodes > 20_000 || current.depth > 20) {
+        throw new BadRequestException(
+          "Die Konfigurationsdatei ist zu groß oder zu tief verschachtelt.",
+        );
+      }
+      if (current.value && typeof current.value === "object") {
+        if (seen.has(current.value)) {
+          throw new BadRequestException(
+            "Die Konfigurationsdatei enthält eine ungültige Referenz.",
+          );
+        }
+        seen.add(current.value);
+        for (const child of Array.isArray(current.value)
+          ? current.value
+          : Object.values(current.value)) {
+          stack.push({ value: child, depth: current.depth + 1 });
+        }
+      }
+    }
     if (Buffer.byteLength(this.canonicalJson(input), "utf8") > 1_000_000) {
       throw new BadRequestException("Die Konfigurationsdatei ist zu groß.");
     }

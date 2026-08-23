@@ -12,6 +12,8 @@ import { UsersService } from "./users.service";
 import { JwtAuthGuard } from "../auth/jwt-auth.guard";
 import { RolesGuard } from "../common/guards/roles.guard";
 import { Roles } from "../common/decorators/roles.decorator";
+import { IdParamDto } from "../common/validation/request.dto";
+import { CreateUserDto, UpdateUserDto, UpdateUserPinDto } from "./users.dto";
 
 @Controller("users")
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -26,7 +28,7 @@ export class UsersController {
 
   @Post()
   @Roles("ADMINISTRATOR")
-  async create(@Request() req: any, @Body() body: any) {
+  async create(@Request() req: any, @Body() body: CreateUserDto) {
     const userId = req.user?.userId;
     return this.usersService.create(body, userId);
   }
@@ -35,21 +37,21 @@ export class UsersController {
   @Roles("ADMINISTRATOR")
   async update(
     @Request() req: any,
-    @Param("id") id: string,
-    @Body() body: any,
+    @Param() params: IdParamDto,
+    @Body() body: UpdateUserDto,
   ) {
     const userId = req.user?.userId;
-    return this.usersService.update(id, body, userId);
+    return this.usersService.update(params.id, body, userId);
   }
 
   @Patch(":id/pin")
   @Roles("ADMINISTRATOR")
   async updatePin(
     @Request() req: any,
-    @Param("id") id: string,
-    @Body("pin") pin: string,
+    @Param() params: IdParamDto,
+    @Body() body: UpdateUserPinDto,
   ) {
     const userId = req.user?.userId;
-    return this.usersService.updatePin(id, pin, userId);
+    return this.usersService.updatePin(params.id, body.pin, userId);
   }
 }

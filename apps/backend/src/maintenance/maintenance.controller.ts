@@ -18,6 +18,7 @@ import {
   PublicMaintenanceState,
   toPublicMaintenanceState,
 } from "./maintenance.types";
+import { StartMaintenanceDto } from "./maintenance.dto";
 
 /**
  * `@MaintenancePublic()` auf Klassenebene nimmt den GESAMTEN Controller von
@@ -61,7 +62,7 @@ export class MaintenanceController {
   @Roles("ADMINISTRATOR")
   async start(
     @Request() req: any,
-    @Body() body: { reason?: string; expectedUntil?: string },
+    @Body() body: StartMaintenanceDto,
   ): Promise<MaintenanceState> {
     return this.maintenanceService.start(
       req.user.userId,

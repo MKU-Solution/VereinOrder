@@ -77,7 +77,11 @@ describe("PrintJobsController", () => {
   it("reicht den Phasenwechsel mit Lease-Token und optionaler cupsJobId weiter", async () => {
     printJobsService.transitionPhase.mockResolvedValue({ id: "job-1" });
 
-    await controller.transitionPhase("job-1", "lease-1", "SPOOLED", 42);
+    await controller.transitionPhase("job-1", {
+      leaseId: "lease-1",
+      phase: "SPOOLED",
+      cupsJobId: 42,
+    });
 
     expect(printJobsService.transitionPhase).toHaveBeenCalledWith(
       "job-1",
@@ -91,7 +95,7 @@ describe("PrintJobsController", () => {
     printJobsService.heartbeat.mockResolvedValue({
       leaseExpiresAt: new Date(),
     });
-    await controller.heartbeat("job-1", "lease-1");
+    await controller.heartbeat("job-1", { leaseId: "lease-1" });
     expect(printJobsService.heartbeat).toHaveBeenCalledWith("job-1", "lease-1");
   });
 
