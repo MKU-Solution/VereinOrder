@@ -19,11 +19,21 @@ function createPrisma() {
     printer: { deleteMany: jest.fn(), createMany: jest.fn() },
     event: { deleteMany: jest.fn(), createMany: jest.fn() },
     user: { deleteMany: jest.fn(), createMany: jest.fn() },
-    auditLog: { create: jest.fn() },
+    // Issue #103: ProductVoucher wird jetzt explizit geleert und
+    // wiedereingespielt (B5/#100), auditLog vollstaendig ersetzt (B3/B7).
+    productVoucher: { deleteMany: jest.fn(), createMany: jest.fn() },
+    auditLog: {
+      deleteMany: jest.fn(),
+      createMany: jest.fn(),
+      create: jest.fn(),
+    },
+    $executeRaw: jest.fn(),
   };
-  Object.values(tx).forEach((entity) =>
-    Object.values(entity).forEach((fn) => fn.mockResolvedValue({ count: 0 })),
-  );
+  Object.entries(tx).forEach(([key, entity]) => {
+    if (key === "$executeRaw") return;
+    Object.values(entity).forEach((fn) => fn.mockResolvedValue({ count: 0 }));
+  });
+  tx.$executeRaw.mockResolvedValue(0);
   const emptyFindMany = () => jest.fn().mockResolvedValue([]);
   const prisma = {
     ...tx,
@@ -37,7 +47,14 @@ function createPrisma() {
       findMany: emptyFindMany(),
     },
     productOption: { ...tx.productOption, findMany: emptyFindMany() },
-    user: { ...tx.user, findMany: emptyFindMany() },
+    // findUnique wird nach der Transaktion aufgerufen, um zu pruefen, ob der
+    // handelnde Administrator in der wiederhergestellten Datenbank existiert
+    // (B8). In diesen Tests existiert er standardmaessig nicht.
+    user: {
+      ...tx.user,
+      findMany: emptyFindMany(),
+      findUnique: jest.fn().mockResolvedValue(null),
+    },
     order: { ...tx.order, findMany: emptyFindMany() },
     orderItem: { ...tx.orderItem, findMany: emptyFindMany() },
     payment: { ...tx.payment, findMany: emptyFindMany() },
@@ -45,6 +62,7 @@ function createPrisma() {
     printer: { ...tx.printer, findMany: emptyFindMany() },
     printJob: { ...tx.printJob, findMany: emptyFindMany() },
     auditLog: { ...tx.auditLog, findMany: emptyFindMany() },
+    productVoucher: { ...tx.productVoucher, findMany: emptyFindMany() },
     $transaction: jest.fn(async (callback: (client: typeof tx) => unknown) =>
       callback(tx),
     ),
