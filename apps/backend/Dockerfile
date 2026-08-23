@@ -47,6 +47,13 @@ COPY apps/backend/package.json ./apps/backend/
 RUN pnpm install --prod --frozen-lockfile
 
 COPY --from=builder /app/packages/database ./packages/database
+
+# pnpm install runs before the Prisma schema is present in this stage. Generate
+# the platform-specific production client after copying the database package;
+# otherwise @prisma/client falls back to its ungenerated stub at runtime.
+RUN pnpm --filter @vereinorder/database run db:generate \
+  && pnpm --filter @vereinorder/backend exec node -e "const { Prisma } = require('@vereinorder/database'); if (typeof Prisma.validator !== 'function') throw new Error('Prisma Client wurde nicht generiert')"
+
 COPY --from=builder /app/packages/shared ./packages/shared
 COPY --from=builder /app/apps/backend/dist ./apps/backend/dist
 
