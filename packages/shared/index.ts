@@ -39,6 +39,16 @@ export const ORDER_REJECTION_MESSAGES = {
     `Ein Produkt (${productId}) ist für diese Veranstaltung nicht hinterlegt. Bitte die Auswahl aktualisieren und erneut versuchen.`,
   PRODUCT_NOT_IN_EVENT_QUICK_SALE:
     "Ein Produkt gehört nicht zu dieser Veranstaltung. Bitte die Auswahl aktualisieren und erneut versuchen.",
+  // Issue #66, Stationskasse: eigene Meldung fuer ein Produkt, das zwar zur
+  // Veranstaltung gehoert, aber zu einer anderen Station als der gewaehlten
+  // (orders.service.ts, createQuickSale). Ohne diese Unterscheidung landet
+  // dieser Fall in PRODUCT_NOT_IN_EVENT_QUICK_SALE und schickt die Bedienung
+  // an der Kasse in die falsche Richtung: sie prueft die Veranstaltung,
+  // obwohl die stimmt, statt die Station zu wechseln. Bewusst ohne
+  // Stationsnamen oder -kennung - der Text geht an ein Bediengeraet, nicht
+  // in ein Protokoll.
+  PRODUCT_NOT_AT_STATION_QUICK_SALE:
+    "Dieses Produkt gehört zum Sortiment einer anderen Station. Bitte die Station wechseln oder das Produkt dort verkaufen.",
   AREA_NOT_IN_EVENT:
     "Der gewählte Bereich gehört nicht zu dieser Veranstaltung. Bitte einen anderen Bereich wählen.",
   ORDER_EMPTY:
@@ -47,4 +57,15 @@ export const ORDER_REJECTION_MESSAGES = {
     "Dieses Benutzerkonto ist nicht aktiv. Bitte bei der Administration melden.",
   IDEMPOTENCY_KEY_CONFLICT:
     "Für dieses Vorgangskennzeichen liegt bereits eine abweichende Bestellung vor. Bitte neu erfassen und erneut senden.",
+  // Issue #66, Stationskasse: Reissleine gegen einen entlaufenen
+  // Abholnummernzaehler. Der Verkauf wird abgewiesen, statt die Nummer
+  // umbrechen zu lassen - ein Umbruch gaebe zwei Personen dieselbe Nummer.
+  // Steht hier und nicht im Backend, weil es eine fachliche Ablehnung des
+  // Verkaufs ist, die beim Bedienpersonal ankommt, wie
+  // EVENT_NOT_ACTIVE_FOR_SALES und PRODUCT_NOT_IN_EVENT_QUICK_SALE. Wie
+  // diese beiden hat der Text bewusst KEIN Muster in
+  // apps/frontend/src/lib/offlineQueueClassify.ts: die Bonkassen senden nicht
+  // ueber die Offline-Warteschlange, der Text erreicht sie also nie.
+  PICKUP_NUMBER_EXHAUSTED:
+    "Der Abholnummernbereich dieser Veranstaltung ist erschöpft. Bitte bei der Administration melden; der Verkauf wurde nicht gebucht.",
 } as const;

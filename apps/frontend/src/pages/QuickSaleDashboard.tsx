@@ -13,38 +13,11 @@ import {
   Trash2,
 } from "lucide-react";
 import { api } from "../lib/api";
-
-interface QuickSaleOption {
-  id: string;
-  name: string;
-  priceEffect: number;
-  isActive: boolean;
-  sortOrder: number;
-}
-
-interface QuickSaleOptionGroup {
-  id: string;
-  name: string;
-  selectionType: "SINGLE" | "MULTIPLE";
-  isRequired: boolean;
-  minSelect: number;
-  maxSelect: number | null;
-  priceMode: "ABSOLUTE" | "SURCHARGE";
-  quickSaleTiles: boolean;
-  sortOrder: number;
-  options: QuickSaleOption[];
-}
-
-interface QuickSaleProduct {
-  id: string;
-  name: string;
-  shortName?: string | null;
-  price: number;
-  color?: string | null;
-  availability: "AVAILABLE" | "LOW_STOCK" | "OUT_OF_STOCK";
-  category?: { id: string; name: string; sortOrder: number } | null;
-  optionGroups: QuickSaleOptionGroup[];
-}
+import {
+  deriveQuickSaleTiles,
+  type QuickSaleProduct,
+  type QuickSaleTile,
+} from "../lib/quickSaleTiles";
 
 interface QuickSaleContext {
   id: string;
@@ -60,18 +33,7 @@ interface QuickSaleContext {
   products: QuickSaleProduct[];
 }
 
-interface SaleOption {
-  key: string;
-  productId: string;
-  optionIds: string[];
-  label: string;
-  detail?: string;
-  hint?: string;
-  price: number;
-  color?: string | null;
-  availability: QuickSaleProduct["availability"];
-  category: string;
-}
+type SaleOption = QuickSaleTile;
 
 interface CartLine extends SaleOption {
   quantity: number;
@@ -190,82 +152,14 @@ export const QuickSaleDashboard = () => {
     ],
     [context],
   );
-  const options = useMemo<SaleOption[]>(() => {
-    return (context?.products || []).flatMap((product) => {
-      const category = product.category?.name || "Ohne Kategorie";
-      const groups = product.optionGroups || [];
-
-      // Die Auffächerung in Kacheln hängt ausschließlich an der Gruppe mit
-      // quickSaleTiles === true, nie an priceMode oder der Anzahl der Gruppen.
-      const tileGroup = groups.find((g) => g.quickSaleTiles);
-
-      // Weitere Pflichtgruppen neben der Kachelgruppe: Der Schnellverkauf ist
-      // eine Ein-Tipp-Maske, deshalb kann er keine Rückfrage stellen. Sind sie
-      // alle aufpreisfrei (jede aktive Antwort mit priceEffect 0), wird die
-      // erste Antwort in gepflegter Reihenfolge verwendet und die Kachel trägt
-      // einen Hinweis. Trägt eine von ihnen einen Aufpreis, ist der
-      // Kachelpreis unbestimmt und das Produkt wird im Schnellverkauf nicht
-      // angeboten.
-      const otherRequiredGroups = groups.filter(
-        (g) => g.id !== tileGroup?.id && g.isRequired,
-      );
-      const isGroupSurchargeFree = (group: QuickSaleOptionGroup) =>
-        group.options
-          .filter((o) => o.isActive !== false)
-          .every((o) => o.priceEffect === 0);
-      const blockedByPaidRequiredGroup = otherRequiredGroups.some(
-        (g) => !isGroupSurchargeFree(g),
-      );
-      if (blockedByPaidRequiredGroup) return [];
-
-      const defaultOptions = otherRequiredGroups
-        .map((g) => g.options.filter((o) => o.isActive !== false)[0])
-        .filter((o): o is QuickSaleOption => !!o);
-      const defaultOptionIds = defaultOptions.map((o) => o.id);
-      const defaultHint =
-        defaultOptions.length > 0
-          ? `Standard: ${defaultOptions.map((o) => o.name).join(", ")}`
-          : undefined;
-
-      if (tileGroup) {
-        const activeTileOptions = tileGroup.options.filter(
-          (o) => o.isActive !== false,
-        );
-        return activeTileOptions.map((option) => {
-          const price =
-            tileGroup.priceMode === "ABSOLUTE"
-              ? option.priceEffect
-              : product.price + option.priceEffect;
-          return {
-            key: `${product.id}|${option.id}`,
-            productId: product.id,
-            optionIds: [option.id, ...defaultOptionIds],
-            label: product.shortName || product.name,
-            detail: option.name,
-            hint: defaultHint,
-            price,
-            color: product.color,
-            availability: product.availability,
-            category,
-          };
-        });
-      }
-
-      return [
-        {
-          key: product.id,
-          productId: product.id,
-          optionIds: defaultOptionIds,
-          label: product.shortName || product.name,
-          hint: defaultHint,
-          price: product.price,
-          color: product.color,
-          availability: product.availability,
-          category,
-        },
-      ];
-    });
-  }, [context]);
+  // Kachelableitung ausgelagert nach ../lib/quickSaleTiles.ts (Issue #66,
+  // Stationskasse): dieselbe Funktion wird auch von StationSaleDashboard.tsx
+  // benutzt, damit beide Kassen bei einer Änderung an den Auswahlgruppen
+  // nicht auseinanderlaufen.
+  const options = useMemo<SaleOption[]>(
+    () => deriveQuickSaleTiles(context?.products || []),
+    [context],
+  );
   const visibleOptions =
     selectedCategory === "Alle"
       ? options

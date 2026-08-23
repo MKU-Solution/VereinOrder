@@ -428,6 +428,17 @@ export class EventsService {
               where: { eventId: id, dataMode: "TEST" },
             });
 
+            // Issue #66: der Testzaehler der Abholnummer muss mit. Bliebe die
+            // Zeile stehen, zaehlte die bereinigte Testveranstaltung beim
+            // naechsten Probeverkauf bei 251 weiter, obwohl keine einzige
+            // Bestellung mehr dahintersteht. Ausdruecklich nur die Zeile mit
+            // dataMode = "TEST" - der Echtzaehler wird hier so wenig
+            // angefasst wie die Echtbestellungen.
+            const deletedPickupCounters =
+              await tx.eventPickupCounter.deleteMany({
+                where: { eventId: id, dataMode: "TEST" },
+              });
+
             const prepared = await tx.event.update({
               where: { id },
               data: { status: "PREPARED", testMode: false },
@@ -446,6 +457,7 @@ export class EventsService {
                   printJobsDeleted: deletedPrintJobs.count,
                   itemsDeleted: deletedOrderItems.count,
                   vouchersDeleted: deletedVouchers.count,
+                  pickupCountersDeleted: deletedPickupCounters.count,
                 },
               },
             });
@@ -464,6 +476,7 @@ export class EventsService {
                 sessions: deletedSessions.count,
                 printJobs: deletedPrintJobs.count,
                 vouchers: deletedVouchers.count,
+                pickupCounters: deletedPickupCounters.count,
               },
             };
           },

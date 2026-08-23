@@ -86,6 +86,29 @@ const STATION_SEED = {
 // damit ein versehentlich verlorenes oder doppeltes Produkt auffaellt.
 const STATION_SEED_PRODUCT_COUNT = 14;
 
+// Kennungen des repraesentativen Altstands fuer die Migration
+// "20260823100000_add_station_sale_pickup_numbers" (Issue #66). Eigene
+// Veranstaltung und eigener Benutzer, damit die Bestellzaehlung nicht mit den
+// beiden anderen Altstaenden vermengt wird.
+const PICKUP_SEED = {
+  eventId: "c0000000-0000-4000-8000-000000000001",
+  userId: "c0000000-0000-4000-8000-000000000002",
+  stationId: "c0000000-0000-4000-8000-000000000003",
+  // Zwei Echtbestellungen und eine Testbestellung, alle vor der Migration
+  // angelegt und damit ohne Abholnummer.
+  orderLive1: "c0000000-0000-4000-8000-000000000010",
+  orderLive2: "c0000000-0000-4000-8000-000000000011",
+  orderTest1: "c0000000-0000-4000-8000-000000000012",
+};
+
+// Betraege der Bestandsbestellungen aus PICKUP_SEED, fest verdrahtet, damit
+// eine stille Veraenderung durch die Migration auffaellt.
+const PICKUP_SEED_AMOUNTS = {
+  live1: 1250,
+  live2: 480,
+  test1: 300,
+};
+
 function fail(message) {
   throw new Error(message);
 }
@@ -633,6 +656,163 @@ END $$;
 `;
 }
 
+// Fuegt einen Altstand aus Bestellungen ein, wie er vor der Einfuehrung der
+// Abholnummer aussieht (Issue #66): eine Veranstaltung mit einer Station, zwei
+// Echt- und einer Testbestellung. Muss vor "migrate deploy" der zugehoerigen
+// Migration laufen, sonst ist die Momentaufnahme der Selbstpruefung leer und
+// die Migration wuerde einen Datenverlust nicht bemerken koennen.
+function seedLegacyOrdersWithoutPickupSql(ids, amounts) {
+  return `
+INSERT INTO "User" (id, username, "pinHash", role, "isActive", "createdAt", "updatedAt")
+VALUES ('${ids.userId}', 'ci-migration-test-kassa', 'x', 'CASHIER'::"Role", true, now(), now());
+
+INSERT INTO "Event" (id, name, "createdAt", "updatedAt")
+VALUES ('${ids.eventId}', 'CI Migrationstest Abholnummer', now(), now());
+
+INSERT INTO "Station" (id, name, "sortOrder", "eventId", "createdAt", "updatedAt")
+VALUES ('${ids.stationId}', 'Grillstation', 0, '${ids.eventId}', now(), now());
+
+-- Bestandsbestellungen ohne Abholnummer und ohne Station. Genau diese Zeilen
+-- muss die Migration unveraendert lassen.
+INSERT INTO "Order" (id, "totalAmount", "userId", "eventId", "dataMode", "createdAt", "updatedAt") VALUES
+('${ids.orderLive1}', ${amounts.live1}, '${ids.userId}', '${ids.eventId}', 'LIVE'::"OperationalDataMode", now(), now()),
+('${ids.orderLive2}', ${amounts.live2}, '${ids.userId}', '${ids.eventId}', 'LIVE'::"OperationalDataMode", now(), now()),
+('${ids.orderTest1}', ${amounts.test1}, '${ids.userId}', '${ids.eventId}', 'TEST'::"OperationalDataMode", now(), now());
+`;
+}
+
+// Prueft nach "migrate deploy", dass die Einfuehrung der Abholnummer die
+// Bestandsbestellungen unveraendert gelassen hat und dass die neuen Zusagen
+// tatsaechlich an der Datenhaltung haengen und nicht nur im Anwendungscode:
+// mehrere NULL-Nummern stoeren einander nicht, eine doppelte echte Nummer wird
+// abgewiesen, und eine geloeschte Station reisst keine bezahlte Bestellung mit.
+function verifyPickupNumberMigrationSql(ids, amounts) {
+  return `
+-- 1. Die drei Bestandsbestellungen sind unveraendert vorhanden: Anzahl,
+--    Betrag und Betriebsart. Ein Datenverlust waere hier eine verschwundene
+--    Zahlung.
+DO $$
+DECLARE
+  mismatched int;
+BEGIN
+  SELECT count(*) INTO mismatched FROM (
+    VALUES
+      ('${ids.orderLive1}', ${amounts.live1}, 'LIVE'),
+      ('${ids.orderLive2}', ${amounts.live2}, 'LIVE'),
+      ('${ids.orderTest1}', ${amounts.test1}, 'TEST')
+  ) AS expected(id, "totalAmount", "dataMode")
+  LEFT JOIN "Order" o ON o.id = expected.id
+  WHERE o.id IS NULL
+     OR o."totalAmount" <> expected."totalAmount"
+     OR o."dataMode"::text <> expected."dataMode";
+  IF mismatched <> 0 THEN
+    RAISE EXCEPTION 'Nach der Einfuehrung der Abholnummer fehlen oder verandern sich % Bestandsbestellungen.', mismatched;
+  END IF;
+
+  IF (SELECT count(*) FROM "Order" WHERE "eventId" = '${ids.eventId}') <> 3 THEN
+    RAISE EXCEPTION 'Erwartete 3 Bestellungen in der Abholnummern-Testveranstaltung, gefunden %.',
+      (SELECT count(*) FROM "Order" WHERE "eventId" = '${ids.eventId}');
+  END IF;
+END $$;
+
+-- 2. Kein Bestandsdatensatz hat eine Abholnummer oder eine Station erhalten.
+--    Die Migration vergibt keine Nummern; taete sie es, traegen zwei Personen
+--    dieselbe.
+DO $$
+DECLARE
+  filled int;
+BEGIN
+  SELECT count(*) INTO filled FROM "Order"
+  WHERE "pickupNumber" IS NOT NULL OR "stationId" IS NOT NULL;
+  IF filled <> 0 THEN
+    RAISE EXCEPTION 'Nach der Migration tragen % Bestandsbestellungen eine Abholnummer oder eine Station.', filled;
+  END IF;
+END $$;
+
+-- 3. Der Zaehler existiert und ist leer. Er wird erst beim ersten
+--    Stationsverkauf angelegt; eine von der Migration vorbelegte Zeile wuerde
+--    die Zaehlung bei einem falschen Stand beginnen lassen.
+DO $$
+BEGIN
+  IF to_regclass('"EventPickupCounter"') IS NULL THEN
+    RAISE EXCEPTION 'Die Tabelle EventPickupCounter fehlt nach der Migration.';
+  END IF;
+  IF (SELECT count(*) FROM "EventPickupCounter") <> 0 THEN
+    RAISE EXCEPTION 'Die Migration hat % Zaehlerzeilen vorbelegt, erwartet waren 0.',
+      (SELECT count(*) FROM "EventPickupCounter");
+  END IF;
+END $$;
+
+-- 4. Der Unique-Index laesst mehrere Bestellungen ohne Abholnummer
+--    nebeneinander zu. In PostgreSQL gelten NULL-Werte in einem Unique-Index
+--    als verschieden; genau darauf beruht, dass die Migration auf einer
+--    Bestandsdatenbank ueberhaupt laufen kann. Statt das anzunehmen, wird es
+--    hier eingefuegt.
+DO $$
+DECLARE
+  neu int;
+BEGIN
+  INSERT INTO "Order" (id, "totalAmount", "userId", "eventId", "dataMode", "createdAt", "updatedAt")
+  SELECT gen_random_uuid()::text, 100, '${ids.userId}', '${ids.eventId}',
+         'LIVE'::"OperationalDataMode", now(), now()
+  FROM generate_series(1, 3);
+
+  SELECT count(*) INTO neu FROM "Order"
+  WHERE "eventId" = '${ids.eventId}' AND "dataMode" = 'LIVE' AND "pickupNumber" IS NULL;
+  IF neu <> 5 THEN
+    RAISE EXCEPTION 'Erwartete 5 Echtbestellungen ohne Abholnummer, gefunden %.', neu;
+  END IF;
+END $$;
+
+-- 5. Zwei Bestellungen derselben Veranstaltung und Betriebsart mit derselben
+--    Abholnummer werden von der Datenhaltung abgewiesen, dieselbe Nummer in
+--    der anderen Betriebsart nicht. Das ist die Absicherung, die auch dann
+--    haelt, wenn der Anwendungscode einmal danebengreift.
+DO $$
+DECLARE
+  abgewiesen boolean := false;
+BEGIN
+  UPDATE "Order" SET "pickupNumber" = 1 WHERE id = '${ids.orderLive1}';
+
+  BEGIN
+    UPDATE "Order" SET "pickupNumber" = 1 WHERE id = '${ids.orderLive2}';
+  EXCEPTION WHEN unique_violation THEN
+    abgewiesen := true;
+  END;
+
+  IF NOT abgewiesen THEN
+    RAISE EXCEPTION 'Zwei Bestellungen derselben Veranstaltung und Betriebsart konnten dieselbe Abholnummer tragen.';
+  END IF;
+
+  -- Dieselbe Nummer im Testbetrieb muss erlaubt bleiben, sonst waeren die
+  -- beiden Zaehler faktisch doch gekoppelt.
+  UPDATE "Order" SET "pickupNumber" = 1 WHERE id = '${ids.orderTest1}';
+  IF (SELECT "pickupNumber" FROM "Order" WHERE id = '${ids.orderTest1}') <> 1 THEN
+    RAISE EXCEPTION 'Die Abholnummer 1 wurde im Testbetrieb derselben Veranstaltung abgewiesen.';
+  END IF;
+END $$;
+
+-- 6. Eine geloeschte Station reisst keine bezahlte Bestellung mit; die
+--    Bestellung bleibt bestehen und verliert nur ihren Stationsvermerk
+--    (ON DELETE SET NULL).
+DO $$
+BEGIN
+  UPDATE "Order" SET "stationId" = '${ids.stationId}' WHERE id = '${ids.orderLive1}';
+  DELETE FROM "Station" WHERE id = '${ids.stationId}';
+
+  IF NOT EXISTS (SELECT 1 FROM "Order" WHERE id = '${ids.orderLive1}') THEN
+    RAISE EXCEPTION 'Das Loeschen einer Station hat eine bezahlte Bestellung mitgeloescht.';
+  END IF;
+  IF (SELECT "stationId" FROM "Order" WHERE id = '${ids.orderLive1}') IS NOT NULL THEN
+    RAISE EXCEPTION 'Die Bestellung zeigt nach dem Loeschen ihrer Station weiterhin auf sie.';
+  END IF;
+  IF (SELECT "pickupNumber" FROM "Order" WHERE id = '${ids.orderLive1}') <> 1 THEN
+    RAISE EXCEPTION 'Die Bestellung hat beim Loeschen ihrer Station die Abholnummer verloren.';
+  END IF;
+END $$;
+`;
+}
+
 function dropDatabase(target, database) {
   const literal = database.replaceAll("'", "''");
   psql(
@@ -672,6 +852,15 @@ const DATA_MIGRATION_CHECKS = [
     seed: () => seedLegacyTargetStationsSql(STATION_SEED),
     verifyLabel: "Verlustfreiheit der Zielstationen prüfen",
     verify: () => verifyTargetStationMigrationSql(STATION_SEED),
+  },
+  {
+    migration: "20260823100000_add_station_sale_pickup_numbers",
+    seedLabel: "Bestandsbestellungen ohne Abholnummer einspielen",
+    seed: () =>
+      seedLegacyOrdersWithoutPickupSql(PICKUP_SEED, PICKUP_SEED_AMOUNTS),
+    verifyLabel: "Unversehrtheit der Bestellungen und die Abholnummer prüfen",
+    verify: () =>
+      verifyPickupNumberMigrationSql(PICKUP_SEED, PICKUP_SEED_AMOUNTS),
   },
 ];
 

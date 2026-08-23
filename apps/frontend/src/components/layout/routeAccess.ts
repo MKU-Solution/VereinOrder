@@ -17,6 +17,11 @@ export const routeAccess = {
     label: "Bonkasse",
     roles: ["ADMINISTRATOR", "CASHIER"],
   },
+  stationSale: {
+    path: "/station-sale",
+    label: "Stationskasse",
+    roles: ["ADMINISTRATOR", "CASHIER", "STATION"],
+  },
   unpaid: {
     path: "/unpaid",
     label: "Offene Tische",
@@ -34,7 +39,10 @@ export const routeAccess = {
   cashier: {
     path: "/cashier",
     label: "Meine Kassa",
-    roles: ["ADMINISTRATOR", "WAITER", "CASHIER"],
+    // STATION ergänzt (Issue #66, Stationskasse): sonst kann die Rolle ihre
+    // eigene Kassensitzung nicht abschließen. Das Backend lässt STATION hier
+    // bereits zu (sessions.controller.ts).
+    roles: ["ADMINISTRATOR", "WAITER", "CASHIER", "STATION"],
   },
   runner: {
     path: "/runner",
@@ -52,6 +60,7 @@ export const routeAccess = {
 export const navigationRoutes = [
   routeAccess.dashboard,
   routeAccess.quickSale,
+  routeAccess.stationSale,
   routeAccess.unpaid,
   routeAccess.stations,
   routeAccess.runner,

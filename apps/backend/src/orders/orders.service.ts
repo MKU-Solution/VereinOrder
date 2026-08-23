@@ -10,6 +10,7 @@ import { PrismaClient, Prisma } from "@vereinorder/database";
 import { PRISMA_CLIENT } from "../prisma/prisma.module";
 import { randomBytes } from "crypto";
 import { resolveTargetStationId } from "../common/target-station";
+import { drawPickupNumber } from "../common/pickup-number";
 import { AuditService } from "../audit/audit.service";
 import { ORDER_REJECTION_MESSAGES } from "@vereinorder/shared";
 
@@ -56,6 +57,13 @@ interface QuickSaleDto {
   }[];
   paymentMethod: "CASH" | "CARD";
   tenderedAmount?: number;
+  // Stationskasse (Issue #66). Gesetzt macht createQuickSale zur einzigen
+  // Vergabestelle des Stationsverkaufs: Sortiment auf die Station
+  // eingeschraenkt, Abholnummer gezogen, Station auf der Bestellung
+  // vermerkt, nur Barzahlung. Ungesetzt entspricht dem zentralen
+  // Schnellverkauf von heute, unveraendert. Siehe
+  // docs/development/stationskasse.md, Abschnitt 2.
+  stationId?: string;
 }
 
 // Snapshot einer aufgeloesten Bestellposition. variantId/variantName/extras
@@ -115,6 +123,12 @@ interface PrintOptions {
   // Issue #98: Zeitpunkt des Nachdrucks. Nur gesetzt, wenn dieser Druck ein
   // Nachdruck ist; steuert die Kopiekennzeichnung auf Beleg und Produktbons.
   reprintedAt?: Date;
+  // Issue #66, Stationskasse: die je Veranstaltung und Betriebsart
+  // fortlaufende Abholnummer. Nur bei einem Stationsverkauf gesetzt (siehe
+  // apps/backend/src/common/pickup-number.ts); ein Zentralverkauf ohne
+  // Station laesst das Feld weg, und die Nutzlast traegt es dann nicht -
+  // Bestandsbons duerfen sich dadurch nicht veraendern.
+  pickupNumber?: number;
 }
 
 @Injectable()
@@ -150,7 +164,32 @@ export class OrdersService {
               color: true,
               sortOrder: true,
               availability: true,
-              category: { select: { id: true, name: true, sortOrder: true } },
+              // Issue #66, Stationskasse: Zielstation von Produkt und
+              // Warengruppe. Getragen fuer die Anzeige, nicht fuer die
+              // Verkaufstransaktion selbst (die prueft Station und
+              // Sortiment serverseitig eigenstaendig ueber
+              // productAtStationFilter, common/target-station.ts) - aber
+              // sowohl die Stationskasse (StationSaleDashboard.tsx) als
+              // auch die Kachelableitung dort filtern das angezeigte
+              // Sortiment nach genau diesen beiden Feldern, per
+              // resolveTargetStationId-Logik: Station des Produkts, sonst
+              // Station seiner Warengruppe, sonst null. Fehlen sie hier,
+              // loest jedes Produkt clientseitig auf "keine Station" auf,
+              // und jede Station zeigt ein leeres Kachelraster - genau der
+              // Fehler, der diesen Kommentar veranlasst hat. Bewusst auch
+              // im zentralen Pfad (getQuickSaleContext) mitgeliefert, nicht
+              // nur im Stationszweig: zwei Skalarfelder mehr sind billiger
+              // als zwei auseinanderlaufende Selects fuer dieselbe
+              // Produktliste; die zentrale Bonkasse ignoriert sie einfach.
+              targetStationId: true,
+              category: {
+                select: {
+                  id: true,
+                  name: true,
+                  sortOrder: true,
+                  targetStationId: true,
+                },
+              },
               // Volle Gruppenliste, dieselben Felder und dieselbe Sortierung
               // wie GET /products (findAllActive). Der Schnellverkauf
               // entscheidet selbst anhand von quickSaleTiles UND der
@@ -218,6 +257,50 @@ export class OrdersService {
       ...event,
       activeSession: sessionsByEvent.get(event.id) || null,
       printingReady: Boolean(activePrinter),
+    }));
+  }
+
+  /**
+   * Kontext der Stationskasse (Issue #66, docs/development/stationskasse.md
+   * Abschnitt 2 und 4): derselbe Kontext wie getQuickSaleContext, ergaenzt um
+   * die aktiven Stationen je Veranstaltung.
+   *
+   * Benutzt bewusst NICHT StationsService.findAllActive (GET /stations):
+   * jene Methode filtert auf `event: { status: "ACTIVE" }`
+   * (stations.service.ts) und blendet damit Stationen einer Veranstaltung im
+   * Testbetrieb (TEST_MODE) vollstaendig aus. Eine Stationskasse, die eine
+   * Testveranstaltung uebt, faende dort keine einzige Station. Stattdessen
+   * wird hier direkt gegen die bereits ermittelten Veranstaltungen
+   * (ACTIVE oder TEST_MODE, siehe getQuickSaleContext) gefiltert.
+   */
+  async getStationSaleContext(userId: string) {
+    const events = await this.getQuickSaleContext(userId);
+    const eventIds = events.map((event) => event.id);
+    const stations = eventIds.length
+      ? await this.prisma.station.findMany({
+          where: { isActive: true, eventId: { in: eventIds } },
+          select: {
+            id: true,
+            name: true,
+            shortName: true,
+            color: true,
+            sortOrder: true,
+            eventId: true,
+          },
+          orderBy: [{ sortOrder: "asc" }, { name: "asc" }, { id: "asc" }],
+        })
+      : [];
+
+    const stationsByEvent = new Map<string, typeof stations>();
+    for (const station of stations) {
+      const list = stationsByEvent.get(station.eventId) ?? [];
+      list.push(station);
+      stationsByEvent.set(station.eventId, list);
+    }
+
+    return events.map((event) => ({
+      ...event,
+      stations: stationsByEvent.get(event.id) ?? [],
     }));
   }
 
@@ -332,6 +415,111 @@ export class OrdersService {
     return { priceAtTime, variantId, variantName, extras };
   }
 
+  /**
+   * Idempotenzkurzschluss von createQuickSale (Issue #52, erweitert um
+   * Issue #66, Stationskasse). Wird sowohl innerhalb der Verkaufstransaktion
+   * aufgerufen (regulaerer Kurzschluss, bevor irgendetwas angelegt wird) als
+   * auch aus dem P2002-Auffangen heraus, nachdem die Transaktion an der
+   * eindeutigen Spalte "idempotencyKey" gescheitert ist - damit in beiden
+   * Faellen dieselbe Pruefung entscheidet, statt eine der beiden Stellen
+   * ungeprueft zurueckzugeben. Gibt `null` zurueck, wenn (noch) keine
+   * Bestellung zu diesem Schluessel existiert; wirft, wenn eine existiert,
+   * aber nicht zur Anfrage passt.
+   *
+   * Zwei Abweichungsgruende zusaetzlich zu den bestehenden aus Issue #52
+   * (docs/development/stationskasse.md, Abschnitt 3 "Zusammenspiel mit der
+   * Idempotenz"):
+   * - existingOrder.stationId weicht von dto.stationId ab: ohne diese
+   *   Pruefung koennte ein Idempotenzschluessel einer anderen Station eine
+   *   fremde Bestellung zurueckspielen.
+   * - dto.stationId ist gesetzt, existingOrder.pickupNumber aber nicht: ein
+   *   ueber den Stationsendpunkt wiederholter Zentralverkauf (derselbe
+   *   Schluessel, urspruenglich ohne Station gebucht) wuerde sonst eine
+   *   Bestellung ohne Abholnummer ausliefern.
+   */
+  private async resolveIdempotentQuickSale(
+    tx: PrismaClient | Prisma.TransactionClient,
+    userId: string,
+    dto: QuickSaleDto,
+  ) {
+    const existingOrder = await tx.order.findUnique({
+      where: { idempotencyKey: dto.idempotencyKey },
+      include: {
+        items: { include: { product: true } },
+        payments: true,
+        vouchers: true,
+      },
+    });
+    if (!existingOrder) return null;
+
+    const payment = existingOrder.payments[0];
+    // Idempotenzschluessel nach docs/development/produktoptionen-schnittstelle.md
+    // ("Idempotenz des Schnellverkaufs"): alle gewaehlten Antwortkennungen
+    // gehen aufsteigend sortiert ein, sonst gelten zwei verschiedene
+    // Zusammenstellungen desselben Produkts als Wiederholung derselben
+    // Bestellung.
+    const requestedItems = dto.items
+      .map((item) => {
+        const optionIds = [...(item.optionIds ?? [])].sort();
+        return `${item.productId}:${item.quantity}:${optionIds.join(",")}`;
+      })
+      .sort();
+    const storedItems = existingOrder.items
+      .map((item) => {
+        const extras = Array.isArray(item.extras)
+          ? (item.extras as { id: string }[])
+          : [];
+        const optionIds = [
+          ...(item.variantId ? [item.variantId] : []),
+          ...extras.map((extra) => extra.id),
+        ].sort();
+        return `${item.productId}:${item.quantity}:${optionIds.join(",")}`;
+      })
+      .sort();
+    const sameTenderedAmount =
+      dto.paymentMethod === "CASH"
+        ? payment?.tenderedAmount === dto.tenderedAmount
+        : dto.tenderedAmount === undefined ||
+          dto.tenderedAmount === existingOrder.totalAmount;
+    if (
+      existingOrder.userId !== userId ||
+      existingOrder.eventId !== dto.eventId ||
+      !existingOrder.cashierSessionId ||
+      existingOrder.vouchers.length === 0 ||
+      existingOrder.payments.length !== 1 ||
+      payment?.method !== dto.paymentMethod ||
+      !sameTenderedAmount ||
+      requestedItems.length !== storedItems.length ||
+      requestedItems.some((item, index) => item !== storedItems[index]) ||
+      // Issue #66, Stationskasse: beide Seiten werden normalisiert
+      // (?? null), nicht nur dto.stationId. existingOrder stammt hier aus
+      // einem findUnique ohne select, liefert also heute immer alle
+      // Skalarspalten und damit null statt undefined - aber sollte diese
+      // Abfrage spaeter ein select bekommen (sie laedt bereits Positionen,
+      // Zahlungen und Gutscheine mit, ein enger select waere naheliegend),
+      // kaeme stationId/pickupNumber als undefined zurueck. Ohne die
+      // Normalisierung auf existingOrder wuerde die erste Zeile dann jeden
+      // regulaeren Zentralverkauf als Abweichung werten (undefined !== null),
+      // und die zweite Zeile faellt in die falsche Richtung um: eine
+      // Stationswiederholung ohne Nummer (pickupNumber undefined) ginge
+      // lautlos durch, statt abgewiesen zu werden.
+      (existingOrder.stationId ?? null) !== (dto.stationId ?? null) ||
+      (Boolean(dto.stationId) && (existingOrder.pickupNumber ?? null) === null)
+    ) {
+      throw new BadRequestException(
+        ORDER_REJECTION_MESSAGES.IDEMPOTENCY_KEY_CONFLICT,
+      );
+    }
+    return {
+      order: existingOrder,
+      vouchersIssued: existingOrder.vouchers.length,
+      tenderedAmount: payment?.tenderedAmount || existingOrder.totalAmount,
+      changeAmount: payment?.changeAmount || 0,
+      pickupNumber: existingOrder.pickupNumber ?? undefined,
+      idempotentReplay: true,
+    };
+  }
+
   async createQuickSale(userId: string, dto: QuickSaleDto) {
     if (!userId)
       throw new BadRequestException("Authenticated user is required");
@@ -357,6 +545,16 @@ export class OrdersService {
         "Only CASH and CARD are supported for quick sales",
       );
     }
+    if (dto.stationId !== undefined && typeof dto.stationId !== "string") {
+      throw new BadRequestException("stationId muss eine Zeichenkette sein.");
+    }
+    // Stationskasse (Issue #66, docs/development/stationskasse.md
+    // Abschnitt 2): Kartenzahlung ist erklaertes Nicht-Ziel des Stationsmodus.
+    if (dto.stationId && dto.paymentMethod !== "CASH") {
+      throw new BadRequestException(
+        "Ein Stationsverkauf ist nur mit Barzahlung möglich.",
+      );
+    }
 
     const totalQuantity = dto.items.reduce((sum, item) => {
       if (
@@ -377,99 +575,46 @@ export class OrdersService {
       );
     }
 
-    const result = await this.prisma.$transaction(async (prisma) => {
-      const existingOrder = await prisma.order.findUnique({
-        where: { idempotencyKey: dto.idempotencyKey },
-        include: {
-          items: { include: { product: true } },
-          payments: true,
-          vouchers: true,
-        },
-      });
-      if (existingOrder) {
-        const payment = existingOrder.payments[0];
-        // Idempotenzschluessel nach docs/development/produktoptionen-schnittstelle.md
-        // ("Idempotenz des Schnellverkaufs"): alle gewaehlten Antwortkennungen
-        // gehen aufsteigend sortiert ein, sonst gelten zwei verschiedene
-        // Zusammenstellungen desselben Produkts als Wiederholung derselben
-        // Bestellung.
-        const requestedItems = dto.items
-          .map((item) => {
-            const optionIds = [...(item.optionIds ?? [])].sort();
-            return `${item.productId}:${item.quantity}:${optionIds.join(",")}`;
-          })
-          .sort();
-        const storedItems = existingOrder.items
-          .map((item) => {
-            const extras = Array.isArray(item.extras)
-              ? (item.extras as { id: string }[])
-              : [];
-            const optionIds = [
-              ...(item.variantId ? [item.variantId] : []),
-              ...extras.map((extra) => extra.id),
-            ].sort();
-            return `${item.productId}:${item.quantity}:${optionIds.join(",")}`;
-          })
-          .sort();
-        const sameTenderedAmount =
-          dto.paymentMethod === "CASH"
-            ? payment?.tenderedAmount === dto.tenderedAmount
-            : dto.tenderedAmount === undefined ||
-              dto.tenderedAmount === existingOrder.totalAmount;
-        if (
-          existingOrder.userId !== userId ||
-          existingOrder.eventId !== dto.eventId ||
-          !existingOrder.cashierSessionId ||
-          existingOrder.vouchers.length === 0 ||
-          existingOrder.payments.length !== 1 ||
-          payment?.method !== dto.paymentMethod ||
-          !sameTenderedAmount ||
-          requestedItems.length !== storedItems.length ||
-          requestedItems.some((item, index) => item !== storedItems[index])
-        ) {
-          throw new BadRequestException(
-            ORDER_REJECTION_MESSAGES.IDEMPOTENCY_KEY_CONFLICT,
-          );
-        }
-        return {
-          order: existingOrder,
-          vouchersIssued: existingOrder.vouchers.length,
-          tenderedAmount: payment?.tenderedAmount || existingOrder.totalAmount,
-          changeAmount: payment?.changeAmount || 0,
-          idempotentReplay: true,
-        };
-      }
+    let result;
+    try {
+      result = await this.prisma.$transaction(async (prisma) => {
+        const idempotentResult = await this.resolveIdempotentQuickSale(
+          prisma,
+          userId,
+          dto,
+        );
+        if (idempotentResult) return idempotentResult;
 
-      const eventRows = await prisma.$queryRaw<
-        { id: string; status: string; testMode: boolean }[]
-      >(Prisma.sql`
+        const eventRows = await prisma.$queryRaw<
+          { id: string; status: string; testMode: boolean }[]
+        >(Prisma.sql`
         SELECT "id", "status", "testMode" FROM "Event" WHERE "id" = ${dto.eventId} FOR UPDATE
       `);
-      const event = eventRows[0];
-      const dataMode =
-        event?.status === "ACTIVE" && !event.testMode
-          ? "LIVE"
-          : event?.status === "TEST_MODE" && event.testMode
-            ? "TEST"
-            : null;
-      if (!dataMode)
-        throw new BadRequestException(
-          ORDER_REJECTION_MESSAGES.EVENT_NOT_ACTIVE_FOR_SALES,
-        );
+        const event = eventRows[0];
+        const dataMode =
+          event?.status === "ACTIVE" && !event.testMode
+            ? "LIVE"
+            : event?.status === "TEST_MODE" && event.testMode
+              ? "TEST"
+              : null;
+        if (!dataMode)
+          throw new BadRequestException(
+            ORDER_REJECTION_MESSAGES.EVENT_NOT_ACTIVE_FOR_SALES,
+          );
 
-      const activePrinter = await prisma.printer.findFirst({
-        where: { isActive: true },
-        select: { id: true },
-      });
-      if (!activePrinter) {
-        throw new BadRequestException(
-          "Für den Bonverkauf ist ein aktiver Drucker erforderlich.",
-        );
-      }
+        const activePrinter = await prisma.printer.findFirst({
+          where: { isActive: true },
+          select: { id: true },
+        });
+        if (!activePrinter) {
+          throw new BadRequestException(
+            "Für den Bonverkauf ist ein aktiver Drucker erforderlich.",
+          );
+        }
 
-      const activeSessions = await prisma.$queryRaw<
-        { id: string; dataMode: "TEST" | "LIVE" }[]
-      >(Prisma.sql`
+        const activeSessions = await prisma.$queryRaw<
+          { id: string; dataMode: "TEST" | "LIVE" }[]
+        >(Prisma.sql`
         SELECT "id", "dataMode"
         FROM "CashierSession"
         WHERE "userId" = ${userId}
@@ -479,192 +624,296 @@ export class OrdersService {
         LIMIT 1
         FOR UPDATE
       `);
-      const cashierSessionId = activeSessions[0]?.id;
-      if (!cashierSessionId) {
-        throw new BadRequestException(
-          "Für diesen Verkauf ist eine aktive Kassensitzung erforderlich.",
-        );
-      }
-      if (activeSessions[0].dataMode !== dataMode)
-        throw new ConflictException(
-          "Die aktive Kassensitzung gehört zu einem anderen Betriebsmodus.",
-        );
-
-      const productIds = [...new Set(dto.items.map((item) => item.productId))];
-      const products = await prisma.product.findMany({
-        where: { id: { in: productIds }, eventId: dto.eventId },
-        include: { optionGroups: { include: { options: true } } },
-      });
-      const productsById = new Map(
-        products.map((product) => [product.id, product]),
-      );
-
-      let totalAmount = 0;
-      const orderItemsData = dto.items.map((item) => {
-        const product = productsById.get(item.productId);
-        if (!product)
+        const cashierSessionId = activeSessions[0]?.id;
+        if (!cashierSessionId) {
           throw new BadRequestException(
-            ORDER_REJECTION_MESSAGES.PRODUCT_NOT_IN_EVENT_QUICK_SALE,
+            "Für diesen Verkauf ist eine aktive Kassensitzung erforderlich.",
           );
+        }
+        if (activeSessions[0].dataMode !== dataMode)
+          throw new ConflictException(
+            "Die aktive Kassensitzung gehört zu einem anderen Betriebsmodus.",
+          );
+
+        // Stationskasse (Issue #66): Station pruefen, direkt nach der
+        // Kassensitzung und vor allem anderen, das die Station bereits
+        // voraussetzt (Sortiment, Abholnummer). Sperrreihenfolge Event ->
+        // Kassensitzung -> Zaehler ist in common/pickup-number.ts festgehalten;
+        // diese Pruefung liegt bewusst davor und fasst die Zaehlerzeile noch
+        // nicht an. Eine Station muss existieren, aktiv sein und zu dieser
+        // Veranstaltung gehoeren - sonst koennte eine Station einer fremden
+        // Veranstaltung fuer diesen Verkauf durchgehen.
+        if (dto.stationId) {
+          const station = await prisma.station.findUnique({
+            where: { id: dto.stationId },
+            select: { id: true, isActive: true, eventId: true },
+          });
+          if (
+            !station ||
+            !station.isActive ||
+            station.eventId !== dto.eventId
+          ) {
+            throw new BadRequestException(
+              "Diese Station ist für diesen Verkauf nicht verfügbar. Bitte eine andere Station wählen.",
+            );
+          }
+        }
+
+        const productIds = [
+          ...new Set(dto.items.map((item) => item.productId)),
+        ];
+        // Stationskasse (Issue #66): Produkte zunaechst nur gegen die
+        // Veranstaltung aufloesen, OHNE den Stationsfilter in derselben
+        // where-Klausel. Stand vorher beides in einem Filter
+        // (productAtStationFilter direkt in "where"), war ein Produkt einer
+        // anderen Station derselben Veranstaltung nicht von einem Produkt zu
+        // unterscheiden, das es in dieser Veranstaltung gar nicht gibt -
+        // beides fehlte im Ergebnis und landete unten in derselben Meldung
+        // "gehört nicht zu dieser Veranstaltung". Das schickt die Bedienung
+        // an der Kasse in die falsche Richtung (sie prueft eine Veranstaltung,
+        // die stimmt, statt die Station zu wechseln). Die Stationszugehoerigkeit
+        // wird deshalb als zweiter, eigener Schritt weiter unten geprueft -
+        // mit derselben Funktion (resolveTargetStationId), nicht mit einem
+        // zweiten, selbstgebauten Filter. "category" wird dafuer zusaetzlich
+        // geladen, weil resolveTargetStationId sie im Parametertyp verlangt.
+        const products = await prisma.product.findMany({
+          where: { id: { in: productIds }, eventId: dto.eventId },
+          include: {
+            optionGroups: { include: { options: true } },
+            category: { select: { targetStationId: true } },
+          },
+        });
+        const productsById = new Map(
+          products.map((product) => [product.id, product]),
+        );
+
+        let totalAmount = 0;
+        const orderItemsData = dto.items.map((item) => {
+          const product = productsById.get(item.productId);
+          if (!product)
+            throw new BadRequestException(
+              ORDER_REJECTION_MESSAGES.PRODUCT_NOT_IN_EVENT_QUICK_SALE,
+            );
+          // Zweiter Schritt: das Produkt gehoert zur Veranstaltung (siehe
+          // oben), aber gehoert es auch zur gewaehlten Station? Dieselbe
+          // Regel wie der fruehere where-Filter (productAtStationFilter),
+          // nur jetzt mit einer eigenen, praezisen Meldung statt der
+          // Veranstaltungsmeldung. Ohne dto.stationId (zentraler
+          // Schnellverkauf) entfaellt diese Pruefung unveraendert wie bisher.
+          if (
+            dto.stationId &&
+            resolveTargetStationId(product) !== dto.stationId
+          ) {
+            throw new BadRequestException(
+              ORDER_REJECTION_MESSAGES.PRODUCT_NOT_AT_STATION_QUICK_SALE,
+            );
+          }
+          if (
+            product.availability === "OUT_OF_STOCK" ||
+            product.availability === "DISABLED"
+          ) {
+            throw new BadRequestException(
+              ORDER_REJECTION_MESSAGES.PRODUCT_OUT_OF_STOCK(product.name),
+            );
+          }
+
+          const { priceAtTime, variantId, variantName, extras } =
+            this.resolveOrderItemPricing(product, item.optionIds ?? []);
+          totalAmount += priceAtTime * item.quantity;
+
+          return {
+            productId: product.id,
+            quantity: item.quantity,
+            priceAtTime,
+            status: "PENDING" as const,
+            variantId,
+            variantName,
+            extras: extras.length > 0 ? (extras as any) : undefined,
+          };
+        });
         if (
-          product.availability === "OUT_OF_STOCK" ||
-          product.availability === "DISABLED"
+          !Number.isSafeInteger(totalAmount) ||
+          totalAmount <= 0 ||
+          totalAmount > 2_147_483_647
         ) {
           throw new BadRequestException(
-            ORDER_REJECTION_MESSAGES.PRODUCT_OUT_OF_STOCK(product.name),
+            "Der Gesamtbetrag dieses Verkaufs ist ungültig. Bitte den Verkauf neu zusammenstellen.",
           );
         }
 
-        const { priceAtTime, variantId, variantName, extras } =
-          this.resolveOrderItemPricing(product, item.optionIds ?? []);
-        totalAmount += priceAtTime * item.quantity;
+        let tenderedAmount: number;
+        let changeAmount = 0;
+        if (dto.paymentMethod === "CASH") {
+          tenderedAmount = dto.tenderedAmount as number;
+          if (
+            !Number.isInteger(tenderedAmount) ||
+            tenderedAmount < totalAmount ||
+            tenderedAmount > 2_147_483_647
+          ) {
+            throw new BadRequestException(
+              "Der gegebene Barbetrag muss den Gesamtbetrag vollständig abdecken.",
+            );
+          }
+          changeAmount = tenderedAmount - totalAmount;
+        } else {
+          if (
+            dto.tenderedAmount !== undefined &&
+            dto.tenderedAmount !== totalAmount
+          ) {
+            throw new BadRequestException(
+              "Der Kartenbetrag muss dem Gesamtbetrag entsprechen. Bitte den Betrag korrigieren.",
+            );
+          }
+          tenderedAmount = totalAmount;
+        }
+
+        const user = await prisma.user.findUnique({ where: { id: userId } });
+        if (!user?.isActive)
+          throw new BadRequestException(
+            ORDER_REJECTION_MESSAGES.USER_NOT_ACTIVE,
+          );
+
+        // Stationskasse (Issue #66): Abholnummer ziehen, unmittelbar vor dem
+        // Anlegen der Bestellung und nach allen Pruefungen (siehe
+        // common/pickup-number.ts fuer Sperrreihenfolge und
+        // Ueberlaufpruefung). Nur beim Stationsverkauf - die zentrale
+        // Bonkasse bekommt bewusst keine Nummer (Entscheidung 5 der
+        // Projektleitung, docs/development/stationskasse.md).
+        const pickupNumber = dto.stationId
+          ? await drawPickupNumber(prisma, dto.eventId, dataMode)
+          : undefined;
+
+        const order = await prisma.order.create({
+          data: {
+            totalAmount,
+            lifecycleStatus: "SUBMITTED",
+            paymentStatus: "PAID",
+            fulfillmentStatus: "PENDING",
+            userId,
+            eventId: dto.eventId,
+            dataMode,
+            idempotencyKey: dto.idempotencyKey,
+            tableName: null,
+            areaId: null,
+            cashierSessionId,
+            pickupNumber: pickupNumber ?? null,
+            stationId: dto.stationId ?? null,
+            items: { create: orderItemsData },
+            payments: {
+              create: {
+                amount: totalAmount,
+                method: dto.paymentMethod,
+                status: "COMPLETED",
+                cashierSessionId,
+                tenderedAmount:
+                  dto.paymentMethod === "CASH" ? tenderedAmount : null,
+                changeAmount,
+              },
+            },
+          },
+          include: {
+            items: {
+              include: {
+                product: { include: { category: true } },
+              },
+            },
+            payments: true,
+          },
+        });
+
+        const vouchers: PrintOptions["vouchers"] = [];
+        for (const item of order.items) {
+          for (let unit = 0; unit < item.quantity; unit += 1) {
+            const voucher = await prisma.productVoucher.create({
+              data: {
+                code: randomBytes(12).toString("hex").toUpperCase(),
+                eventId: dto.eventId,
+                productId: item.productId,
+                orderId: order.id,
+                orderItemId: item.id,
+                issuedByUserId: userId,
+                cashierSessionId,
+              },
+            });
+            vouchers.push({
+              code: voucher.code,
+              orderItemId: item.id,
+              productId: item.productId,
+              productName: item.product.name,
+              variantName: item.variantName,
+              stationId: resolveTargetStationId(item.product),
+              issuedAt: voucher.issuedAt,
+            });
+          }
+        }
+
+        await this.dispatchPrintJobs(prisma, order, user, {
+          receiptTitle: "INTERNER ZAHLUNGSNACHWEIS",
+          tenderedAmount,
+          changeAmount,
+          vouchers,
+          pickupNumber,
+        });
+
+        await prisma.auditLog.create({
+          data: {
+            // Stationskasse (Issue #66): eigene Aktion, wenn eine Station
+            // gesetzt ist, sonst unveraendert QUICK_SALE_COMPLETED.
+            action: dto.stationId
+              ? "STATION_SALE_COMPLETED"
+              : "QUICK_SALE_COMPLETED",
+            entityId: order.id,
+            entityType: "Order",
+            userId,
+            details: {
+              eventId: dto.eventId,
+              cashierSessionId,
+              paymentMethod: dto.paymentMethod,
+              totalAmount,
+              tenderedAmount,
+              changeAmount,
+              vouchersIssued: vouchers.length,
+              idempotencyKey: dto.idempotencyKey,
+              stationId: dto.stationId ?? null,
+              pickupNumber: pickupNumber ?? null,
+            },
+          },
+        });
 
         return {
-          productId: product.id,
-          quantity: item.quantity,
-          priceAtTime,
-          status: "PENDING" as const,
-          variantId,
-          variantName,
-          extras: extras.length > 0 ? (extras as any) : undefined,
+          order,
+          vouchersIssued: vouchers.length,
+          tenderedAmount,
+          changeAmount,
+          pickupNumber,
+          idempotentReplay: false,
         };
       });
+    } catch (error) {
+      // Issue #66, Entscheidung 6 der Projektleitung: derselbe P2002-Fang
+      // wie in createOrder (siehe isIdempotencyKeyViolation weiter unten).
+      // Zwei echt gleichzeitige Anfragen mit demselben Schluessel lesen in
+      // resolveIdempotentQuickSale oben beide "nicht vorhanden"; ohne
+      // diesen Fang scheitert die unterlegene Anfrage mit einem
+      // unbehandelten Unique-Verstoss (P2002, also 500) statt mit der
+      // Wiederholungsantwort. Nur dieser konkrete Verstoss wird als
+      // Wiederholung behandelt, jeder andere Fehler wird unveraendert
+      // weitergereicht.
       if (
-        !Number.isSafeInteger(totalAmount) ||
-        totalAmount <= 0 ||
-        totalAmount > 2_147_483_647
+        dto.idempotencyKey &&
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === "P2002" &&
+        this.isIdempotencyKeyViolation(error)
       ) {
-        throw new BadRequestException(
-          "Der Gesamtbetrag dieses Verkaufs ist ungültig. Bitte den Verkauf neu zusammenstellen.",
+        const idempotentResult = await this.resolveIdempotentQuickSale(
+          this.prisma,
+          userId,
+          dto,
         );
+        if (idempotentResult) return idempotentResult;
       }
-
-      let tenderedAmount: number;
-      let changeAmount = 0;
-      if (dto.paymentMethod === "CASH") {
-        tenderedAmount = dto.tenderedAmount as number;
-        if (
-          !Number.isInteger(tenderedAmount) ||
-          tenderedAmount < totalAmount ||
-          tenderedAmount > 2_147_483_647
-        ) {
-          throw new BadRequestException(
-            "Der gegebene Barbetrag muss den Gesamtbetrag vollständig abdecken.",
-          );
-        }
-        changeAmount = tenderedAmount - totalAmount;
-      } else {
-        if (
-          dto.tenderedAmount !== undefined &&
-          dto.tenderedAmount !== totalAmount
-        ) {
-          throw new BadRequestException(
-            "Der Kartenbetrag muss dem Gesamtbetrag entsprechen. Bitte den Betrag korrigieren.",
-          );
-        }
-        tenderedAmount = totalAmount;
-      }
-
-      const user = await prisma.user.findUnique({ where: { id: userId } });
-      if (!user?.isActive)
-        throw new BadRequestException(ORDER_REJECTION_MESSAGES.USER_NOT_ACTIVE);
-
-      const order = await prisma.order.create({
-        data: {
-          totalAmount,
-          lifecycleStatus: "SUBMITTED",
-          paymentStatus: "PAID",
-          fulfillmentStatus: "PENDING",
-          userId,
-          eventId: dto.eventId,
-          dataMode,
-          idempotencyKey: dto.idempotencyKey,
-          tableName: null,
-          areaId: null,
-          cashierSessionId,
-          items: { create: orderItemsData },
-          payments: {
-            create: {
-              amount: totalAmount,
-              method: dto.paymentMethod,
-              status: "COMPLETED",
-              cashierSessionId,
-              tenderedAmount:
-                dto.paymentMethod === "CASH" ? tenderedAmount : null,
-              changeAmount,
-            },
-          },
-        },
-        include: {
-          items: {
-            include: {
-              product: { include: { category: true } },
-            },
-          },
-          payments: true,
-        },
-      });
-
-      const vouchers: PrintOptions["vouchers"] = [];
-      for (const item of order.items) {
-        for (let unit = 0; unit < item.quantity; unit += 1) {
-          const voucher = await prisma.productVoucher.create({
-            data: {
-              code: randomBytes(12).toString("hex").toUpperCase(),
-              eventId: dto.eventId,
-              productId: item.productId,
-              orderId: order.id,
-              orderItemId: item.id,
-              issuedByUserId: userId,
-              cashierSessionId,
-            },
-          });
-          vouchers.push({
-            code: voucher.code,
-            orderItemId: item.id,
-            productId: item.productId,
-            productName: item.product.name,
-            variantName: item.variantName,
-            stationId: resolveTargetStationId(item.product),
-            issuedAt: voucher.issuedAt,
-          });
-        }
-      }
-
-      await this.dispatchPrintJobs(prisma, order, user, {
-        receiptTitle: "INTERNER ZAHLUNGSNACHWEIS",
-        tenderedAmount,
-        changeAmount,
-        vouchers,
-      });
-
-      await prisma.auditLog.create({
-        data: {
-          action: "QUICK_SALE_COMPLETED",
-          entityId: order.id,
-          entityType: "Order",
-          userId,
-          details: {
-            eventId: dto.eventId,
-            cashierSessionId,
-            paymentMethod: dto.paymentMethod,
-            totalAmount,
-            tenderedAmount,
-            changeAmount,
-            vouchersIssued: vouchers.length,
-            idempotencyKey: dto.idempotencyKey,
-          },
-        },
-      });
-
-      return {
-        order,
-        vouchersIssued: vouchers.length,
-        tenderedAmount,
-        changeAmount,
-        idempotentReplay: false,
-      };
-    });
+      throw error;
+    }
 
     return result;
   }
@@ -730,6 +979,10 @@ export class OrdersService {
                 waiterName: user?.name || user?.username || "Kellner",
                 isPriority: order.isPriority,
                 createdAt: order.createdAt,
+                // Issue #66, Stationskasse: nur bei einem Stationsverkauf
+                // gesetzt (siehe PrintOptions.pickupNumber); ein
+                // Zentralverkauf ohne Station laesst das Feld weg.
+                pickupNumber: options.pickupNumber,
                 items: stationItems.map((i) => ({
                   productName: i.product.name,
                   quantity: i.quantity,
@@ -772,6 +1025,10 @@ export class OrdersService {
             // Nachdruck ist (documents.ts liest isCopy/reprintedAt).
             isCopy: Boolean(options.reprintedAt),
             reprintedAt: options.reprintedAt,
+            // Issue #66, Stationskasse: nur bei einem Stationsverkauf
+            // gesetzt; ein Zentralverkauf ohne Station laesst das Feld weg,
+            // documents.ts belaesst das Druckbild dann unveraendert.
+            pickupNumber: options.pickupNumber,
           },
         },
       });
@@ -820,6 +1077,9 @@ export class OrdersService {
             // Nachdruck ist (documents.ts liest isCopy/reprintedAt).
             isCopy: Boolean(options.reprintedAt),
             reprintedAt: options.reprintedAt,
+            // Issue #66, Stationskasse: nur bei einem Stationsverkauf
+            // gesetzt; ein Zentralverkauf ohne Station laesst das Feld weg.
+            pickupNumber: options.pickupNumber,
           },
         },
       });
@@ -1384,6 +1644,11 @@ export class OrdersService {
       includeStationTickets: false,
       // Punkt 4: Beleg und Produktbons als Kopie kennzeichnen.
       reprintedAt,
+      // Issue #66, Stationskasse: ein Nachdruck eines Stationsverkaufs
+      // muss dieselbe Abholnummer weiterhin tragen. Bei einer Bestellung
+      // ohne Station ist order.pickupNumber null, und die Nutzlast bleibt
+      // dann wie gehabt ohne das Feld.
+      pickupNumber: order.pickupNumber ?? undefined,
     });
 
     await this.prisma.auditLog.create({

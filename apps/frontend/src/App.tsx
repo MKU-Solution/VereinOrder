@@ -9,6 +9,7 @@ import { AdminDashboard } from "./pages/AdminDashboard";
 import { CashierDashboard } from "./pages/CashierDashboard";
 import { RunnerDashboard } from "./pages/RunnerDashboard";
 import { QuickSaleDashboard } from "./pages/QuickSaleDashboard";
+import { StationSaleDashboard } from "./pages/StationSaleDashboard";
 import { AuthGuard } from "./components/layout/AuthGuard";
 import { AppLayout } from "./components/layout/AppLayout";
 import { RoleGuard } from "./components/layout/RoleGuard";
@@ -38,6 +39,9 @@ function App() {
             </Route>
             <Route element={<RoleGuard route={routeAccess.quickSale} />}>
               <Route path="/quick-sale" element={<QuickSaleDashboard />} />
+            </Route>
+            <Route element={<RoleGuard route={routeAccess.stationSale} />}>
+              <Route path="/station-sale" element={<StationSaleDashboard />} />
             </Route>
             <Route element={<RoleGuard route={routeAccess.unpaid} />}>
               <Route path="/unpaid" element={<UnpaidOrders />} />

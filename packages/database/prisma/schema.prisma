@@ -84,6 +84,8 @@ model Event {
   areas           Area[]
   cashierSessions CashierSession[]
   productVouchers ProductVoucher[]
+  // Je Betriebsart ein Zaehler fuer die Abholnummer (Issue #66).
+  pickupCounters  EventPickupCounter[]
 }
 
 model Area {
@@ -118,6 +120,8 @@ model Station {
   // Warengruppen, deren Vorgabe diese Station ist.
   categories       ProductCategory[]
   redeemedVouchers ProductVoucher[]  @relation("VoucherRedemptionStation")
+  // An dieser Station kassierte Verkaeufe (Stationskasse, Issue #66).
+  stationSales     Order[]
 }
 
 // Die Warengruppe traegt die Zielstation ihrer Produkte (Issue #84). Speisen
@@ -347,6 +351,26 @@ model Order {
   cashierSessionId String?
   cashierSession   CashierSession? @relation(fields: [cashierSessionId], references: [id])
 
+  // Stationskasse (Issue #66). Beide Felder sind optional, weil jede
+  // Bestellung aus der Bedienmaske, der Onlineannahme und der zentralen
+  // Bonkasse sie nicht traegt; NULL heisst hier "kein Stationsverkauf".
+  //
+  // pickupNumber ist die je Veranstaltung und Betriebsart fortlaufende, laut
+  // aufrufbare Abholnummer. Sie wird NICHT aus orderNumber abgeleitet: jene
+  // ist eine globale SERIAL, also weder veranstaltungs- noch
+  // betriebsartbezogen und wegen nextval ausserhalb der Transaktion
+  // luecken behaftet. Vergeben wird sie ueber EventPickupCounter, siehe
+  // apps/backend/src/common/pickup-number.ts.
+  //
+  // stationId wird bei geloeschter Station auf NULL gesetzt und nicht
+  // mitgeloescht: eine bezahlte Bestellung darf eine Aenderung an der
+  // Stationsverwaltung nicht mitreissen. Das entspricht jeder anderen
+  // Station-Beziehung im Bestand (Product, ProductCategory, ProductVoucher).
+  pickupNumber Int?
+  stationId    String?
+  station      Station? @relation(fields: [stationId], references: [id], onDelete: SetNull)
+
+  @@unique([eventId, dataMode, pickupNumber])
   @@index([eventId, fulfillmentStatus, areaId])
   @@index([eventId, dataMode])
   @@index([claimedByUserId])
@@ -676,6 +700,27 @@ model CashierSession {
   vouchers ProductVoucher[]
 
   @@index([eventId, dataMode])
+}
+
+// Zaehler der Abholnummer je Veranstaltung und Betriebsart (Issue #66).
+//
+// Eine eigene Zeile statt einer SERIAL, weil nur so ein abgebrochener Verkauf
+// keine Luecke hinterlaesst: die Erhoehung wird beim Rollback mit
+// zurueckgenommen, ein verbrauchtes nextval nicht. Am Tresen ist eine Luecke
+// die Nummer, die nie aufgerufen wird.
+//
+// dataMode gehoert in den Primaerschluessel, damit Test- und Echtbetrieb
+// getrennte Zaehlerstaende haben und beide bei 1 beginnen. Die Vergabe selbst
+// steht in apps/backend/src/common/pickup-number.ts; sie ist die einzige
+// Stelle, die diese Tabelle hochzaehlt.
+model EventPickupCounter {
+  eventId    String
+  event      Event               @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  dataMode   OperationalDataMode
+  lastNumber Int                 @default(0)
+  updatedAt  DateTime            @updatedAt
+
+  @@id([eventId, dataMode])
 }
 
 model ConfigOperation {

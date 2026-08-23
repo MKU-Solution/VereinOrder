@@ -145,6 +145,18 @@ function stationTicket(job: PrintJobLike): PrintDocument {
       `#${firstText(content.orderNumber, content.orderId, "-")}`,
     ),
     labelled("Tisch/Bereich", firstText(content.tableName, "Theke")),
+  );
+
+  // Issue #66, Stationskasse: die Abholnummer steht neben Tisch/Bereich,
+  // wenn vorhanden - ein Stationsverkauf hat kein Tisch/Bereich im
+  // eigentlichen Sinn, die Zeile bleibt trotzdem als Rückfall stehen.
+  // Fehlt die Nummer (Bestellung ohne Station), bleibt dieser Block ganz
+  // weg und das Druckbild unverändert.
+  if (content.pickupNumber !== undefined && content.pickupNumber !== null) {
+    blocks.push(labelled("Abholnummer", String(content.pickupNumber)));
+  }
+
+  blocks.push(
     labelled("Bedienung", firstText(content.waiterName, "Kellner")),
     labelled(
       "Zeitpunkt",
@@ -163,6 +175,11 @@ function stationTicket(job: PrintJobLike): PrintDocument {
 
 function productVoucher(job: PrintJobLike): PrintDocument {
   const content = job.content ?? {};
+  // Issue #66, Stationskasse: fehlt die Abholnummer (Zentralverkauf ohne
+  // Station), bleibt das Druckbild exakt wie vor #66 - Bestandsbons dürfen
+  // sich nicht verändern.
+  const hasPickupNumber =
+    content.pickupNumber !== undefined && content.pickupNumber !== null;
   const blocks: DocumentBlock[] = [
     ...heading(firstText(content.title, "PRODUKTBON")),
     ...copyNotice(content),
@@ -179,14 +196,31 @@ function productVoucher(job: PrintJobLike): PrintDocument {
       formatDateTime(firstText(content.issuedAt, job.createdAt)),
     ),
     { kind: "rule" },
-    {
-      kind: "text",
-      text: `${toQuantity(content.quantity)}x ${firstText(content.productName, "Produkt")}`,
-      align: "center",
-      bold: true,
-      doubleHeight: true,
-    },
   ];
+
+  // Die Abholnummer identifiziert einen Verkauf hörbar und wird gerufen -
+  // deshalb groß gesetzt und zentriert, über dem Produktnamen.
+  if (hasPickupNumber) {
+    blocks.push(
+      { kind: "text", text: "Abholnummer", align: "center" },
+      {
+        kind: "text",
+        text: String(content.pickupNumber),
+        align: "center",
+        bold: true,
+        doubleHeight: true,
+      },
+      { kind: "rule" },
+    );
+  }
+
+  blocks.push({
+    kind: "text",
+    text: `${toQuantity(content.quantity)}x ${firstText(content.productName, "Produkt")}`,
+    align: "center",
+    bold: true,
+    doubleHeight: true,
+  });
 
   const variant = firstText(content.variantName);
   if (variant) {
@@ -201,7 +235,10 @@ function productVoucher(job: PrintJobLike): PrintDocument {
       text: firstText(content.voucherCode, "NICHT VERFÜGBAR"),
       align: "center",
       bold: true,
-      doubleHeight: true,
+      // Der Code identifiziert eine Einheit fälschungssicher, nicht
+      // hörbar - er rückt auf normale Größe zurück, sobald die
+      // Abholnummer den großen Platz über dem Produktnamen einnimmt.
+      doubleHeight: !hasPickupNumber,
     },
     ...footer(content),
   );
@@ -230,8 +267,14 @@ function receipt(job: PrintJobLike): PrintDocument {
       "Datum",
       formatDateTime(firstText(content.createdAt, job.createdAt)),
     ),
-    { kind: "rule" },
   ];
+
+  // Issue #66, Stationskasse: Abholnummer als eigene Zeile, wenn vorhanden.
+  if (content.pickupNumber !== undefined && content.pickupNumber !== null) {
+    blocks.push(labelled("Abholnummer", String(content.pickupNumber)));
+  }
+
+  blocks.push({ kind: "rule" });
 
   for (const item of content.items ?? []) {
     blocks.push(...itemLines(item, true));

@@ -15,8 +15,17 @@ import { JwtAuthGuard } from "../auth/jwt-auth.guard";
 import { RolesGuard } from "../common/guards/roles.guard";
 import { Roles } from "../common/decorators/roles.decorator";
 
+// Issue #66, Stationskasse: STATION ergänzt, sonst kann diese Rolle keine
+// eigene Kassensitzung öffnen - ohne Sitzung weist createQuickSale jeden
+// Verkauf ab (siehe orders.service.ts), und der Stationsmodus wäre für
+// STATION unbenutzbar. Jede Methode dieses Controllers scoped bereits
+// serverseitig auf den eigenen Benutzer (SessionsService: getContext und
+// getActiveSession liefern nur die eigenen Sitzungen, getSummary und
+// closeSession lehnen eine fremde Sitzung mit "Not your session" ab) -
+// STATION bekommt dadurch keinen Zugriff auf fremde Kassensitzungen, nur
+// auf ihre eigenen, wie jede andere Rolle hier auch.
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles("ADMINISTRATOR", "WAITER", "CASHIER")
+@Roles("ADMINISTRATOR", "WAITER", "CASHIER", "STATION")
 @Controller("sessions")
 export class SessionsController {
   constructor(private readonly sessionsService: SessionsService) {}

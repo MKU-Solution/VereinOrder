@@ -47,11 +47,17 @@ describe("SessionsController – Identität und Rollen", () => {
     );
   });
 
-  it("beschränkt Kassensitzungen zentral auf operative Kassenrollen", () => {
+  // Issue #66, Stationskasse: STATION ergänzt, sonst kann diese Rolle keine
+  // eigene Kassensitzung öffnen und der Stationsmodus wäre unbenutzbar
+  // (siehe sessions.controller.ts). Jede Methode dieses Controllers scoped
+  // bereits serverseitig auf den eigenen Benutzer, STATION bekommt dadurch
+  // keinen Zugriff auf fremde Kassensitzungen.
+  it("beschränkt Kassensitzungen zentral auf operative Kassenrollen, seit Issue #66 einschließlich STATION", () => {
     expect(Reflect.getMetadata(ROLES_KEY, SessionsController)).toEqual([
       "ADMINISTRATOR",
       "WAITER",
       "CASHIER",
+      "STATION",
     ]);
   });
 });
