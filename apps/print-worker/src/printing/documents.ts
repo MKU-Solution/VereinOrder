@@ -43,6 +43,34 @@ function labelled(label: string, value: string): DocumentBlock {
   return { kind: "columns", left: label, right: value };
 }
 
+/**
+ * Issue #98: Kopiekennzeichnung für nachgedruckte Belege und Produktbons.
+ * Gilt genau dann, wenn der Druckauftrag `content.isCopy === true` trägt
+ * (nur reprintOrder in orders.service.ts setzt das); reguläre Verkäufe
+ * lassen das Feld weg, und diese Funktion liefert dann keine Zeilen. Direkt
+ * nach der Überschrift platziert, nicht erst im Fußtext, damit die
+ * Kopiekennzeichnung nicht übersehen wird - bei Abholware entscheidet sie
+ * darüber, ob ein zweites Mal Ware ausgegeben wird.
+ */
+function copyNotice(content: Record<string, any>): DocumentBlock[] {
+  if (!content.isCopy) return [];
+  return [
+    {
+      kind: "text",
+      text: "*** KOPIE ***",
+      align: "center",
+      bold: true,
+      doubleHeight: true,
+    },
+    {
+      kind: "text",
+      text: `Nachdruck: ${formatDateTime(content.reprintedAt)}`,
+      align: "center",
+      bold: true,
+    },
+  ];
+}
+
 function itemLines(
   item: Record<string, any>,
   withPrice: boolean,
@@ -137,6 +165,7 @@ function productVoucher(job: PrintJobLike): PrintDocument {
   const content = job.content ?? {};
   const blocks: DocumentBlock[] = [
     ...heading(firstText(content.title, "PRODUKTBON")),
+    ...copyNotice(content),
     {
       kind: "text",
       text: firstText(content.eventName, "Vereinsfest"),
@@ -184,6 +213,7 @@ function receipt(job: PrintJobLike): PrintDocument {
   const content = job.content ?? {};
   const blocks: DocumentBlock[] = [
     ...heading(firstText(content.title, "KASSENBELEG")),
+    ...copyNotice(content),
     {
       kind: "text",
       text: firstText(content.eventName, "Vereinsfest"),
