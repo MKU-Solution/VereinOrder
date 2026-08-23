@@ -81,6 +81,13 @@ jobs:
         run: pnpm --filter @vereinorder/database run db:generate
       - name: PostgreSQL-Client bereitstellen
         run: sudo apt-get update && sudo apt-get install --yes postgresql-client
+      - name: PostgreSQL-Werkzeuge gegen Serverversion prüfen
+        run: |
+          server_major="$(psql "${DATABASE_URL%%\?*}" -Atc "SHOW server_version_num" | cut -c1-2)"
+          dump_major="$(pg_dump --version | grep -oE '[0-9]+' | head -1)"
+          restore_major="$(pg_restore --version | grep -oE '[0-9]+' | head -1)"
+          test "$server_major" = "$dump_major"
+          test "$server_major" = "$restore_major"
       - name: Testdatenbank verifizieren
         run: pnpm test:db-guard
       - name: Integrationstest-Schema migrieren
@@ -167,9 +174,17 @@ jobs:
           file: apps/${{ matrix.component }}/Dockerfile
           platforms: ${{ matrix.platform }}
           push: false
-          outputs: type=cacheonly
+          load: ${{ matrix.component == 'backend' }}
+          outputs: ${{ matrix.component != 'backend' && 'type=cacheonly' || '' }}
+          tags: vereinorder-ci-${{ matrix.component }}:${{ matrix.platform == 'linux/arm64' && 'arm64' || 'amd64' }}
           cache-from: type=gha,scope=${{ matrix.component }}-${{ matrix.platform }}
           cache-to: type=gha,mode=max,scope=${{ matrix.component }}-${{ matrix.platform }}
+      - name: PostgreSQL-Werkzeuge im Backend-Image prüfen
+        if: matrix.component == 'backend'
+        run: |
+          image="vereinorder-ci-backend:${{ matrix.platform == 'linux/arm64' && 'arm64' || 'amd64' }}"
+          test "$(docker run --rm "$image" pg_dump --version | grep -oE '[0-9]+' | head -1)" = "16"
+          test "$(docker run --rm "$image" pg_restore --version | grep -oE '[0-9]+' | head -1)" = "16"
 
   secrets:
     name: Geheimnisprüfung

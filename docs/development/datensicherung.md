@@ -1035,6 +1035,16 @@ der JSON-Code muss einmal richtig laufen, bevor er in Rente geht.
    Wert hat: eine JSON-Datei, die älter ist als der Formatwechsel, ist im Fest ohnehin
    kaum noch brauchbar.
 
+**Umsetzungsstand des zweiten Schnitts:** Native Sicherungen werden als atomar
+veröffentlichtes Paar aus PostgreSQL-Custom-Dump und streng geprüftem Manifest erzeugt.
+Der Lauf ermittelt Tabellen und Migrationen dynamisch, misst Zähl- und Geldsummen vor
+und nach dem Dump, prüft SHA-256 sowie `pg_restore --list` und bindet die
+Werkzeug-Hauptversion an den Server. Planung, Diagnose, sichere Dateipfade und die
+ehrliche Anzeige in der Administration gehören dazu. Native Wiederherstellung,
+Rotation/Speichergrenzen, redigierter Export und JSON-Übernahme bleiben ausdrücklich
+den folgenden Schnitten 3 bis 6 vorbehalten. Der Übergangsweg für JSON-Dateien verlangt
+bereits vor jedem Dateizugriff den Wartungszustand `LOCKED`.
+
 **Als eigene Vorgänge herausgelöst:**
 
 - **Der Einrichtungszustand für PINs nach einer redigierten Wiederherstellung**

@@ -1,13 +1,13 @@
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
+import { ConflictException } from "@nestjs/common";
 import { BackupService } from "./backup.service";
 
-// Issue #67: BackupService braucht seither MaintenanceStateService, um den
-// stuendlichen Lauf bei LOCKED auszusetzen. Diese Tests pruefen ausschliess-
-// lich restoreBackup und beruehren onModuleInit nicht - eine Attrappe reicht.
+// Legacy-Wiederherstellung ist ausschließlich im gesperrten Wartungsmodus
+// zulässig. Die Attrappe bildet genau diese serverseitige Vorbedingung ab.
 function makeMaintenanceStateStub() {
-  return { read: jest.fn(() => ({ phase: "OPEN" })) } as any;
+  return { read: jest.fn(() => ({ phase: "LOCKED" })) } as any;
 }
 
 function createPrisma() {
@@ -93,6 +93,20 @@ describe("BackupService – Wiederherstellung nach Issue #84", () => {
     if (previousBackupDir === undefined) delete process.env.BACKUP_DIR;
     else process.env.BACKUP_DIR = previousBackupDir;
     fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it("verweigert den Legacy-Restore vor jedem Dateizugriff, solange der Wartungsmodus offen ist", async () => {
+    const { prisma, tx } = createPrisma();
+    const service = new BackupService(
+      prisma as any,
+      { read: jest.fn(() => ({ phase: "OPEN" })) } as any,
+    );
+
+    await expect(
+      service.restoreBackup("nicht-vorhanden.json", "admin-1"),
+    ).rejects.toBeInstanceOf(ConflictException);
+    expect(tx.auditLog.deleteMany).not.toHaveBeenCalled();
+    expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 
   it("ordnet einem kategorielosen Produkt aus einer Sicherung von vor Issue #84 dieselbe Auffangkategorie zu wie Migration und Vorlagenimport", async () => {
@@ -248,51 +262,5 @@ describe("BackupService – Wiederherstellung nach Issue #84", () => {
       .data as any[];
     expect(productsWritten).toHaveLength(1);
     expect(productsWritten[0].categoryId).toBe("category-a");
-  });
-});
-
-// Issue #67: Der stuendliche Sicherungslauf setzt bei LOCKED aus - ein
-// Reaper/Cron, der waehrend einer Wiederherstellung liest oder schreibt,
-// arbeitet an Daten, die die Wiederherstellung gleich ersetzt.
-describe("BackupService – stündlicher Lauf setzt bei LOCKED aus (Issue #67)", () => {
-  let tempDir: string;
-  let previousBackupDir: string | undefined;
-
-  beforeEach(() => {
-    previousBackupDir = process.env.BACKUP_DIR;
-    tempDir = fs.mkdtempSync(
-      path.join(os.tmpdir(), "vereinorder-backup-cron-spec-"),
-    );
-    process.env.BACKUP_DIR = tempDir;
-  });
-
-  afterEach(() => {
-    if (previousBackupDir === undefined) delete process.env.BACKUP_DIR;
-    else process.env.BACKUP_DIR = previousBackupDir;
-    fs.rmSync(tempDir, { recursive: true, force: true });
-  });
-
-  it("fragt die Datenbank nicht einmal ab, wenn der Wartungsmodus LOCKED ist", async () => {
-    const prisma = { event: { count: jest.fn().mockResolvedValue(1) } };
-    const maintenanceState = {
-      read: jest.fn(() => ({ phase: "LOCKED" })),
-    };
-    const service = new BackupService(prisma as any, maintenanceState as any);
-
-    await service.runScheduledBackupIfDue();
-
-    expect(prisma.event.count).not.toHaveBeenCalled();
-  });
-
-  it("läuft normal, wenn der Wartungsmodus OPEN ist", async () => {
-    const prisma = { event: { count: jest.fn().mockResolvedValue(0) } };
-    const maintenanceState = { read: jest.fn(() => ({ phase: "OPEN" })) };
-    const service = new BackupService(prisma as any, maintenanceState as any);
-
-    await service.runScheduledBackupIfDue();
-
-    expect(prisma.event.count).toHaveBeenCalledWith({
-      where: { status: "ACTIVE" },
-    });
   });
 });
