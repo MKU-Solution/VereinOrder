@@ -96,6 +96,46 @@ describe("BackupService.restoreBackup – Wiederherstellung gegen echtes Postgre
     fs.rmSync(backupDir, { recursive: true, force: true });
   });
 
+  it("setzt bei einer Sicherung ohne Bestellungen die Sequenz auf die erste gültige Nummer", async () => {
+    const admin = await prisma.user.create({
+      data: {
+        username: `waechtertest-leerer-restore-${randomUUID()}`,
+        pinHash: "x",
+        role: "ADMINISTRATOR",
+      },
+    });
+    cleanupUserIds.push(admin.id);
+
+    const event = await prisma.event.create({
+      data: { name: `Wächtertest leerer Restore ${randomUUID()}` },
+    });
+    cleanupEventIds.push(event.id);
+
+    expect(await prisma.order.count()).toBe(0);
+    const backup = await backupService.createBackup(admin.id);
+
+    // Beweist, dass der Restore nicht nur einen zufällig schon passenden
+    // Sequenzstand übernimmt. Auf einer leeren Tabelle ist 1,false die einzig
+    // korrekte SERIAL-Basis; 0 ist für diese Sequenz ungültig.
+    await prisma.$executeRawUnsafe(
+      `SELECT setval(pg_get_serial_sequence('"Order"', 'orderNumber'), 37, true)`,
+    );
+
+    await expect(
+      backupService.restoreBackup(backup.filename, admin.id),
+    ).resolves.toMatchObject({ success: true });
+
+    const firstOrder = await prisma.order.create({
+      data: {
+        eventId: event.id,
+        userId: admin.id,
+        dataMode: "LIVE",
+        totalAmount: 100,
+      },
+    });
+    expect(firstOrder.orderNumber).toBe(1);
+  }, 30_000);
+
   it("stellt Bestellungen, Zahlungen, Produktbons und Auditurheber vollständig wieder her und setzt Zähler und Sequenz nach", async () => {
     // -----------------------------------------------------------------
     // 1. Belastbaren Bestand aufbauen.
@@ -525,5 +565,67 @@ describe("BackupService.restoreBackup – Wiederherstellung gegen echtes Postgre
     // outsiderAdmin nicht erneut über cleanupUserIds löschen — existiert
     // nach der Wiederherstellung nicht mehr.
     cleanupUserIds.pop();
+  }, 30_000);
+
+  it("setzt nach ausdrücklich wiederhergestellten Bestellnummern die Sequenz auf die nächste freie Nummer (Issue #102)", async () => {
+    const user = await prisma.user.create({
+      data: {
+        username: `waechtertest-bestellnummer-restore-${randomUUID()}`,
+        pinHash: "x",
+        role: "ADMINISTRATOR",
+      },
+    });
+    cleanupUserIds.push(user.id);
+
+    const event = await prisma.event.create({
+      data: { name: `Wächtertest Bestellnummer-Restore ${randomUUID()}` },
+    });
+    cleanupEventIds.push(event.id);
+
+    // Ein Wert oberhalb des momentanen Datenbankmaximums beweist, dass der
+    // folgende automatische Insert nur dann korrekt ist, wenn restoreBackup
+    // die PostgreSQL-Sequenz tatsächlich nachsetzt.
+    const maximum = await prisma.order.aggregate({
+      _max: { orderNumber: true },
+    });
+    const restoredOrderNumber = (maximum._max.orderNumber ?? 0) + 100;
+    await prisma.order.create({
+      data: {
+        eventId: event.id,
+        userId: user.id,
+        dataMode: "LIVE",
+        totalAmount: 350,
+        orderNumber: restoredOrderNumber,
+      },
+    });
+
+    const backup = await backupService.createBackup(user.id);
+
+    // Ein Restore auf einem frisch aufgesetzten Gerät hat genau diesen
+    // Sequenzzustand: Die Daten enthalten hohe, explizit geschriebene Nummern,
+    // die lokale SERIAL-Sequenz weiß davon aber noch nichts. setval(..., false)
+    // macht den nächsten nextval sicher zu 1, ohne Daten außerhalb der durch
+    // assertTestDatabaseUrl geprüften Wegwerfdatenbank anzufassen.
+    await prisma.$executeRawUnsafe(`
+      SELECT setval(
+        pg_get_serial_sequence('"Order"', 'orderNumber'),
+        1,
+        false
+      )
+    `);
+
+    await expect(
+      backupService.restoreBackup(backup.filename, user.id),
+    ).resolves.toMatchObject({ success: true });
+
+    const subsequentOrder = await prisma.order.create({
+      data: {
+        eventId: event.id,
+        userId: user.id,
+        dataMode: "LIVE",
+        totalAmount: 700,
+      },
+    });
+    expect(subsequentOrder.orderNumber).toBe(restoredOrderNumber + 1);
   }, 30_000);
 });

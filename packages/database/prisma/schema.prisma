@@ -370,6 +370,7 @@ model Order {
   stationId    String?
   station      Station? @relation(fields: [stationId], references: [id], onDelete: SetNull)
 
+  @@unique([eventId, dataMode, orderNumber])
   @@unique([eventId, dataMode, pickupNumber])
   @@index([eventId, fulfillmentStatus, areaId])
   @@index([eventId, dataMode])

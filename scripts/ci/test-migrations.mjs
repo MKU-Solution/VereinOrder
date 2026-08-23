@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 const CONFIRMATION = "VEREINORDER_TEST_ONLY";
 const EMPTY_DATABASE = "vereinorder_ci_test_empty";
 const UPGRADE_DATABASE = "vereinorder_ci_test_upgrade";
+const DUPLICATE_DATABASE = "vereinorder_ci_test_duplicate";
 const repoRoot = resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const migrationsDir = resolve(repoRoot, "packages/database/prisma/migrations");
 const pnpmEntryPoint = process.env.npm_execpath;
@@ -109,6 +110,17 @@ const PICKUP_SEED_AMOUNTS = {
   test1: 300,
 };
 
+// Altstand unmittelbar vor Issue #102. Dieselbe Bestellnummer ist in einer
+// anderen Betriebsart fachlich erlaubt; innerhalb derselben Kombination aus
+// Veranstaltung und Betriebsart muss die neue Migration sie abweisen.
+const ORDER_NUMBER_SEED = {
+  eventId: "d0000000-0000-4000-8000-000000000001",
+  userId: "d0000000-0000-4000-8000-000000000002",
+  orderLive: "d0000000-0000-4000-8000-000000000010",
+  orderOtherMode: "d0000000-0000-4000-8000-000000000011",
+  orderNumber: 900000,
+};
+
 function fail(message) {
   throw new Error(message);
 }
@@ -185,6 +197,33 @@ function psql(target, database, sql) {
   });
 }
 
+function psqlExpectFailure(target, database, sql, expectedMessage) {
+  const result = spawnSync("psql", postgresArgs(target, database), {
+    cwd: repoRoot,
+    encoding: "utf8",
+    stdio: ["pipe", "pipe", "pipe"],
+    input: sql,
+    env: {
+      ...process.env,
+      PGPASSWORD: decodeURIComponent(target.password),
+    },
+  });
+  if (result.error) {
+    fail(`psql konnte nicht gestartet werden: ${result.error.message}`);
+  }
+  if (result.status === 0) {
+    fail("Die absichtlich ungültige Migration wurde unerwartet akzeptiert.");
+  }
+  const output = `${result.stdout || ""}\n${result.stderr || ""}`;
+  if (!output.includes(expectedMessage)) {
+    process.stdout.write(result.stdout || "");
+    process.stderr.write(result.stderr || "");
+    fail(
+      `Die Migration scheiterte ohne die erwartete verständliche Meldung: ${expectedMessage}`,
+    );
+  }
+}
+
 function databaseUrl(target, database) {
   const url = new URL(target.toString());
   url.pathname = `/${database}`;
@@ -210,7 +249,9 @@ function prisma(args, targetUrl) {
 }
 
 function recreateDatabase(target, database) {
-  if (![EMPTY_DATABASE, UPGRADE_DATABASE].includes(database)) {
+  if (
+    ![EMPTY_DATABASE, UPGRADE_DATABASE, DUPLICATE_DATABASE].includes(database)
+  ) {
     fail(`Unerlaubtes destruktives Datenbankziel: ${database}`);
   }
   const literal = database.replaceAll("'", "''");
@@ -813,6 +854,84 @@ END $$;
 `;
 }
 
+function seedLegacyOrderNumbersSql(ids, duplicateWithinScope = false) {
+  const secondMode = duplicateWithinScope ? "LIVE" : "TEST";
+  return `
+INSERT INTO "User" (id, username, "pinHash", role, "isActive", "createdAt", "updatedAt")
+VALUES ('${ids.userId}', 'migration-order-number-user', 'x', 'CASHIER'::"Role", true, now(), now());
+
+INSERT INTO "Event" (id, name, "testMode", status, "createdAt", "updatedAt")
+VALUES ('${ids.eventId}', 'Migration Bestellnummer', false, 'DRAFT'::"EventStatus", now(), now());
+
+-- Explizite Nummern bewegen eine SERIAL-Sequenz nicht. Im gueltigen Fall
+-- beweist die zweite Betriebsart zugleich, dass der neue Schluessel nicht
+-- versehentlich global angelegt wird.
+INSERT INTO "Order" (
+  id, "orderNumber", "totalAmount", "userId", "eventId", "dataMode", "createdAt", "updatedAt"
+) VALUES
+('${ids.orderLive}', ${ids.orderNumber}, 350, '${ids.userId}', '${ids.eventId}', 'LIVE'::"OperationalDataMode", now(), now()),
+('${ids.orderOtherMode}', ${ids.orderNumber}, 700, '${ids.userId}', '${ids.eventId}', '${secondMode}'::"OperationalDataMode", now(), now());
+`;
+}
+
+function verifyOrderNumberMigrationSql(ids) {
+  return `
+DO $$
+DECLARE
+  generated_number integer;
+  duplicate_rejected boolean := false;
+  index_definition text;
+BEGIN
+  SELECT indexdef INTO index_definition
+  FROM pg_indexes
+  WHERE schemaname = current_schema()
+    AND indexname = 'Order_eventId_dataMode_orderNumber_key';
+
+  IF index_definition IS NULL
+     OR index_definition NOT LIKE '%("eventId", "dataMode", "orderNumber")%' THEN
+    RAISE EXCEPTION 'Der zusammengesetzte Unique-Index fuer Bestellnummern fehlt oder hat die falsche Grenze: %.', index_definition;
+  END IF;
+
+  -- Die Migration muss die SERIAL-Sequenz auf das explizit geschriebene
+  -- Maximum ausrichten. Sonst waere der folgende Wert wesentlich kleiner.
+  INSERT INTO "Order" (
+    id, "totalAmount", "userId", "eventId", "dataMode", "createdAt", "updatedAt"
+  ) VALUES (
+    gen_random_uuid()::text, 100, '${ids.userId}', '${ids.eventId}',
+    'LIVE'::"OperationalDataMode", now(), now()
+  ) RETURNING "orderNumber" INTO generated_number;
+
+  IF generated_number <= ${ids.orderNumber} THEN
+    RAISE EXCEPTION 'Bestellnummernsequenz steht auf %, erwartet wurde ein Wert groesser als das importierte Maximum %.', generated_number, ${ids.orderNumber};
+  END IF;
+
+  BEGIN
+    INSERT INTO "Order" (
+      id, "orderNumber", "totalAmount", "userId", "eventId", "dataMode", "createdAt", "updatedAt"
+    ) VALUES (
+      gen_random_uuid()::text, ${ids.orderNumber}, 100, '${ids.userId}',
+      '${ids.eventId}', 'LIVE'::"OperationalDataMode", now(), now()
+    );
+  EXCEPTION WHEN unique_violation THEN
+    duplicate_rejected := true;
+  END;
+
+  IF NOT duplicate_rejected THEN
+    RAISE EXCEPTION 'Doppelte Bestellnummer innerhalb derselben Veranstaltung und Betriebsart wurde nicht abgewiesen.';
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM "Order"
+    WHERE id = '${ids.orderOtherMode}'
+      AND "dataMode" = 'TEST'::"OperationalDataMode"
+      AND "orderNumber" = ${ids.orderNumber}
+  ) THEN
+    RAISE EXCEPTION 'Dieselbe Bestellnummer wurde im getrennten Testbetrieb nicht erhalten.';
+  END IF;
+END $$;
+`;
+}
+
 function dropDatabase(target, database) {
   const literal = database.replaceAll("'", "''");
   psql(
@@ -862,6 +981,14 @@ const DATA_MIGRATION_CHECKS = [
     verify: () =>
       verifyPickupNumberMigrationSql(PICKUP_SEED, PICKUP_SEED_AMOUNTS),
   },
+  {
+    migration: "20260823110000_enforce_unique_order_number",
+    seedLabel:
+      "explizite Bestellnummern und getrennte Betriebsarten einspielen",
+    seed: () => seedLegacyOrderNumbersSql(ORDER_NUMBER_SEED),
+    verifyLabel: "Eindeutigkeit und Sequenz der Bestellnummer prüfen",
+    verify: () => verifyOrderNumberMigrationSql(ORDER_NUMBER_SEED),
+  },
 ];
 
 for (const check of DATA_MIGRATION_CHECKS) {
@@ -876,6 +1003,11 @@ for (const check of DATA_MIGRATION_CHECKS) {
 const seedsByMigration = new Map(
   DATA_MIGRATION_CHECKS.map((check) => [check.migration, check]),
 );
+const orderNumberMigration = "20260823110000_enforce_unique_order_number";
+const orderNumberMigrationIndex = migrationNames.indexOf(orderNumberMigration);
+if (orderNumberMigrationIndex < 0) {
+  fail(`Migration ${orderNumberMigration} fehlt.`);
+}
 
 try {
   console.log(`Migrationstest auf ${target.hostname}: leere Datenbank`);
@@ -923,9 +1055,55 @@ try {
   }
 
   console.log(
-    "Migrationstest erfolgreich: leerer Stand und Upgrade-Stand sind aktuell.",
+    `Migrationstest auf ${target.hostname}: vorhandene doppelte Bestellnummern`,
+  );
+  recreateDatabase(target, DUPLICATE_DATABASE);
+  for (const migrationName of migrationNames.slice(
+    0,
+    orderNumberMigrationIndex,
+  )) {
+    const sql = readFileSync(
+      resolve(migrationsDir, migrationName, "migration.sql"),
+      "utf8",
+    );
+    psql(target, DUPLICATE_DATABASE, sql);
+  }
+  psql(
+    target,
+    DUPLICATE_DATABASE,
+    seedLegacyOrderNumbersSql(ORDER_NUMBER_SEED, true),
+  );
+  psqlExpectFailure(
+    target,
+    DUPLICATE_DATABASE,
+    readFileSync(
+      resolve(migrationsDir, orderNumberMigration, "migration.sql"),
+      "utf8",
+    ),
+    "Eindeutigkeit der Bestellnummer je Veranstaltung und Betriebsart kann nicht aktiviert werden",
+  );
+  psql(
+    target,
+    DUPLICATE_DATABASE,
+    `DO $$
+     BEGIN
+       IF to_regclass('"Order_eventId_dataMode_orderNumber_key"') IS NOT NULL THEN
+         RAISE EXCEPTION 'Nach dem erwarteten Migrationsabbruch blieb ein Teilindex zurück.';
+       END IF;
+       IF (SELECT count(*) FROM "Order"
+           WHERE "eventId" = '${ORDER_NUMBER_SEED.eventId}'
+             AND "dataMode" = 'LIVE'::"OperationalDataMode"
+             AND "orderNumber" = ${ORDER_NUMBER_SEED.orderNumber}) <> 2 THEN
+         RAISE EXCEPTION 'Der Migrationsabbruch hat den absichtlich doppelten Altbestand verändert.';
+       END IF;
+     END $$;`,
+  );
+
+  console.log(
+    "Migrationstest erfolgreich: leerer Stand, Upgrade-Stand und verständlicher Duplikatabbruch sind geprüft.",
   );
 } finally {
   dropDatabase(target, EMPTY_DATABASE);
   dropDatabase(target, UPGRADE_DATABASE);
+  dropDatabase(target, DUPLICATE_DATABASE);
 }
