@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Controller,
   Post,
   Get,
@@ -36,6 +37,44 @@ export class OrdersController {
       items: { productId: string; quantity: number; optionIds?: string[] }[];
       paymentMethod: "CASH" | "CARD";
       tenderedAmount?: number;
+    },
+  ) {
+    // Stationskasse (Issue #66, docs/development/stationskasse.md
+    // Abschnitt 2): stationId ist ausschließlich über POST
+    // /orders/station-sale erreichbar. Ein stationId im Rumpf dieses
+    // Endpunkts wird abgewiesen, sonst wäre der Stationsmodus über den
+    // falschen, für STATION nicht zugänglichen Endpunkt erreichbar.
+    if ((body as { stationId?: unknown })?.stationId !== undefined) {
+      throw new BadRequestException(
+        "Der zentrale Schnellverkauf akzeptiert kein stationId. Bitte den Stationsverkauf unter /orders/station-sale verwenden.",
+      );
+    }
+    return this.ordersService.createQuickSale(req.user?.userId, body);
+  }
+
+  // Stationskasse (Issue #66): eigener Endpunkt für die Rollenmatrix
+  // (zusätzlich STATION), leitet aber auf denselben Service wie
+  // /quick-sale. createQuickSale bleibt die einzige Stelle, an der ein
+  // bezahlter Bonverkauf entsteht - siehe
+  // docs/development/stationskasse.md, Abschnitt 2.
+  @Get("station-sale/context")
+  @Roles("ADMINISTRATOR", "CASHIER", "STATION")
+  async getStationSaleContext(@Request() req: any) {
+    return this.ordersService.getStationSaleContext(req.user?.userId);
+  }
+
+  @Post("station-sale")
+  @Roles("ADMINISTRATOR", "CASHIER", "STATION")
+  async createStationSale(
+    @Request() req: any,
+    @Body()
+    body: {
+      eventId: string;
+      idempotencyKey: string;
+      items: { productId: string; quantity: number; optionIds?: string[] }[];
+      paymentMethod: "CASH";
+      tenderedAmount?: number;
+      stationId: string;
     },
   ) {
     return this.ordersService.createQuickSale(req.user?.userId, body);

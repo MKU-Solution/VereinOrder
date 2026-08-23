@@ -47,4 +47,15 @@ export const ORDER_REJECTION_MESSAGES = {
     "Dieses Benutzerkonto ist nicht aktiv. Bitte bei der Administration melden.",
   IDEMPOTENCY_KEY_CONFLICT:
     "Für dieses Vorgangskennzeichen liegt bereits eine abweichende Bestellung vor. Bitte neu erfassen und erneut senden.",
+  // Issue #66, Stationskasse: Reissleine gegen einen entlaufenen
+  // Abholnummernzaehler. Der Verkauf wird abgewiesen, statt die Nummer
+  // umbrechen zu lassen - ein Umbruch gaebe zwei Personen dieselbe Nummer.
+  // Steht hier und nicht im Backend, weil es eine fachliche Ablehnung des
+  // Verkaufs ist, die beim Bedienpersonal ankommt, wie
+  // EVENT_NOT_ACTIVE_FOR_SALES und PRODUCT_NOT_IN_EVENT_QUICK_SALE. Wie
+  // diese beiden hat der Text bewusst KEIN Muster in
+  // apps/frontend/src/lib/offlineQueueClassify.ts: die Bonkassen senden nicht
+  // ueber die Offline-Warteschlange, der Text erreicht sie also nie.
+  PICKUP_NUMBER_EXHAUSTED:
+    "Der Abholnummernbereich dieser Veranstaltung ist erschöpft. Bitte bei der Administration melden; der Verkauf wurde nicht gebucht.",
 } as const;

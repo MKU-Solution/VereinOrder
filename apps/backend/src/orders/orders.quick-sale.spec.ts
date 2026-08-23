@@ -277,6 +277,13 @@ describe("OrdersService – Bonkassen-Schnellverkauf für Issue #52", () => {
       eventId: "event-1",
       totalAmount: 900,
       cashierSessionId: "session-1",
+      // Issue #66: findUnique laedt hier ohne select, liefert also alle
+      // Skalarspalten - stationId/pickupNumber sind bei einem regulaeren
+      // Zentralverkauf null, nicht undefined. Das bildet
+      // orders.service.ts:423 exakt ab, siehe die Normalisierung in der
+      // Wiederholungspruefung (Kommentar dort).
+      stationId: null,
+      pickupNumber: null,
       items: [{ productId: product.id, variantId: null, quantity: 2, product }],
       payments: [
         {
@@ -312,6 +319,13 @@ describe("OrdersService – Bonkassen-Schnellverkauf für Issue #52", () => {
       eventId: "event-1",
       totalAmount: 900,
       cashierSessionId: "session-1",
+      // Issue #66: findUnique laedt hier ohne select, liefert also alle
+      // Skalarspalten - stationId/pickupNumber sind bei einem regulaeren
+      // Zentralverkauf null, nicht undefined. Das bildet
+      // orders.service.ts:423 exakt ab, siehe die Normalisierung in der
+      // Wiederholungspruefung (Kommentar dort).
+      stationId: null,
+      pickupNumber: null,
       items: [{ productId: product.id, variantId: null, quantity: 2, product }],
       payments: [
         {

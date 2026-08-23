@@ -176,6 +176,7 @@ function createPrisma() {
     orderItem: { deleteMany: jest.fn() },
     order: { findMany: jest.fn(), deleteMany: jest.fn(), count: jest.fn() },
     cashierSession: { deleteMany: jest.fn(), count: jest.fn() },
+    eventPickupCounter: { deleteMany: jest.fn() },
     auditLog: { create: jest.fn() },
     configOperation: { findUnique: jest.fn(), create: jest.fn() },
     $queryRaw: jest.fn(),
@@ -751,6 +752,7 @@ describe("EventsService – Wächtervertrag für Issue #53", () => {
     tx.orderItem.deleteMany.mockResolvedValue({ count: 2 });
     tx.order.deleteMany.mockResolvedValue({ count: 1 });
     tx.cashierSession.deleteMany.mockResolvedValue({ count: 1 });
+    tx.eventPickupCounter.deleteMany.mockResolvedValue({ count: 1 });
     tx.auditLog.create.mockResolvedValue({ id: "audit-1" });
     tx.event.update.mockResolvedValue({
       id: "event-test",
@@ -790,5 +792,85 @@ describe("EventsService – Wächtervertrag für Issue #53", () => {
         }),
       }),
     );
+  });
+
+  // Issue #66: ohne diese Loeschung zaehlt eine bereinigte Testveranstaltung
+  // beim naechsten Probeverkauf beim alten Stand weiter, obwohl keine
+  // Bestellung mehr dahintersteht. Der Echtzaehler bleibt dabei unberuehrt -
+  // deshalb wird der Filter hier woertlich geprueft und nicht nur, DASS
+  // geloescht wurde.
+  it("löscht den Testzähler der Abholnummer mit und weist ihn in Antwort und Protokoll aus", async () => {
+    tx.configOperation.findUnique.mockResolvedValue(null);
+    tx.$queryRaw.mockResolvedValueOnce([]).mockResolvedValueOnce([
+      {
+        id: "event-test",
+        name: "Testfest",
+        status: "TEST_MODE",
+        testMode: true,
+      },
+    ]);
+    tx.order.count.mockResolvedValue(0);
+    tx.cashierSession.count.mockResolvedValue(0);
+    tx.order.findMany.mockResolvedValue([{ id: "order-1" }]);
+    tx.productVoucher.deleteMany.mockResolvedValue({ count: 2 });
+    tx.printJob.deleteMany.mockResolvedValue({ count: 1 });
+    tx.payment.deleteMany.mockResolvedValue({ count: 1 });
+    tx.orderItem.deleteMany.mockResolvedValue({ count: 2 });
+    tx.order.deleteMany.mockResolvedValue({ count: 1 });
+    tx.cashierSession.deleteMany.mockResolvedValue({ count: 1 });
+    tx.eventPickupCounter.deleteMany.mockResolvedValue({ count: 1 });
+    tx.auditLog.create.mockResolvedValue({ id: "audit-1" });
+    tx.event.update.mockResolvedValue({
+      id: "event-test",
+      status: "PREPARED",
+      testMode: false,
+    });
+
+    const result = await service.cleanTestData(
+      "event-test",
+      "admin-1",
+      "Testfest",
+      "cleanup-key-1",
+    );
+
+    expect(tx.eventPickupCounter.deleteMany).toHaveBeenCalledWith({
+      where: { eventId: "event-test", dataMode: "TEST" },
+    });
+    expect(result).toEqual(
+      expect.objectContaining({
+        deleted: expect.objectContaining({ pickupCounters: 1 }),
+      }),
+    );
+    expect(tx.auditLog.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          details: expect.objectContaining({ pickupCountersDeleted: 1 }),
+        }),
+      }),
+    );
+  });
+
+  it("rührt den Abholnummernzähler nicht an, wenn die Bereinigung vorher abbricht", async () => {
+    tx.configOperation.findUnique.mockResolvedValue(null);
+    tx.$queryRaw.mockResolvedValueOnce([]).mockResolvedValueOnce([
+      {
+        id: "event-test",
+        name: "Testfest",
+        status: "TEST_MODE",
+        testMode: true,
+      },
+    ]);
+    tx.order.count.mockResolvedValue(0);
+    tx.cashierSession.count.mockResolvedValue(1);
+
+    await expect(
+      service.cleanTestData(
+        "event-test",
+        "admin-1",
+        "Testfest",
+        "cleanup-key-1",
+      ),
+    ).rejects.toBeInstanceOf(ConflictException);
+    expect(tx.eventPickupCounter.deleteMany).not.toHaveBeenCalled();
   });
 });

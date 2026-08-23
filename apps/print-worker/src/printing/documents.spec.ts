@@ -146,6 +146,28 @@ const receiptReprint: PrintJobLike = {
   },
 };
 
+// Issue #66, Stationskasse: dieselben Aufträge, ergänzt um pickupNumber.
+// Ausschließlich vom Backend gesetzt, wenn der Verkauf einer Station
+// zugeordnet ist (createQuickSale, orders.service.ts); ein Zentralverkauf
+// ohne Station lässt das Feld weg, siehe die Fixtures ohne Zusatz oben.
+const stationTicketWithPickupNumber: PrintJobLike = {
+  ...stationTicket,
+  id: "job-station-pickup",
+  content: { ...stationTicket.content, orderNumber: 44, pickupNumber: 12 },
+};
+
+const productVoucherWithPickupNumber: PrintJobLike = {
+  ...productVoucher,
+  id: "job-voucher-pickup",
+  content: { ...productVoucher.content, orderNumber: 44, pickupNumber: 12 },
+};
+
+const receiptWithPickupNumber: PrintJobLike = {
+  ...receipt,
+  id: "job-receipt-pickup",
+  content: { ...receipt.content, orderNumber: 44, pickupNumber: 12 },
+};
+
 const cashierClosing: PrintJobLike = {
   id: "job-closing",
   jobType: "CASHIER_CLOSING",
@@ -188,6 +210,9 @@ const ALL_JOBS = [
   receipt,
   productVoucherReprint,
   receiptReprint,
+  stationTicketWithPickupNumber,
+  productVoucherWithPickupNumber,
+  receiptWithPickupNumber,
   cashierClosing,
   testPrint,
 ];
@@ -328,6 +353,72 @@ describe("Bonaufbau je Auftragsart", () => {
       expect(text).not.toContain("KASSENBELEG");
 
       expect(textOf(receipt, width)).not.toContain("KOPIE");
+    },
+  );
+
+  // Issue #66, Stationskasse: die Abholnummer identifiziert einen Verkauf
+  // hörbar (sie wird gerufen) und steht deshalb groß über dem Produktnamen;
+  // der Bon-Code identifiziert eine Einheit fälschungssicher und rückt
+  // dafür auf normale Größe zurück. Fehlt die Nummer (Zentralverkauf ohne
+  // Station), bleibt das Druckbild exakt wie vor #66.
+  it.each(WIDTHS)(
+    "zeigt die Abholnummer groß auf dem Produktbon und verkleinert den Bon-Code auf %s mm",
+    (width) => {
+      const text = textOf(productVoucherWithPickupNumber, width);
+      expect(text).toContain("Abholnummer");
+      expect(text).toContain("12");
+
+      const profile = PAPER_PROFILES[width];
+      const lines = renderDocument(
+        buildDocument(productVoucherWithPickupNumber),
+        profile,
+      );
+      const pickupLine = lines.find((line) => line.text.trim() === "12");
+      const codeLine = lines.find(
+        (line) => line.text.trim() === "VO-2026-000042",
+      );
+      expect(pickupLine?.doubleHeight).toBe(true);
+      expect(codeLine?.doubleHeight).toBe(false);
+    },
+  );
+
+  it.each(WIDTHS)(
+    "lässt den Produktbon ohne Abholnummer unverändert auf %s mm (Issue #66)",
+    (width) => {
+      const text = textOf(productVoucher, width);
+      expect(text).not.toContain("Abholnummer");
+
+      const profile = PAPER_PROFILES[width];
+      const lines = renderDocument(buildDocument(productVoucher), profile);
+      const codeLine = lines.find(
+        (line) => line.text.trim() === "VO-2026-000042",
+      );
+      // Bestandsbons dürfen sich nicht verändern: der Bon-Code bleibt groß.
+      expect(codeLine?.doubleHeight).toBe(true);
+    },
+  );
+
+  it.each(WIDTHS)(
+    "druckt die Abholnummer als eigene Zeile auf dem Kassenbeleg, wenn vorhanden, auf %s mm (Issue #66)",
+    (width) => {
+      const text = textOf(receiptWithPickupNumber, width);
+      expect(text).toContain("Abholnummer");
+      expect(text).toContain("12");
+
+      expect(textOf(receipt, width)).not.toContain("Abholnummer");
+    },
+  );
+
+  it.each(WIDTHS)(
+    "druckt die Abholnummer auf dem Stationsbon neben Tisch/Bereich, wenn vorhanden, auf %s mm (Issue #66)",
+    (width) => {
+      const text = textOf(stationTicketWithPickupNumber, width);
+      expect(text).toContain("Abholnummer");
+      expect(text).toContain("12");
+      // Tisch/Bereich bleibt zusätzlich stehen, es wird nicht ersetzt.
+      expect(text).toContain("Tisch/Bereich");
+
+      expect(textOf(stationTicket, width)).not.toContain("Abholnummer");
     },
   );
 
