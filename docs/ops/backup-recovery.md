@@ -62,11 +62,22 @@ erfolgreichem Vergleich und Entfernen der Nebendatenbank erhält die Sicherung d
 Die Festdatenbank wird bei dieser Prüfung nicht verändert; der Wartungsmodus ist dafür
 nicht erforderlich.
 
+Für aktuelle native Sicherungen gibt es zusätzlich
+**„Wiederherstellung vorbereiten“**. Dieser Schritt ist ausschließlich im Zustand
+`LOCKED` möglich. Der Administrator muss den im Manifest gespeicherten
+Sicherungszeitpunkt wortgleich eingeben und ausdrücklich bestätigen, dass alle Kassen
+online und ihre lokalen Warteschlangen leer sind. VereinOrder prüft Manifest,
+Prüfsumme, `pg_restore --list` und Migrationsstand, zählt offene Kassensitzungen,
+erstellt eine strukturgeprüfte `PRE_RESTORE`-Sicherung und spielt den gewählten Dump
+noch einmal vollständig in eine isolierte Nebendatenbank ein. Erfolg oder Ablehnung
+werden auditierbar erfasst. Die Festdatenbank bleibt auch bei erfolgreicher
+Vorbereitung unverändert.
+
 Ältere, neuere oder auseinandergelaufene Migrationsstände können noch nicht geprüft
 werden. Insbesondere wird ein älterer Dump nicht ohne den späteren, abgesicherten
 `migrate deploy`-Schritt als verwendbar ausgewiesen.
 
-Die native Wiederherstellung eines PostgreSQL-Dumps ist noch nicht freigegeben. Die
+Die eigentliche native Wiederherstellung eines PostgreSQL-Dumps ist noch nicht freigegeben. Die
 Administration zeigt für native Sicherungen deshalb bewusst keine
 **„Wiederherstellen“**-Schaltfläche. Auch der API-Endpunkt lehnt `.dump`- und
 `.manifest.json`-Dateien ab. Das alte `infrastructure/scripts/restore.sh` gehört nicht

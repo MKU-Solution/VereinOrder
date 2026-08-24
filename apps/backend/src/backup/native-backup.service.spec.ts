@@ -53,6 +53,7 @@ function createPrisma(options?: { changeTablesAfterDump?: boolean }) {
   return {
     $queryRawUnsafe: query,
     auditLog: { create: jest.fn().mockResolvedValue({ id: "audit-1" }) },
+    cashierSession: { count: jest.fn().mockResolvedValue(2) },
   };
 }
 
@@ -554,6 +555,121 @@ describe("Native PostgreSQL-Sicherung V1 (Issue #67)", () => {
       ),
     );
     expect(manifest.verification.restoration.status).toBe("PASSED");
+  });
+
+  it("lehnt die Restore-Vorbereitung außerhalb von LOCKED vor jedem Dateizugriff ab", async () => {
+    const prisma = createPrisma();
+    const service = new NativeBackupService(
+      prisma as any,
+      { read: () => ({ phase: "OPEN" }) } as any,
+      createTools() as any,
+    );
+    const downloadSpy = jest.spyOn(service, "getDownloadFilePath");
+
+    await expect(
+      service.prepareRestoration(
+        "vereinorder_test_manual.dump",
+        {
+          confirmedCreatedAt: "2026-08-24T08:30:00.000Z",
+          queuesConfirmed: true,
+        },
+        { userId: "admin-id", username: "admin" },
+      ),
+    ).rejects.toBeInstanceOf(ConflictException);
+
+    expect(downloadSpy).not.toHaveBeenCalled();
+    expect(prisma.cashierSession.count).not.toHaveBeenCalled();
+    expect(prisma.auditLog.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ action: "RESTORE_REJECTED" }),
+      }),
+    );
+  });
+
+  it("erstellt bei exakter Bestätigung eine PRE_RESTORE-Sicherung und prüft den Zieldump erneut isoliert", async () => {
+    const prisma = createPrisma();
+    const tools = createTools();
+    const openService = new NativeBackupService(
+      prisma as any,
+      { read: () => ({ phase: "OPEN" }) } as any,
+      tools as any,
+    );
+    const created = await openService.createBackup("MANUAL", {
+      userId: "admin-id",
+      username: "admin",
+    });
+    const lockedService = new NativeBackupService(
+      prisma as any,
+      { read: () => ({ phase: "LOCKED" }) } as any,
+      tools as any,
+    );
+    jest
+      .spyOn(lockedService as any, "createVerificationClient")
+      .mockReturnValue({
+        ...createPrisma(),
+        $disconnect: jest.fn().mockResolvedValue(undefined),
+      });
+
+    const result = await lockedService.prepareRestoration(
+      created.filename,
+      {
+        confirmedCreatedAt: created.createdAt,
+        queuesConfirmed: true,
+      },
+      { userId: "admin-id", username: "admin" },
+    );
+
+    expect(result).toMatchObject({
+      selectedBackup: {
+        filename: created.filename,
+        verification: "RESTORE_VERIFIED",
+      },
+      safetyBackup: { trigger: "PRE_RESTORE" },
+      activeCashierSessions: 2,
+      liveDatabaseChanged: false,
+    });
+    expect(prisma.auditLog.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          action: "RESTORE_PREPARATION_COMPLETED",
+          details: expect.objectContaining({
+            confirmations: { queuesConfirmed: true },
+            liveDatabaseChanged: false,
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("erstellt bei abweichendem Sicherungszeitpunkt keine PRE_RESTORE-Sicherung", async () => {
+    const prisma = createPrisma();
+    const tools = createTools();
+    const openService = new NativeBackupService(
+      prisma as any,
+      { read: () => ({ phase: "OPEN" }) } as any,
+      tools as any,
+    );
+    const created = await openService.createBackup("MANUAL", null);
+    tools.createDump.mockClear();
+    const lockedService = new NativeBackupService(
+      prisma as any,
+      { read: () => ({ phase: "LOCKED" }) } as any,
+      tools as any,
+    );
+
+    await expect(
+      lockedService.prepareRestoration(
+        created.filename,
+        {
+          confirmedCreatedAt: "2026-08-24T00:00:00.000Z",
+          queuesConfirmed: true,
+        },
+        { userId: "admin-id", username: "admin" },
+      ),
+    ).rejects.toBeInstanceOf(ConflictException);
+
+    expect(tools.createDump).not.toHaveBeenCalled();
+    expect(prisma.cashierSession.count).not.toHaveBeenCalled();
   });
 
   it("lässt bei abgebrochenem pg_restore die Festdatenbank unangetastet und räumt die Prüfdatenbank auf", async () => {

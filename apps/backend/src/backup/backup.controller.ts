@@ -3,6 +3,7 @@ import {
   Get,
   Post,
   Param,
+  Body,
   UseGuards,
   Request,
   Res,
@@ -14,7 +15,7 @@ import { RolesGuard } from "../common/guards/roles.guard";
 import { Roles } from "../common/decorators/roles.decorator";
 import { MaintenancePublic } from "../maintenance/maintenance.decorator";
 import * as fs from "fs";
-import { BackupFilenameParamDto } from "./backup.dto";
+import { BackupFilenameParamDto, PrepareNativeRestoreDto } from "./backup.dto";
 import { NativeBackupService } from "./native-backup.service";
 
 // Issue #67: "alles unter /backup" bleibt laut Entwurf Abschnitt 6 auch bei
@@ -52,6 +53,19 @@ export class BackupController {
     @Param() params: BackupFilenameParamDto,
   ) {
     return this.nativeBackupService.verifyRestoration(params.filename, {
+      userId: req.user.userId,
+      username: req.user.username,
+    });
+  }
+
+  @Post("prepare-restore/:filename")
+  @Roles("ADMINISTRATOR")
+  async prepareRestore(
+    @Request() req: any,
+    @Param() params: BackupFilenameParamDto,
+    @Body() body: PrepareNativeRestoreDto,
+  ) {
+    return this.nativeBackupService.prepareRestoration(params.filename, body, {
       userId: req.user.userId,
       username: req.user.username,
     });

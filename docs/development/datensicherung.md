@@ -1055,6 +1055,18 @@ absturzfeste Zustandsmaschine, der Rückweg, `restore.sh` und die Vorwärtsmigra
 beiden notwendigen Umbenennungen nicht in einem gemeinsamen Transaktionsblock; dieser
 Crash-Zwischenraum wird daher nicht als Nebenwirkung der Prüf-Funktion eingeführt.
 
+**Umsetzungsstand der Restore-Vorbereitung:** Der Administrator kann einen aktuellen
+Dump nur bei dateibasiert festgestelltem Wartungszustand `LOCKED` vorbereiten. Diese
+Prüfung steht im Backend vor jedem Dateizugriff. Der API-Vertrag verlangt den exakten
+Manifest-Zeitstempel und die ausdrückliche Bestätigung, dass alle Kassen online und
+ihre lokalen Warteschlangen leer sind. Danach entstehen eine strukturgeprüfte
+`PRE_RESTORE`-Sicherung und eine erneute vollständige Wiederherstellungsprüfung in der
+Nebendatenbank. Offene Kassensitzungen und Bestätigungen werden mit dem Ergebnis
+auditiert. Die Antwort weist maschinenlesbar `liveDatabaseChanged: false` aus. Die
+absturzfeste Datenbankumbenennung, der Rückweg und der Prozessneustart bleiben der
+nächste Teil von Schnitt 3; die Oberfläche bezeichnet den jetzigen Schritt deshalb
+bewusst nur als Vorbereitung.
+
 **Umsetzungsstand Aufbewahrung und Speicherdiagnose:** Vor jeder Sicherung wird die
 konfigurierte Mindestreserve auf dem Dateisystem des `BACKUP_DIR` geprüft. Nach einer
 erfolgreichen, auditierten Sicherung rotiert VereinOrder ausschließlich vollständig

@@ -33,6 +33,7 @@ import {
   buildPostgreSqlConnectionEnvironment,
   buildPostgreSqlDatabaseUrl,
 } from "./postgresql-backup.tools";
+import { PrepareNativeRestoreDto } from "./backup.dto";
 
 const STARTUP_BACKUP_DELAY_MS = 90_000;
 const SCHEDULE_DUE_AFTER_MS = 60 * 60 * 1000;
@@ -79,7 +80,16 @@ export interface BackupListItem {
   restoreUnavailableReason: string | null;
   restoreVerificationAvailable: boolean;
   restoreVerificationUnavailableReason: string | null;
+  restorePreparationAvailable: boolean;
+  restorePreparationUnavailableReason: string | null;
   downloadFiles: string[];
+}
+
+export interface RestorePreparationResult {
+  selectedBackup: BackupListItem;
+  safetyBackup: BackupListItem;
+  activeCashierSessions: number;
+  liveDatabaseChanged: false;
 }
 
 export interface BackupRetentionPolicy {
@@ -462,6 +472,9 @@ export class NativeBackupService implements OnModuleInit, OnModuleDestroy {
           restoreVerificationAvailable: false,
           restoreVerificationUnavailableReason:
             "Beschädigte oder unvollständige Sicherungen können nicht geprüft werden.",
+          restorePreparationAvailable: false,
+          restorePreparationUnavailableReason:
+            "Beschädigte oder unvollständige Sicherungen können nicht vorbereitet werden.",
           downloadFiles: [],
         });
       }
@@ -498,6 +511,9 @@ export class NativeBackupService implements OnModuleInit, OnModuleDestroy {
           restoreVerificationAvailable: false,
           restoreVerificationUnavailableReason:
             "JSON-Altsicherungen werden in einem eigenen Übernahmeschritt behandelt.",
+          restorePreparationAvailable: false,
+          restorePreparationUnavailableReason:
+            "JSON-Altsicherungen gehören nicht zum nativen Wiederherstellungsweg.",
           downloadFiles: [name],
         });
       } catch {
@@ -521,6 +537,9 @@ export class NativeBackupService implements OnModuleInit, OnModuleDestroy {
           restoreUnavailableReason: "Die JSON-Altsicherung ist beschädigt.",
           restoreVerificationAvailable: false,
           restoreVerificationUnavailableReason:
+            "Die JSON-Altsicherung ist beschädigt.",
+          restorePreparationAvailable: false,
+          restorePreparationUnavailableReason:
             "Die JSON-Altsicherung ist beschädigt.",
           downloadFiles: [],
         });
@@ -779,6 +798,122 @@ export class NativeBackupService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  async prepareRestoration(
+    filename: string,
+    confirmation: PrepareNativeRestoreDto,
+    preparedBy: BackupCreatedBy,
+  ): Promise<RestorePreparationResult> {
+    // /backup ist auch bei LOCKED erreichbar. Deshalb muss diese Prüfung im
+    // Dienst selbst und zwingend vor dem ersten Dateizugriff stehen.
+    if (this.maintenanceState.read().phase !== "LOCKED") {
+      const error = new ConflictException(
+        "Die Wiederherstellung kann erst im vollständig gesperrten Wartungsmodus vorbereitet werden.",
+      );
+      await this.writeAudit("RESTORE_REJECTED", filename, preparedBy, {
+        phase: "MAINTENANCE_STATE",
+        errorCode: "RESTORE_REQUIRES_LOCKED",
+      }).catch(() => undefined);
+      throw error;
+    }
+
+    let safetyBackup: BackupListItem | null = null;
+    let phase = "PRECHECK";
+    try {
+      if (!filename.endsWith(".dump") || !SAFE_BACKUP_FILE.test(filename)) {
+        throw new ConflictException(
+          "Nur ein nativer PostgreSQL-Dump kann für die Wiederherstellung vorbereitet werden.",
+        );
+      }
+      if (confirmation.queuesConfirmed !== true) {
+        throw new ConflictException(
+          "Bitte bestätigen, dass alle Kassen online und ihre Warteschlangen leer sind.",
+        );
+      }
+
+      const dumpPath = await this.getDownloadFilePath(filename);
+      const manifestPath = await this.getDownloadFilePath(
+        filename.replace(/\.dump$/, ".manifest.json"),
+      );
+      const manifest = parseBackupManifest(
+        await fs.readFile(manifestPath, "utf8"),
+      );
+      if (
+        manifest.dumpFile !== filename ||
+        confirmation.confirmedCreatedAt !== manifest.createdAt
+      ) {
+        throw new ConflictException(
+          "Der eingegebene Sicherungszeitpunkt stimmt nicht exakt mit dem Manifest überein.",
+        );
+      }
+
+      const dumpStats = await fs.lstat(dumpPath);
+      if (
+        !dumpStats.isFile() ||
+        dumpStats.isSymbolicLink() ||
+        dumpStats.size !== manifest.dumpSizeBytes ||
+        (await this.hashFile(dumpPath)) !== manifest.dumpSha256
+      ) {
+        throw new ConflictException(
+          "Die Sicherungsdatei stimmt nicht mit ihrem Manifest überein.",
+        );
+      }
+      await this.tools.verifyDump(dumpPath);
+      const compatibility = this.compareMigrations(
+        manifest.migrations,
+        await this.readMigrations(),
+      );
+      if (compatibility !== "CURRENT") {
+        throw new ConflictException(
+          "Nur eine Sicherung mit identischem Migrationsstand kann derzeit vorbereitet werden.",
+        );
+      }
+
+      const activeCashierSessions = await this.prisma.cashierSession.count({
+        where: { status: "ACTIVE" },
+      });
+      phase = "PRE_RESTORE_BACKUP";
+      safetyBackup = await this.createBackup("PRE_RESTORE", preparedBy);
+      phase = "ISOLATED_VERIFICATION";
+      const selectedBackup = await this.verifyRestoration(filename, preparedBy);
+      phase = "AUDIT";
+      await this.writeAudit(
+        "RESTORE_PREPARATION_COMPLETED",
+        filename,
+        preparedBy,
+        {
+          checksumSha256: manifest.dumpSha256,
+          createdAt: manifest.createdAt,
+          activeCashierSessions,
+          confirmations: { queuesConfirmed: true },
+          safetyBackupFilename: safetyBackup.filename,
+          liveDatabaseChanged: false,
+        },
+      );
+      return {
+        selectedBackup,
+        safetyBackup,
+        activeCashierSessions,
+        liveDatabaseChanged: false,
+      };
+    } catch (error) {
+      await this.writeAudit("RESTORE_REJECTED", filename, preparedBy, {
+        phase,
+        errorCode: this.safeErrorCode(error),
+        safetyBackupFilename: safetyBackup?.filename ?? null,
+        liveDatabaseChanged: false,
+      }).catch(() => undefined);
+      if (
+        error instanceof ConflictException ||
+        error instanceof ServiceUnavailableException
+      ) {
+        throw error;
+      }
+      throw new ServiceUnavailableException(
+        "Die Wiederherstellung konnte nicht sicher vorbereitet werden. Die Festdatenbank wurde nicht verändert.",
+      );
+    }
+  }
+
   async getDownloadFilePath(filename: string): Promise<string> {
     if (
       !SAFE_BACKUP_FILE.test(filename) &&
@@ -939,6 +1074,9 @@ export class NativeBackupService implements OnModuleInit, OnModuleDestroy {
       restoreVerificationAvailable: false,
       restoreVerificationUnavailableReason:
         "Der Migrationsstand wurde noch nicht verglichen.",
+      restorePreparationAvailable: false,
+      restorePreparationUnavailableReason:
+        "Der Migrationsstand wurde noch nicht verglichen.",
       downloadFiles: [manifest.dumpFile, manifestFile],
     };
   }
@@ -954,6 +1092,10 @@ export class NativeBackupService implements OnModuleInit, OnModuleDestroy {
           : item.compatibility === "NEWER" || item.compatibility === "DIVERGED"
             ? "Der Migrationsstand ist nicht mit der aktuellen Datenbank vereinbar."
             : "Der Migrationsstand konnte nicht sicher verglichen werden.";
+    item.restorePreparationAvailable = item.restoreVerificationAvailable;
+    item.restorePreparationUnavailableReason = item.restoreVerificationAvailable
+      ? null
+      : item.restoreVerificationUnavailableReason;
   }
 
   private createVerificationClient(databaseUrl: string): PrismaClient {
