@@ -19,6 +19,7 @@ interface AdminDashboardShellProps {
   selectedEvent?: EventItem;
   connectionStatus: "checking" | "connected" | "error";
   connectionCheckedAt: Date | null;
+  showOperatingStatus?: boolean;
   onPrimaryAction?: () => void;
   children: ReactNode;
 }
@@ -37,6 +38,7 @@ export const AdminDashboardShell = ({
   selectedEvent,
   connectionStatus,
   connectionCheckedAt,
+  showOperatingStatus = true,
   onPrimaryAction,
   children,
 }: AdminDashboardShellProps) => {
@@ -91,83 +93,85 @@ export const AdminDashboardShell = ({
         )}
       </div>
 
-      <section
-        aria-label="Betriebsstatus"
-        className="grid overflow-hidden rounded-2xl border border-slate-600 bg-slate-900 shadow-lg shadow-slate-950/20 md:grid-cols-3"
-      >
-        <div className="flex min-h-16 items-center gap-3 border-b border-slate-700 px-4 py-3 md:border-b-0 md:border-r">
-          <ModeIcon
-            aria-hidden="true"
-            className={`h-5 w-5 shrink-0 ${
-              selectedEvent?.testMode
-                ? "text-amber-300"
-                : selectedEvent?.status === "ACTIVE"
-                  ? "text-emerald-300"
-                  : "text-slate-300"
-            }`}
-          />
-          <div className="min-w-0">
-            <p className="break-words font-semibold text-slate-50">
-              {selectedEvent?.name ?? "Keine Veranstaltung ausgewählt"}
-            </p>
-            <p className="text-sm text-slate-300">{operatingMode}</p>
+      {showOperatingStatus && (
+        <section
+          aria-label="Betriebsstatus"
+          className="grid overflow-hidden rounded-2xl border border-slate-600 bg-slate-900 shadow-lg shadow-slate-950/20 md:grid-cols-3"
+        >
+          <div className="flex min-h-16 items-center gap-3 border-b border-slate-700 px-4 py-3 md:border-b-0 md:border-r">
+            <ModeIcon
+              aria-hidden="true"
+              className={`h-5 w-5 shrink-0 ${
+                selectedEvent?.testMode
+                  ? "text-amber-300"
+                  : selectedEvent?.status === "ACTIVE"
+                    ? "text-emerald-300"
+                    : "text-slate-300"
+              }`}
+            />
+            <div className="min-w-0">
+              <p className="break-words font-semibold text-slate-50">
+                {selectedEvent?.name ?? "Keine Veranstaltung ausgewählt"}
+              </p>
+              <p className="text-sm text-slate-300">{operatingMode}</p>
+            </div>
           </div>
-        </div>
 
-        <div className="flex min-h-16 items-center gap-3 border-b border-slate-700 px-4 py-3 md:border-b-0 md:border-r">
-          {connectionStatus === "error" ? (
-            <WifiOff
-              aria-hidden="true"
-              className="h-5 w-5 shrink-0 text-rose-300"
-            />
-          ) : (
-            <Wifi
-              aria-hidden="true"
-              className="h-5 w-5 shrink-0 text-emerald-300"
-            />
-          )}
-          <div>
-            <p className="font-semibold text-slate-50">
-              {connectionStatus === "checking"
-                ? "Lokale Verbindung wird geprüft"
-                : connectionStatus === "connected"
-                  ? "Lokal verbunden"
-                  : "Lokale Verbindung nicht geprüft"}
-            </p>
-            <p className="text-sm text-slate-300">
-              {formatCheckedAt(connectionCheckedAt)}
-            </p>
+          <div className="flex min-h-16 items-center gap-3 border-b border-slate-700 px-4 py-3 md:border-b-0 md:border-r">
+            {connectionStatus === "error" ? (
+              <WifiOff
+                aria-hidden="true"
+                className="h-5 w-5 shrink-0 text-rose-300"
+              />
+            ) : (
+              <Wifi
+                aria-hidden="true"
+                className="h-5 w-5 shrink-0 text-emerald-300"
+              />
+            )}
+            <div>
+              <p className="font-semibold text-slate-50">
+                {connectionStatus === "checking"
+                  ? "Lokale Verbindung wird geprüft"
+                  : connectionStatus === "connected"
+                    ? "Lokal verbunden"
+                    : "Lokale Verbindung nicht geprüft"}
+              </p>
+              <p className="text-sm text-slate-300">
+                {formatCheckedAt(connectionCheckedAt)}
+              </p>
+            </div>
           </div>
-        </div>
 
-        <div className="flex min-h-16 items-center gap-3 px-4 py-3">
-          {unresolvedJobCount > 0 ? (
-            <AlertTriangle
-              aria-hidden="true"
-              className="h-5 w-5 shrink-0 text-amber-300"
-            />
-          ) : (
-            <CheckCircle2
-              aria-hidden="true"
-              className="h-5 w-5 shrink-0 text-emerald-300"
-            />
-          )}
-          <div>
-            <p className="font-semibold text-slate-50">
-              {unresolvedJobCount > 0
-                ? `${unresolvedJobCount} ${
-                    unresolvedJobCount === 1 ? "Hinweis" : "Hinweise"
-                  }`
-                : "Keine Hinweise"}
-            </p>
-            <p className="text-sm text-slate-300">
-              {unresolvedJobCount > 0
-                ? "Unklare Druckaufträge prüfen"
-                : "Kein offener Druckhinweis"}
-            </p>
+          <div className="flex min-h-16 items-center gap-3 px-4 py-3">
+            {unresolvedJobCount > 0 ? (
+              <AlertTriangle
+                aria-hidden="true"
+                className="h-5 w-5 shrink-0 text-amber-300"
+              />
+            ) : (
+              <CheckCircle2
+                aria-hidden="true"
+                className="h-5 w-5 shrink-0 text-emerald-300"
+              />
+            )}
+            <div>
+              <p className="font-semibold text-slate-50">
+                {unresolvedJobCount > 0
+                  ? `${unresolvedJobCount} ${
+                      unresolvedJobCount === 1 ? "Hinweis" : "Hinweise"
+                    }`
+                  : "Keine Hinweise"}
+              </p>
+              <p className="text-sm text-slate-300">
+                {unresolvedJobCount > 0
+                  ? "Unklare Druckaufträge prüfen"
+                  : "Kein offener Druckhinweis"}
+              </p>
+            </div>
           </div>
-        </div>
-      </section>
+        </section>
+      )}
 
       <div className="rounded-2xl border border-slate-700 bg-slate-900/70 p-4 shadow-xl shadow-slate-950/20 sm:p-6">
         {children}

@@ -97,6 +97,7 @@ export const AdminDashboardController = ({
     fetchData,
   } = useAdminAreaData(activeTab);
   const [isBackingUp, setIsBackingUp] = useState(false);
+  const [overviewRefreshToken, setOverviewRefreshToken] = useState(0);
   const [verifyingBackup, setVerifyingBackup] = useState<string | null>(null);
   const [preparingBackup, setPreparingBackup] = useState<string | null>(null);
   const [restorePreparationTarget, setRestorePreparationTarget] =
@@ -1222,9 +1223,11 @@ export const AdminDashboardController = ({
     events.find((event) => event.id === eventId) ?? events[0];
   const primaryAction = activePageDefinition.supportsCreate
     ? () => void handleOpenModal()
-    : activePage === "overview" || activePage === "diagnostics"
-      ? () => void fetchData()
-      : undefined;
+    : activePage === "overview"
+      ? () => setOverviewRefreshToken((token) => token + 1)
+      : activePage === "diagnostics"
+        ? () => void fetchData()
+        : undefined;
 
   return (
     <div className="space-y-6">
@@ -1234,13 +1237,11 @@ export const AdminDashboardController = ({
         selectedEvent={selectedEvent}
         connectionStatus={connectionStatus}
         connectionCheckedAt={connectionCheckedAt}
+        showOperatingStatus={activePage !== "overview"}
         onPrimaryAction={primaryAction}
       >
         {activePage === "overview" ? (
-          <AdminOverviewPage
-            events={events}
-            unresolvedJobCount={unresolvedJobs.length}
-          />
+          <AdminOverviewPage refreshToken={overviewRefreshToken} />
         ) : (
           <AdminAreaState
             area={activeTab}
