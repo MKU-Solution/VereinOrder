@@ -10,6 +10,7 @@ describe("BackupController – Rollen und Formatsperren (Issue #67)", () => {
     createBackup: jest.fn(),
     listBackups: jest.fn(),
     verifyRestoration: jest.fn(),
+    prepareRestoration: jest.fn(),
     getDownloadFilePath: jest.fn(),
   };
   const controller = new BackupController(legacy as any, native as any);
@@ -20,12 +21,35 @@ describe("BackupController – Rollen und Formatsperren (Issue #67)", () => {
     "createBackup",
     "listBackups",
     "verifyRestore",
+    "prepareRestore",
     "downloadBackup",
     "restoreBackup",
   ] as const)("schützt %s ausdrücklich mit ADMINISTRATOR", (method) => {
     expect(Reflect.getMetadata(ROLES_KEY, controller[method])).toEqual([
       "ADMINISTRATOR",
     ]);
+  });
+
+  it("übergibt Bestätigungen und Administratoridentität an die sichere Restore-Vorbereitung", async () => {
+    native.prepareRestoration.mockResolvedValue({
+      liveDatabaseChanged: false,
+    });
+    const confirmation = {
+      confirmedCreatedAt: "2026-08-24T08:30:00.000Z",
+      queuesConfirmed: true as const,
+    };
+
+    await controller.prepareRestore(
+      { user: { userId: "admin-id", username: "admin" } },
+      { filename: "vereinorder_test_manual.dump" },
+      confirmation,
+    );
+
+    expect(native.prepareRestoration).toHaveBeenCalledWith(
+      "vereinorder_test_manual.dump",
+      confirmation,
+      { userId: "admin-id", username: "admin" },
+    );
   });
 
   it("übergibt Dump und Administratoridentität an die isolierte Wiederherstellungsprüfung", async () => {

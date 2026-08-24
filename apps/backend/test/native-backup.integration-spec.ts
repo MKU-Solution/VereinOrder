@@ -213,12 +213,24 @@ describe("Native PostgreSQL-Sicherung gegen echte Testdatenbank (Issue #67)", ()
     });
     expect(storage.backupBytes).toBeGreaterThan(result.sizeBytes);
 
-    let verified;
+    const lockedService = new NativeBackupService(
+      prisma,
+      { read: () => ({ phase: "LOCKED" }) } as any,
+      tools,
+    );
+    let prepared;
     try {
-      verified = await service.verifyRestoration(result.filename, {
-        userId: admin.id,
-        username: admin.username,
-      });
+      prepared = await lockedService.prepareRestoration(
+        result.filename,
+        {
+          confirmedCreatedAt: manifest.createdAt,
+          queuesConfirmed: true,
+        },
+        {
+          userId: admin.id,
+          username: admin.username,
+        },
+      );
     } catch (error) {
       const failureAudit = await prisma.auditLog.findFirst({
         where: {
@@ -231,11 +243,18 @@ describe("Native PostgreSQL-Sicherung gegen echte Testdatenbank (Issue #67)", ()
         `Wiederherstellungsprüfung fehlgeschlagen (${error instanceof Error ? error.name : "unbekannt"}): ${JSON.stringify(failureAudit?.details ?? null)}`,
       );
     }
-    expect(verified).toMatchObject({
-      verification: "RESTORE_VERIFIED",
-      compatibility: "CURRENT",
-      restoreVerificationAvailable: true,
+    expect(prepared).toMatchObject({
+      selectedBackup: {
+        verification: "RESTORE_VERIFIED",
+        compatibility: "CURRENT",
+        restoreVerificationAvailable: true,
+      },
+      safetyBackup: { trigger: "PRE_RESTORE" },
+      liveDatabaseChanged: false,
     });
+    expect(
+      fs.existsSync(path.join(backupDir, prepared.safetyBackup.filename)),
+    ).toBe(true);
     const verifiedManifest = parseBackupManifest(
       fs.readFileSync(manifestPath, "utf8"),
     );
@@ -253,5 +272,12 @@ describe("Native PostgreSQL-Sicherung gegen echte Testdatenbank (Issue #67)", ()
       },
     });
     expect(verificationAudit).not.toBeNull();
+    const preparationAudit = await prisma.auditLog.findFirst({
+      where: {
+        action: "RESTORE_PREPARATION_COMPLETED",
+        entityId: result.filename,
+      },
+    });
+    expect(preparationAudit).not.toBeNull();
   }, 120_000);
 });

@@ -34,6 +34,8 @@ const nativeBackup = {
     "Native Wiederherstellung folgt im nächsten abgesicherten #67-Schnitt.",
   restoreVerificationAvailable: true,
   restoreVerificationUnavailableReason: null,
+  restorePreparationAvailable: true,
+  restorePreparationUnavailableReason: null,
   downloadFiles: [
     "vereinorder_2026-08-24T08-30-00.000Z_manual.dump",
     "vereinorder_2026-08-24T08-30-00.000Z_manual.manifest.json",
@@ -57,6 +59,9 @@ const legacyBackup = {
   restoreVerificationAvailable: false,
   restoreVerificationUnavailableReason:
     "JSON-Altsicherungen werden in einem eigenen Übernahmeschritt behandelt.",
+  restorePreparationAvailable: false,
+  restorePreparationUnavailableReason:
+    "JSON-Altsicherungen gehören nicht zum nativen Wiederherstellungsweg.",
   downloadFiles: ["vereinorder_backup_2026-08-23.json"],
 };
 
@@ -140,7 +145,7 @@ async function openBackupTab() {
 }
 
 describe("Native Datensicherung V1 in der Administration (Issue #67)", () => {
-  it("zeigt Custom-Dump und Manifest ehrlich als strukturgeprüft und bietet nur die isolierte Restore-Probe an", async () => {
+  it("zeigt Custom-Dump und Manifest ehrlich als strukturgeprüft und trennt Prüfung von Vorbereitung", async () => {
     await openBackupTab();
 
     expect(
@@ -165,6 +170,68 @@ describe("Native Datensicherung V1 in der Administration (Issue #67)", () => {
         name: "Wiederherstellung prüfen",
       }),
     ).toBeInTheDocument();
+    expect(
+      within(nativeRow).getByRole("button", {
+        name: "Wiederherstellung vorbereiten",
+      }),
+    ).toBeInTheDocument();
+  });
+
+  it("verlangt Zeitpunkt und Warteschlangenbestätigung und meldet die Vorbereitung ohne vorgetäuschten Restore", async () => {
+    const alertSpy = vi.spyOn(window, "alert").mockImplementation(() => {});
+    mockedApi.post.mockResolvedValueOnce({
+      data: {
+        safetyBackup: { filename: "vereinorder_safety_prerestore.dump" },
+        liveDatabaseChanged: false,
+      },
+    });
+    await openBackupTab();
+    const nativeRow = screen.getByText(nativeBackup.filename).closest("tr")!;
+
+    fireEvent.click(
+      within(nativeRow).getByRole("button", {
+        name: "Wiederherstellung vorbereiten",
+      }),
+    );
+    const dialog = screen.getByRole("dialog", {
+      name: "Wiederherstellung vorbereiten",
+    });
+    const submit = within(dialog).getByRole("button", {
+      name: "Sicher vorbereiten",
+    });
+    expect(submit).toBeDisabled();
+    expect(
+      within(dialog).getByText(nativeBackup.createdAt),
+    ).toBeInTheDocument();
+
+    fireEvent.change(
+      within(dialog).getByLabelText("Sicherungszeitpunkt exakt eingeben"),
+      { target: { value: nativeBackup.createdAt } },
+    );
+    fireEvent.click(
+      within(dialog).getByRole("checkbox", {
+        name: /Alle Kassen sind online/,
+      }),
+    );
+    expect(submit).toBeEnabled();
+    fireEvent.click(submit);
+
+    await vi.waitFor(() =>
+      expect(mockedApi.post).toHaveBeenCalledWith(
+        `/backup/prepare-restore/${nativeBackup.filename}`,
+        {
+          confirmedCreatedAt: nativeBackup.createdAt,
+          queuesConfirmed: true,
+        },
+      ),
+    );
+    await vi.waitFor(() =>
+      expect(alertSpy).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "eine Wiederherstellung wurde noch nicht ausgeführt",
+        ),
+      ),
+    );
   });
 
   it("startet die isolierte Restore-Probe und lädt danach den Prüfstatus neu", async () => {

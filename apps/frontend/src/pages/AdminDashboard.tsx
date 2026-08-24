@@ -106,6 +106,8 @@ interface BackupItem {
   restoreUnavailableReason?: string | null;
   restoreVerificationAvailable?: boolean;
   restoreVerificationUnavailableReason?: string | null;
+  restorePreparationAvailable?: boolean;
+  restorePreparationUnavailableReason?: string | null;
   downloadFiles?: string[];
 }
 
@@ -290,6 +292,12 @@ export const AdminDashboard = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [isBackingUp, setIsBackingUp] = useState(false);
   const [verifyingBackup, setVerifyingBackup] = useState<string | null>(null);
+  const [preparingBackup, setPreparingBackup] = useState<string | null>(null);
+  const [restorePreparationTarget, setRestorePreparationTarget] =
+    useState<BackupItem | null>(null);
+  const [restoreCreatedAtConfirmation, setRestoreCreatedAtConfirmation] =
+    useState("");
+  const [restoreQueuesConfirmed, setRestoreQueuesConfirmed] = useState(false);
   const [isRetryingJobs, setIsRetryingJobs] = useState(false);
   const [eventId, setEventId] = useState<string>("");
 
@@ -1150,6 +1158,46 @@ export const AdminDashboard = () => {
       );
     } finally {
       setVerifyingBackup(null);
+    }
+  };
+
+  const openRestorePreparation = (backup: BackupItem) => {
+    setRestorePreparationTarget(backup);
+    setRestoreCreatedAtConfirmation("");
+    setRestoreQueuesConfirmed(false);
+  };
+
+  const closeRestorePreparation = () => {
+    if (preparingBackup !== null) return;
+    setRestorePreparationTarget(null);
+    setRestoreCreatedAtConfirmation("");
+    setRestoreQueuesConfirmed(false);
+  };
+
+  const handlePrepareRestore = async () => {
+    const backup = restorePreparationTarget;
+    if (!backup) return;
+    setPreparingBackup(backup.filename);
+    try {
+      const response = await api.post(
+        `/backup/prepare-restore/${backup.filename}`,
+        {
+          confirmedCreatedAt: restoreCreatedAtConfirmation,
+          queuesConfirmed: restoreQueuesConfirmed,
+        },
+      );
+      alert(
+        `Vorbereitung erfolgreich. Die PRE_RESTORE-Sicherung ${response.data.safetyBackup.filename} wurde erstellt und der gewählte Dump isoliert geprüft. Die Festdatenbank blieb unverändert; eine Wiederherstellung wurde noch nicht ausgeführt.`,
+      );
+      setRestorePreparationTarget(null);
+      fetchData();
+    } catch (err) {
+      console.error("Failed to prepare backup restoration", err);
+      alert(
+        "Die Wiederherstellung konnte nicht sicher vorbereitet werden. Die Festdatenbank wurde nicht verändert.",
+      );
+    } finally {
+      setPreparingBackup(null);
     }
   };
 
@@ -2454,6 +2502,22 @@ export const AdminDashboard = () => {
                                 : "Wiederherstellung prüfen"}
                             </button>
                           )}
+                          {b.restorePreparationAvailable && (
+                            <button
+                              onClick={() => openRestorePreparation(b)}
+                              disabled={
+                                preparingBackup !== null ||
+                                verifyingBackup !== null
+                              }
+                              className="px-3 py-1.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 rounded-lg transition text-xs font-bold flex items-center gap-1.5 border border-amber-500/30 disabled:opacity-50 disabled:cursor-not-allowed"
+                              title="Nur im Zustand LOCKED: exakte Bestätigung, PRE_RESTORE-Sicherung und erneute isolierte Prüfung"
+                            >
+                              <RotateCcw className="w-3.5 h-3.5" />
+                              {preparingBackup === b.filename
+                                ? "Vorbereitung läuft …"
+                                : "Wiederherstellung vorbereiten"}
+                            </button>
+                          )}
                           {b.restoreAvailable ? (
                             <button
                               onClick={() => handleRestoreBackup(b.filename)}
@@ -2463,12 +2527,14 @@ export const AdminDashboard = () => {
                               <RotateCcw className="w-3.5 h-3.5" />
                               Legacy wiederherstellen
                             </button>
-                          ) : !b.restoreVerificationAvailable ? (
+                          ) : !b.restoreVerificationAvailable &&
+                            !b.restorePreparationAvailable ? (
                             <span
                               className="max-w-52 text-left text-[11px] leading-snug text-slate-500"
                               title={b.restoreUnavailableReason || undefined}
                             >
-                              {b.restoreVerificationUnavailableReason ||
+                              {b.restorePreparationUnavailableReason ||
+                                b.restoreVerificationUnavailableReason ||
                                 b.restoreUnavailableReason ||
                                 "Wiederherstellung nicht verfügbar"}
                             </span>
@@ -3675,6 +3741,94 @@ export const AdminDashboard = () => {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {restorePreparationTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm">
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="restore-preparation-title"
+            className="max-h-[calc(100vh-2rem)] w-full max-w-xl overflow-y-auto rounded-2xl border border-amber-500/30 bg-slate-900 p-5 shadow-2xl sm:p-6"
+          >
+            <h2
+              id="restore-preparation-title"
+              className="text-xl font-black text-white"
+            >
+              Wiederherstellung vorbereiten
+            </h2>
+            <p className="mt-2 text-sm leading-relaxed text-slate-300">
+              Dieser Schritt erstellt zuerst eine geprüfte PRE_RESTORE-Sicherung
+              und prüft den gewählten Dump erneut in einer isolierten
+              Nebendatenbank. Die Festdatenbank wird nicht verändert.
+            </p>
+            <div className="mt-4 rounded-xl border border-amber-500/20 bg-amber-500/10 p-3 text-sm">
+              <div className="font-bold text-amber-200">
+                Sicherungszeitpunkt
+              </div>
+              <code className="mt-1 block break-all text-amber-100">
+                {restorePreparationTarget.createdAt}
+              </code>
+            </div>
+            <label
+              htmlFor="restore-created-at-confirmation"
+              className="mt-4 block text-sm font-bold text-slate-200"
+            >
+              Sicherungszeitpunkt exakt eingeben
+            </label>
+            <input
+              id="restore-created-at-confirmation"
+              type="text"
+              value={restoreCreatedAtConfirmation}
+              onChange={(event) =>
+                setRestoreCreatedAtConfirmation(event.target.value)
+              }
+              autoComplete="off"
+              spellCheck={false}
+              className="mt-2 min-h-11 w-full rounded-xl border border-slate-700 bg-slate-800 px-3 py-2 font-mono text-sm text-white focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-400/30"
+            />
+            <label className="mt-4 flex min-h-11 items-start gap-3 rounded-xl border border-slate-700 bg-slate-800/70 p-3 text-sm text-slate-200">
+              <input
+                type="checkbox"
+                checked={restoreQueuesConfirmed}
+                onChange={(event) =>
+                  setRestoreQueuesConfirmed(event.target.checked)
+                }
+                className="mt-0.5 h-5 w-5 shrink-0"
+              />
+              <span>
+                Ich bestätige: Alle Kassen sind online und ihre lokalen
+                Warteschlangen sind leer. VereinOrder kann dies nicht über
+                andere Geräte hinweg prüfen.
+              </span>
+            </label>
+            <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+              <button
+                type="button"
+                onClick={closeRestorePreparation}
+                disabled={preparingBackup !== null}
+                className="min-h-11 rounded-xl bg-slate-800 px-4 py-2 font-bold text-slate-300 hover:bg-slate-700 disabled:opacity-50"
+              >
+                Abbrechen
+              </button>
+              <button
+                type="button"
+                onClick={handlePrepareRestore}
+                disabled={
+                  preparingBackup !== null ||
+                  restoreCreatedAtConfirmation !==
+                    restorePreparationTarget.createdAt ||
+                  !restoreQueuesConfirmed
+                }
+                className="min-h-11 rounded-xl bg-amber-500 px-4 py-2 font-black text-slate-950 hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {preparingBackup !== null
+                  ? "Vorbereitung läuft …"
+                  : "Sicher vorbereiten"}
+              </button>
+            </div>
           </div>
         </div>
       )}
