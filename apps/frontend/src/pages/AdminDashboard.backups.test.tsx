@@ -32,6 +32,8 @@ const nativeBackup = {
   restoreAvailable: false,
   restoreUnavailableReason:
     "Native Wiederherstellung folgt im nächsten abgesicherten #67-Schnitt.",
+  restoreVerificationAvailable: true,
+  restoreVerificationUnavailableReason: null,
   downloadFiles: [
     "vereinorder_2026-08-24T08-30-00.000Z_manual.dump",
     "vereinorder_2026-08-24T08-30-00.000Z_manual.manifest.json",
@@ -52,6 +54,9 @@ const legacyBackup = {
   compatibility: "UNKNOWN",
   restoreAvailable: true,
   restoreUnavailableReason: null,
+  restoreVerificationAvailable: false,
+  restoreVerificationUnavailableReason:
+    "JSON-Altsicherungen werden in einem eigenen Übernahmeschritt behandelt.",
   downloadFiles: ["vereinorder_backup_2026-08-23.json"],
 };
 
@@ -88,7 +93,7 @@ async function openBackupTab() {
 }
 
 describe("Native Datensicherung V1 in der Administration (Issue #67)", () => {
-  it("zeigt Custom-Dump und Manifest ehrlich als strukturgeprüft, aber noch nicht wiederherstellbar", async () => {
+  it("zeigt Custom-Dump und Manifest ehrlich als strukturgeprüft und bietet nur die isolierte Restore-Probe an", async () => {
     await openBackupTab();
 
     expect(
@@ -109,8 +114,30 @@ describe("Native Datensicherung V1 in der Administration (Issue #67)", () => {
       within(nativeRow).queryByRole("button", { name: /Wiederherstellen/ }),
     ).not.toBeInTheDocument();
     expect(
-      within(nativeRow).getByText(/Native Wiederherstellung folgt/),
+      within(nativeRow).getByRole("button", {
+        name: "Wiederherstellung prüfen",
+      }),
     ).toBeInTheDocument();
+  });
+
+  it("startet die isolierte Restore-Probe und lädt danach den Prüfstatus neu", async () => {
+    const alertSpy = vi.spyOn(window, "alert").mockImplementation(() => {});
+    await openBackupTab();
+    const nativeRow = screen.getByText(nativeBackup.filename).closest("tr")!;
+
+    fireEvent.click(
+      within(nativeRow).getByRole("button", {
+        name: "Wiederherstellung prüfen",
+      }),
+    );
+
+    await vi.waitFor(() =>
+      expect(mockedApi.post).toHaveBeenCalledWith(
+        `/backup/verify-restore/${nativeBackup.filename}`,
+      ),
+    );
+    await vi.waitFor(() => expect(alertSpy).toHaveBeenCalledTimes(1));
+    expect(mockedApi.get).toHaveBeenCalledWith("/backup/list");
   });
 
   it("kennzeichnet JSON-Dateien als Altbestand und bietet nur dafür den gesperrten Legacy-Weg an", async () => {

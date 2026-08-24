@@ -41,6 +41,20 @@ als **„Altbestand (JSON)“** angezeigt.
 
 ## 3. Wiederherstellung – aktueller Stand
 
+Aktuelle native Sicherungen können über **„Wiederherstellung prüfen“** vollständig in
+eine zufällig benannte, leere Nebendatenbank eingespielt werden. Dabei werden vorab
+Manifest, Dateigröße, SHA-256, `pg_restore --list` und der identische Migrationsstand
+geprüft. Danach vergleicht VereinOrder sämtliche Tabellenzählungen, Geldsummen,
+Gutschein- und Auditwerte und prüft auf nicht validierte Fremdschlüssel. Erst nach
+erfolgreichem Vergleich und Entfernen der Nebendatenbank erhält die Sicherung den Status
+**„Wiederherstellungsgeprüft“**. Erfolg und Fehler werden ohne Zugangsdaten auditiert.
+Die Festdatenbank wird bei dieser Prüfung nicht verändert; der Wartungsmodus ist dafür
+nicht erforderlich.
+
+Ältere, neuere oder auseinandergelaufene Migrationsstände können noch nicht geprüft
+werden. Insbesondere wird ein älterer Dump nicht ohne den späteren, abgesicherten
+`migrate deploy`-Schritt als verwendbar ausgewiesen.
+
 Die native Wiederherstellung eines PostgreSQL-Dumps ist noch nicht freigegeben. Die
 Administration zeigt für native Sicherungen deshalb bewusst keine
 **„Wiederherstellen“**-Schaltfläche. Auch der API-Endpunkt lehnt `.dump`- und
@@ -53,8 +67,8 @@ für Administratoren und ausschließlich im vollständig gesperrten Wartungsmodu
 für den noch folgenden, abgesicherten nativen Wiederherstellungsweg über eine
 Nebendatenbank.
 
-Bis dieser Folgeschnitt umgesetzt und mit einer echten Testdatenbank abgenommen ist,
-gilt bei einem Wiederherstellungsbedarf:
+Bis die absturzfeste Umschaltung und ihr Rückweg umgesetzt und abgenommen sind, gilt bei
+einem Wiederherstellungsbedarf:
 
 1. System im Wartungsmodus auf `LOCKED` setzen und keine weiteren Buchungen zulassen.
 2. Dump und zugehöriges Manifest unverändert sichern; keine Datei umbenennen oder
@@ -68,4 +82,5 @@ gilt bei einem Wiederherstellungsbedarf:
 In der Systemdiagnose müssen PostgreSQL-Sicherung sowie Werkzeugversionen fehlerfrei
 sein. In der Sicherungsliste werden beschädigte oder unvollständige Paare sichtbar als
 defekt geführt. Änderungen an einer bereits gelisteten Datei lösen bei der nächsten
-Abfrage eine erneute Hash- und Strukturprüfung aus.
+Abfrage eine erneute Hash- und Strukturprüfung aus. Vor einem Fest sollte mindestens
+eine aktuelle externe Kopie den Status **„Wiederherstellungsgeprüft“** erhalten haben.

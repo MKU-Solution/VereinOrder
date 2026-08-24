@@ -5,6 +5,9 @@ const MAX_TOOL_OUTPUT_BYTES = 1024 * 1024;
 const VERSION_TIMEOUT_MS = 30_000;
 const VERIFY_TIMEOUT_MS = 60_000;
 const DUMP_TIMEOUT_MS = 15 * 60_000;
+const RESTORE_TIMEOUT_MS = 30 * 60_000;
+const DATABASE_ADMIN_TIMEOUT_MS = 60_000;
+const SAFE_GENERATED_DATABASE_NAME = /^vereinorder_restorecheck_[a-f0-9]{16}$/;
 
 export class PostgreSqlToolError extends Error {
   constructor(
@@ -77,6 +80,21 @@ export function buildPostgreSqlConnectionEnvironment(
   return { environment, databaseName: environment.PGDATABASE };
 }
 
+export function buildPostgreSqlDatabaseUrl(
+  databaseUrl: string,
+  databaseName: string,
+): string {
+  if (!SAFE_GENERATED_DATABASE_NAME.test(databaseName)) {
+    throw new PostgreSqlToolError(
+      "DATABASE_URL_INVALID",
+      "Der interne Name der Prüf-Datenbank ist ungültig.",
+    );
+  }
+  const parsed = new URL(databaseUrl);
+  parsed.pathname = `/${databaseName}`;
+  return parsed.toString();
+}
+
 @Injectable()
 export class PostgreSqlBackupTools {
   async getDumpVersion(): Promise<string> {
@@ -122,6 +140,75 @@ export class PostgreSqlBackupTools {
       this.baseEnvironment(),
       VERIFY_TIMEOUT_MS,
     );
+  }
+
+  async createVerificationDatabase(
+    databaseUrl: string,
+    databaseName: string,
+  ): Promise<void> {
+    this.assertGeneratedDatabaseName(databaseName);
+    const connection = buildPostgreSqlConnectionEnvironment(databaseUrl);
+    await this.run(
+      process.env.PSQL_BIN || "psql",
+      [
+        "--no-psqlrc",
+        "--set=ON_ERROR_STOP=1",
+        `--command=CREATE DATABASE "${databaseName}" TEMPLATE template0`,
+      ],
+      { ...connection.environment, PGDATABASE: "postgres" },
+      DATABASE_ADMIN_TIMEOUT_MS,
+    );
+  }
+
+  async restoreDump(
+    databaseUrl: string,
+    databaseName: string,
+    dumpPath: string,
+  ): Promise<void> {
+    this.assertGeneratedDatabaseName(databaseName);
+    const connection = buildPostgreSqlConnectionEnvironment(databaseUrl);
+    await this.run(
+      process.env.PG_RESTORE_BIN || "pg_restore",
+      [
+        `--dbname=${databaseName}`,
+        "--single-transaction",
+        "--exit-on-error",
+        "--no-owner",
+        "--no-privileges",
+        dumpPath,
+      ],
+      { ...connection.environment, PGDATABASE: databaseName },
+      RESTORE_TIMEOUT_MS,
+    );
+  }
+
+  async dropVerificationDatabase(
+    databaseUrl: string,
+    databaseName: string,
+  ): Promise<void> {
+    this.assertGeneratedDatabaseName(databaseName);
+    const connection = buildPostgreSqlConnectionEnvironment(databaseUrl);
+    const quotedLiteral = `'${databaseName}'`;
+    await this.run(
+      process.env.PSQL_BIN || "psql",
+      [
+        "--no-psqlrc",
+        "--set=ON_ERROR_STOP=1",
+        `--command=SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = ${quotedLiteral} AND pid <> pg_backend_pid()`,
+        `--command=DROP DATABASE IF EXISTS "${databaseName}"`,
+      ],
+      { ...connection.environment, PGDATABASE: "postgres" },
+      DATABASE_ADMIN_TIMEOUT_MS,
+    );
+  }
+
+  private assertGeneratedDatabaseName(databaseName: string): void {
+    if (!SAFE_GENERATED_DATABASE_NAME.test(databaseName)) {
+      throw new PostgreSqlToolError(
+        "DATABASE_URL_INVALID",
+        "Der interne Name der Prüf-Datenbank ist ungültig.",
+      );
+    }
   }
 
   private baseEnvironment(): NodeJS.ProcessEnv {

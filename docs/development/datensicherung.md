@@ -1045,6 +1045,16 @@ Rotation/Speichergrenzen, redigierter Export und JSON-Übernahme bleiben ausdrü
 den folgenden Schnitten 3 bis 6 vorbehalten. Der Übergangsweg für JSON-Dateien verlangt
 bereits vor jedem Dateizugriff den Wartungszustand `LOCKED`.
 
+**Umsetzungsstand des ersten Teils von Schnitt 3:** Ein aktueller nativer Dump kann
+über die Administration vollständig in eine intern erzeugte Nebendatenbank eingespielt
+und dort gegen Tabellenzählungen, Geldsummen, Gutschein-/Auditwerte, Migrationen und
+Fremdschlüssel geprüft werden. Die Prüfdatenbank wird vor dem Erfolgsstatus entfernt;
+die Festdatenbank bleibt unangetastet. Die Umschaltung per Datenbankumbenennung, deren
+absturzfeste Zustandsmaschine, der Rückweg, `restore.sh` und die Vorwärtsmigration
+älterer Dumps bleiben bewusst im folgenden Teil von Schnitt 3. PostgreSQL erlaubt die
+beiden notwendigen Umbenennungen nicht in einem gemeinsamen Transaktionsblock; dieser
+Crash-Zwischenraum wird daher nicht als Nebenwirkung der Prüf-Funktion eingeführt.
+
 **Als eigene Vorgänge herausgelöst:**
 
 - **Der Einrichtungszustand für PINs nach einer redigierten Wiederherstellung**
