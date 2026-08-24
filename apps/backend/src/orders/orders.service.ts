@@ -219,7 +219,7 @@ export class OrdersService {
               sortOrder: true,
               availability: true,
               // Issue #66, Stationskasse: Zielstation von Produkt und
-              // Warengruppe. Getragen fuer die Anzeige, nicht fuer die
+              // Kategorie. Getragen fuer die Anzeige, nicht fuer die
               // Verkaufstransaktion selbst (die prueft Station und
               // Sortiment serverseitig eigenstaendig ueber
               // productAtStationFilter, common/target-station.ts) - aber
@@ -227,7 +227,7 @@ export class OrdersService {
               // auch die Kachelableitung dort filtern das angezeigte
               // Sortiment nach genau diesen beiden Feldern, per
               // resolveTargetStationId-Logik: Station des Produkts, sonst
-              // Station seiner Warengruppe, sonst null. Fehlen sie hier,
+              // Station seiner Kategorie, sonst null. Fehlen sie hier,
               // loest jedes Produkt clientseitig auf "keine Station" auf,
               // und jede Station zeigt ein leeres Kachelraster - genau der
               // Fehler, der diesen Kommentar veranlasst hat. Bewusst auch

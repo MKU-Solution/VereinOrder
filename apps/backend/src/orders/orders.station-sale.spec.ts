@@ -286,7 +286,7 @@ describe("OrdersService – Stationsverkauf für Issue #66", () => {
     expect(prisma.order.create).not.toHaveBeenCalled();
   });
 
-  it("weist ein Produkt einer anderen Station derselben Veranstaltung mit der neuen Meldung ab (von der Warengruppe geerbte Zielstation)", async () => {
+  it("weist ein Produkt einer anderen Station derselben Veranstaltung mit der neuen Meldung ab (von der Kategorie geerbte Zielstation)", async () => {
     prisma.product.findMany.mockResolvedValue([
       {
         ...stationProduct,

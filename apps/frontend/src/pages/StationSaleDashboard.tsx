@@ -37,11 +37,11 @@ interface StationSaleStation {
 }
 
 // ACHTUNG (siehe Bericht): GET /orders/station-sale/context liefert die
-// Zielstation eines Produkts und seiner Warengruppe heute NICHT mit - weder
+// Zielstation eines Produkts und seiner Kategorie heute NICHT mit - weder
 // `targetStationId` am Produkt noch an `category`. Die Felder sind hier
 // dennoch als optional deklariert, EXAKT nach dem Vertrag
 // (apps/backend/src/common/target-station.ts, resolveTargetStationId:
-// Produkt vor Warengruppe, sonst null), damit die Filterung korrekt
+// Produkt vor Kategorie, sonst null), damit die Filterung korrekt
 // funktioniert, sobald das Backend sie ergänzt. Bis dahin resolvieren beide
 // Felder zu `undefined` -> `null`, und kein Produkt löst auf irgendeine
 // konkrete Station auf. Das ist eine bewusste Fail-closed-Entscheidung
@@ -107,7 +107,7 @@ const parseEuroToCents = (value: string) => {
 // Einzige Auflösung der Zielstation eines Produkts auf der Anzeigeseite,
 // wörtlich nach apps/backend/src/common/target-station.ts
 // (resolveTargetStationId): Station des Produkts, sonst Station seiner
-// Warengruppe, sonst null (zentrale Ausgabe, in der Stationskasse also
+// Kategorie, sonst null (zentrale Ausgabe, in der Stationskasse also
 // "keine Station"). Diese Filterung ist reine Anzeige - die Verkaufstransaktion
 // prüft Station und Sortiment serverseitig eigenständig noch einmal
 // (apps/backend/src/orders/orders.service.ts, productAtStationFilter).
