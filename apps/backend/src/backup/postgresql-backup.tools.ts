@@ -1,13 +1,18 @@
 import { Injectable } from "@nestjs/common";
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
+import * as path from "node:path";
 
 const MAX_TOOL_OUTPUT_BYTES = 1024 * 1024;
 const VERSION_TIMEOUT_MS = 30_000;
 const VERIFY_TIMEOUT_MS = 60_000;
 const DUMP_TIMEOUT_MS = 15 * 60_000;
 const RESTORE_TIMEOUT_MS = 30 * 60_000;
+const MIGRATION_TIMEOUT_MS = 30 * 60_000;
 const DATABASE_ADMIN_TIMEOUT_MS = 60_000;
 const SAFE_GENERATED_DATABASE_NAME = /^vereinorder_restorecheck_[a-f0-9]{16}$/;
+const SAFE_RESTORE_SWAP_ARTIFACT_NAME =
+  /^vereinorder_(?:restore|pre)(?:_test)?_[a-f0-9]{16}$/;
 const SAFE_RESTORE_SWAP_DATABASE_NAME = /^vereinorder(?:_[a-z0-9]+)*$/;
 const MAX_DATABASE_NAME_LENGTH = 63;
 
@@ -86,7 +91,10 @@ export function buildPostgreSqlDatabaseUrl(
   databaseUrl: string,
   databaseName: string,
 ): string {
-  if (!SAFE_GENERATED_DATABASE_NAME.test(databaseName)) {
+  if (
+    !SAFE_GENERATED_DATABASE_NAME.test(databaseName) &&
+    !SAFE_RESTORE_SWAP_ARTIFACT_NAME.test(databaseName)
+  ) {
     throw new PostgreSqlToolError(
       "DATABASE_URL_INVALID",
       "Der interne Name der Prüf-Datenbank ist ungültig.",
@@ -167,7 +175,7 @@ export class PostgreSqlBackupTools {
     databaseName: string,
     dumpPath: string,
   ): Promise<void> {
-    this.assertGeneratedDatabaseName(databaseName);
+    this.assertRestorableDatabaseName(databaseName);
     const connection = buildPostgreSqlConnectionEnvironment(databaseUrl);
     await this.run(
       process.env.PG_RESTORE_BIN || "pg_restore",
@@ -201,6 +209,69 @@ export class PostgreSqlBackupTools {
       ],
       { ...connection.environment, PGDATABASE: "postgres" },
       DATABASE_ADMIN_TIMEOUT_MS,
+    );
+  }
+
+  async createRestoreSwapDatabase(
+    databaseUrl: string,
+    databaseName: string,
+  ): Promise<void> {
+    this.assertRestoreSwapArtifactName(databaseName);
+    const connection = buildPostgreSqlConnectionEnvironment(databaseUrl);
+    await this.run(
+      process.env.PSQL_BIN || "psql",
+      [
+        "--no-psqlrc",
+        "--set=ON_ERROR_STOP=1",
+        `--command=CREATE DATABASE "${databaseName}" TEMPLATE template0`,
+      ],
+      { ...connection.environment, PGDATABASE: "postgres" },
+      DATABASE_ADMIN_TIMEOUT_MS,
+    );
+  }
+
+  async dropRestoreSwapDatabase(
+    databaseUrl: string,
+    databaseName: string,
+  ): Promise<void> {
+    this.assertRestoreSwapArtifactName(databaseName);
+    const connection = buildPostgreSqlConnectionEnvironment(databaseUrl);
+    await this.run(
+      process.env.PSQL_BIN || "psql",
+      [
+        "--no-psqlrc",
+        "--set=ON_ERROR_STOP=1",
+        `--command=SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '${databaseName}' AND pid <> pg_backend_pid()`,
+        `--command=DROP DATABASE IF EXISTS "${databaseName}"`,
+      ],
+      { ...connection.environment, PGDATABASE: "postgres" },
+      DATABASE_ADMIN_TIMEOUT_MS,
+    );
+  }
+
+  async migrateRestoreSwapDatabase(
+    databaseUrl: string,
+    databaseName: string,
+  ): Promise<void> {
+    this.assertRestoreSwapArtifactName(databaseName);
+    const targetUrl = buildPostgreSqlDatabaseUrl(databaseUrl, databaseName);
+    const { cliPath, schemaPath } = this.resolvePrismaMigrationTools();
+    const environment = {
+      ...this.baseEnvironment(),
+      DATABASE_URL: targetUrl,
+      PRISMA_HIDE_UPDATE_MESSAGE: "1",
+    };
+    await this.run(
+      process.execPath,
+      [cliPath, "migrate", "deploy", `--schema=${schemaPath}`],
+      environment,
+      MIGRATION_TIMEOUT_MS,
+    );
+    await this.run(
+      process.execPath,
+      [cliPath, "migrate", "status", `--schema=${schemaPath}`],
+      environment,
+      MIGRATION_TIMEOUT_MS,
     );
   }
 
@@ -277,6 +348,27 @@ export class PostgreSqlBackupTools {
     }
   }
 
+  private assertRestorableDatabaseName(databaseName: string): void {
+    if (
+      !SAFE_GENERATED_DATABASE_NAME.test(databaseName) &&
+      !SAFE_RESTORE_SWAP_ARTIFACT_NAME.test(databaseName)
+    ) {
+      throw new PostgreSqlToolError(
+        "DATABASE_URL_INVALID",
+        "Der interne Name der Restore-Datenbank ist ungültig.",
+      );
+    }
+  }
+
+  private assertRestoreSwapArtifactName(databaseName: string): void {
+    if (!SAFE_RESTORE_SWAP_ARTIFACT_NAME.test(databaseName)) {
+      throw new PostgreSqlToolError(
+        "DATABASE_URL_INVALID",
+        "Der interne Name der Restore-Umschaltdatenbank ist ungültig.",
+      );
+    }
+  }
+
   private assertRestoreSwapDatabaseName(databaseName: string): void {
     if (
       databaseName.length > MAX_DATABASE_NAME_LENGTH ||
@@ -287,6 +379,41 @@ export class PostgreSqlBackupTools {
         "Der interne Name der Restore-Datenbank ist ungültig.",
       );
     }
+  }
+
+  private resolvePrismaMigrationTools(): {
+    cliPath: string;
+    schemaPath: string;
+  } {
+    const candidates = [
+      path.resolve(process.cwd(), "packages/database"),
+      path.resolve(process.cwd(), "../../packages/database"),
+      path.resolve(__dirname, "../../../packages/database"),
+    ];
+    const packageDirectory = candidates.find((candidate) =>
+      existsSync(path.join(candidate, "prisma/schema.prisma")),
+    );
+    if (!packageDirectory) {
+      throw new PostgreSqlToolError(
+        "TOOL_NOT_FOUND",
+        "Das Prisma-Migrationsschema ist nicht installiert.",
+      );
+    }
+    let cliPath: string;
+    try {
+      cliPath = require.resolve("prisma/build/index.js", {
+        paths: [packageDirectory],
+      });
+    } catch {
+      throw new PostgreSqlToolError(
+        "TOOL_NOT_FOUND",
+        "Das Prisma-Migrationswerkzeug ist nicht installiert.",
+      );
+    }
+    return {
+      cliPath,
+      schemaPath: path.join(packageDirectory, "prisma/schema.prisma"),
+    };
   }
 
   private baseEnvironment(): NodeJS.ProcessEnv {

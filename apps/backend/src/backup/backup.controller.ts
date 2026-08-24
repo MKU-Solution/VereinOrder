@@ -15,8 +15,13 @@ import { RolesGuard } from "../common/guards/roles.guard";
 import { Roles } from "../common/decorators/roles.decorator";
 import { MaintenancePublic } from "../maintenance/maintenance.decorator";
 import * as fs from "fs";
-import { BackupFilenameParamDto, PrepareNativeRestoreDto } from "./backup.dto";
+import {
+  BackupFilenameParamDto,
+  ConfirmRestoreOperationDto,
+  PrepareNativeRestoreDto,
+} from "./backup.dto";
 import { NativeBackupService } from "./native-backup.service";
+import { NativeRestoreService } from "./native-restore.service";
 
 // Issue #67: "alles unter /backup" bleibt laut Entwurf Abschnitt 6 auch bei
 // LOCKED erreichbar, weiterhin nur fuer ADMINISTRATOR (JwtAuthGuard +
@@ -29,12 +34,22 @@ export class BackupController {
   constructor(
     private readonly backupService: BackupService,
     private readonly nativeBackupService: NativeBackupService,
+    private readonly nativeRestoreService: NativeRestoreService,
   ) {}
 
   @Post("create")
   @Roles("ADMINISTRATOR")
   async createBackup(@Request() req: any) {
     return this.nativeBackupService.createBackup("MANUAL", {
+      userId: req.user.userId,
+      username: req.user.username,
+    });
+  }
+
+  @Post("pre-migration")
+  @Roles("ADMINISTRATOR")
+  async createPreMigrationBackup(@Request() req: any) {
+    return this.nativeBackupService.createBackup("PRE_MIGRATION", {
       userId: req.user.userId,
       username: req.user.username,
     });
@@ -69,6 +84,51 @@ export class BackupController {
       userId: req.user.userId,
       username: req.user.username,
     });
+  }
+
+  @Post("native-restore/:filename")
+  @Roles("ADMINISTRATOR")
+  async executeNativeRestore(
+    @Request() req: any,
+    @Param() params: BackupFilenameParamDto,
+    @Body() body: PrepareNativeRestoreDto,
+  ) {
+    return this.nativeRestoreService.execute(params.filename, body, {
+      userId: req.user.userId,
+      username: req.user.username,
+    });
+  }
+
+  @Get("restore-operation")
+  @Roles("ADMINISTRATOR")
+  async getRestoreOperation() {
+    return this.nativeRestoreService.getStatus();
+  }
+
+  @Post("restore-operation/rollback")
+  @Roles("ADMINISTRATOR")
+  async rollbackNativeRestore(
+    @Request() req: any,
+    @Body() body: ConfirmRestoreOperationDto,
+  ) {
+    return this.nativeRestoreService.rollback(
+      body.swapId,
+      body.confirmedCreatedAt,
+      { userId: req.user.userId, username: req.user.username },
+    );
+  }
+
+  @Post("restore-operation/accept")
+  @Roles("ADMINISTRATOR")
+  async acceptNativeRestore(
+    @Request() req: any,
+    @Body() body: ConfirmRestoreOperationDto,
+  ) {
+    return this.nativeRestoreService.accept(
+      body.swapId,
+      body.confirmedCreatedAt,
+      { userId: req.user.userId, username: req.user.username },
+    );
   }
 
   @Get("download/:filename")
@@ -113,7 +173,7 @@ export class BackupController {
       params.filename.endsWith(".manifest.json")
     ) {
       throw new ConflictException(
-        "Native PostgreSQL-Sicherungen können erst mit dem abgesicherten Restore-Folgeschnitt wiederhergestellt werden.",
+        "Native PostgreSQL-Sicherungen verwenden den abgesicherten Endpunkt /backup/native-restore.",
       );
     }
     const userId = req.user?.userId;

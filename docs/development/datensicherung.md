@@ -1081,6 +1081,23 @@ fachliche Freigabe und Rückweg werden gemeinsam mit dieser Aktivierung ergänzt
 die bestehende Restore-Vorbereitung bis dahin weiterhin garantiert
 `liveDatabaseChanged: false` liefert.
 
+**Abschlussstand von Issue #67:** Die Umschaltbasis ist an den ausschließlich für
+Administratoren und `LOCKED` freigegebenen nativen Restore-Endpunkt angebunden. Vor
+der Umschaltung werden Dateivertrag, Prüfsumme, Werkzeugstruktur, freier Speicher,
+`PRE_RESTORE`, eine vollständige Nebendatenbank und alle fachlichen Messwerte geprüft.
+Aktuelle Sicherungen werden direkt, ältere Präfixstände nach `prisma migrate deploy`
+und `migrate status` umgeschaltet; neuere oder divergierende Stände bleiben gesperrt.
+Der Prozess startet im Compose-Festbetrieb kontrolliert neu, schreibt den Abschluss-
+Audit in die neue Datenbank und hält die Wartungssperre. Die Administration bietet
+danach sowohl die absturzfeste Rückbenennung als auch die ausdrückliche Abnahme an;
+ohne Entscheidung lässt sich der Wartungsmodus nicht öffnen. Erst die Abnahme löscht
+die jeweilige Rückfalldatenbank. Der technische Notfallweg unter `scripts/ops` arbeitet
+ohne Backend, das Update-Skript erzeugt `PRE_MIGRATION`, und das veraltete zweite
+Compose-Bündel samt hart verdrahteter Skripte ist entfernt. Damit sind die
+Akzeptanzkriterien des Issues umgesetzt; redigierter Export und PIN-Ersteinrichtung
+bleiben wie in Abschnitt 13 beziehungsweise der Projektentscheidung als getrennte
+Folgevorgänge außerhalb des Vollrestore-Wegs.
+
 **Umsetzungsstand Aufbewahrung und Speicherdiagnose:** Vor jeder Sicherung wird die
 konfigurierte Mindestreserve auf dem Dateisystem des `BACKUP_DIR` geprüft. Nach einer
 erfolgreichen, auditierten Sicherung rotiert VereinOrder ausschließlich vollständig

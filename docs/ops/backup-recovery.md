@@ -1,110 +1,110 @@
 # VereinOrder – Datensicherung und Wiederherstellung
 
-Dieses Handbuch beschreibt den derzeit tatsächlich verfügbaren Stand von Issue #67.
-VereinOrder ist keine RKSV-Registrierkasse.
+Dieses Handbuch beschreibt den freigegebenen Stand von Issue #67. VereinOrder ist
+keine RKSV-Registrierkasse.
 
-## 1. Datensicherung
+## 1. Sicherungsbetrieb
 
-- VereinOrder erstellt stündlich eine vollständige PostgreSQL-Sicherung – unabhängig
-  vom Veranstaltungsstatus. Zusätzlich wird 90 Sekunden nach dem Start gesichert, wenn
-  die jüngste native Sicherung mindestens eine Stunde alt ist.
-- Im gesperrten Wartungsmodus (`LOCKED`) wird kein geplanter Lauf gestartet. Ein
-  Administrator kann dort weiterhin eine manuelle Sicherung anlegen.
-- Eine Sicherung besteht immer aus zwei Dateien mit gleichem Stamm:
-  `vereinorder_<ISO>_<auslöser>.dump` und
-  `vereinorder_<ISO>_<auslöser>.manifest.json`.
-- Der Dump wird im PostgreSQL-Custom-Format erzeugt. Vor der Veröffentlichung werden
-  SHA-256, Größe, Tabellen- und Migrationsstand sowie `pg_restore --list` geprüft. Das
-  Manifest wird zuletzt geschrieben und ist der Commit-Marker der Sicherung.
+- VereinOrder erstellt stündlich einen PostgreSQL-Custom-Dump mit streng geprüftem
+  Manifest. Manuelle Sicherungen sind ausschließlich Administratoren erlaubt.
+- Dump und Manifest enthalten Tabellen- und Migrationsstand, fachliche Zählungen und
+  Geldsummen, Dateigröße, Werkzeugversion und SHA-256-Prüfsumme.
 - `pg_dump`, `pg_restore` und PostgreSQL-Server müssen dieselbe Hauptversion haben.
-  Eine fehlende oder abweichende Werkzeugversion sperrt die Sicherung und wird in der
-  Systemdiagnose als Fehler angezeigt.
-- Vor dem ersten Schreibzugriff prüft VereinOrder den freien Speicher im
-  Sicherungsverzeichnis. Unterhalb von `BACKUP_MIN_FREE_BYTES` wird kein neuer Dump
-  begonnen und die Systemdiagnose zeigt einen Fehler.
-- Nach einer erfolgreichen Sicherung werden stündliche Sicherungen gemäß
-  `BACKUP_RETENTION_HOURLY_KEEP` und `BACKUP_RETENTION_DAILY_KEEP` rotiert.
-  `PRE_RESTORE` und `PRE_MIGRATION` haben mit `BACKUP_RETENTION_EVENT_KEEP` eine eigene
-  Grenze. Die jüngste strukturgeprüfte und die jüngste wiederherstellungsgeprüfte
-  Sicherung bleiben immer erhalten.
-- Manuelle Sicherungen, JSON-Altbestände sowie beschädigte oder unvollständige Dateien
-  werden nicht automatisch gelöscht. Sie müssen nach externer Archivierung bewusst
-  durch einen technischen Verantwortlichen bereinigt werden.
+  Bei Abweichung ist die Sicherung gesperrt und die Diagnose rot.
+- Die Aufbewahrung wird mit `BACKUP_RETENTION_HOURLY_KEEP`,
+  `BACKUP_RETENTION_DAILY_KEEP` und `BACKUP_RETENTION_EVENT_KEEP` gesteuert. Die
+  jüngste struktur- und wiederherstellungsgeprüfte Sicherung bleibt immer erhalten.
+- Vor Restore und Update entstehen `PRE_RESTORE` beziehungsweise `PRE_MIGRATION`.
+- Backupdateien und Zustandsdateien liegen in den Compose-Volumes `backup_data` und
+  `state_data`. Sie gehören niemals in Git.
 
-## 2. Manuelle Sicherung und externe Kopie
+## 2. Manuelle Sicherung und Prüfung
 
-1. Als Administrator die Administration öffnen.
-2. Den Bereich **„Backups & Datensicherung“** auswählen.
-3. **„Jetzt sichern (Manuelles Backup)“** anklicken.
-4. Warten, bis der neue Eintrag als **„Strukturgeprüft“** erscheint.
-5. Über **„Dump“** und **„Manifest“** beide Dateien herunterladen und gemeinsam an
-   einen zweiten, geschützten Ort kopieren.
+1. Als `admin` die Administration und **Backups & Datensicherung** öffnen.
+2. **Jetzt sichern** wählen und den Status **Strukturgeprüft** abwarten.
+3. **Wiederherstellung prüfen** ausführen. Der Dump wird in eine leere
+   Nebendatenbank eingespielt, fachlich vermessen und wieder entfernt.
+4. Vor einem Fest mindestens ein zusammengehöriges Dump-/Manifest-Paar an einen
+   zweiten, geschützten Datenträger kopieren.
 
-Der native Dump ist eine vollständige interne Sicherung und enthält auch
-Authentifizierungsdaten wie PIN-Hashes. Er darf nur Administratoren zugänglich sein,
-nicht unverschlüsselt per E-Mail oder öffentlichem Datenträger weitergegeben und nicht
-in das Git-Repository eingecheckt werden. Ein redigierter Export folgt in einem späteren
-#67-Schnitt.
+Der vollständige Dump enthält auch PIN-Hashes und ist wie eine Zugangsdatenkopie zu
+behandeln: nur Administratoren, keine unverschlüsselte E-Mail und kein öffentlicher
+Datenträger. Der separat geplante redigierte Export und die einmalige PIN-Einrichtung
+sind nicht Teil des Vollrestore-Verfahrens.
 
-Vor dem Vertrauen auf eine Sicherung müssen beide Dateien vorhanden sein. Ein einzelner
-Dump ohne Manifest ist kein veröffentlichter Sicherungsstand. JSON-Dateien werden nur
-als **„Altbestand (JSON)“** angezeigt.
+## 3. Native Wiederherstellung in der Administration
 
-## 3. Wiederherstellung – aktueller Stand
+1. **Wartungsmodus** starten. Während `DRAINING` werden Warteschlangen geleert; erst
+   `LOCKED` gibt den Restore frei.
+2. Sicherstellen, dass alle Kassengeräte online sind und ihre lokalen Warteschlangen
+   leer sind. VereinOrder kann fremde IndexedDB-Warteschlangen nicht selbst sehen.
+3. Bei der gewünschten Sicherung **Sicher wiederherstellen** wählen.
+4. Den angezeigten Sicherungszeitpunkt wortgleich eingeben und die Warteschlangen-
+   Bestätigung setzen.
+5. VereinOrder prüft Manifest, SHA-256, freien Speicher und `pg_restore --list`,
+   erstellt `PRE_RESTORE`, stellt in einer Nebendatenbank wieder her, prüft Counts,
+   Geldsummen, Auditwerte, Migrationen und Fremdschlüssel und schaltet erst danach um.
+6. Das Backend beendet sich kontrolliert und wird durch Compose `restart: always`
+   erneut gestartet. Die dateibasierte Wartungssperre bleibt `LOCKED`.
+7. Katalog, Benutzer, offene Sitzungen, letzte Bestellungen, Zahlungen, Bons und Audit
+   fachlich prüfen.
+8. Danach entweder:
+   - **Wiederherstellung abnehmen und Wartung beenden**: Rückfalldatenbank wird
+     entfernt, Entscheidung auditiert, System wird geöffnet.
+   - **Wiederherstellung rückgängig machen**: die alte Datenbank wird ohne erneuten
+     Dump zurückbenannt. Danach den alten Stand prüfen und die Rücknahme ausdrücklich
+     abnehmen.
 
-Aktuelle native Sicherungen können über **„Wiederherstellung prüfen“** vollständig in
-eine zufällig benannte, leere Nebendatenbank eingespielt werden. Dabei werden vorab
-Manifest, Dateigröße, SHA-256, `pg_restore --list` und der identische Migrationsstand
-geprüft. Danach vergleicht VereinOrder sämtliche Tabellenzählungen, Geldsummen,
-Gutschein- und Auditwerte und prüft auf nicht validierte Fremdschlüssel. Erst nach
-erfolgreichem Vergleich und Entfernen der Nebendatenbank erhält die Sicherung den Status
-**„Wiederherstellungsgeprüft“**. Erfolg und Fehler werden ohne Zugangsdaten auditiert.
-Die Festdatenbank wird bei dieser Prüfung nicht verändert; der Wartungsmodus ist dafür
-nicht erforderlich.
+Der allgemeine Endpunkt **Wartungsmodus beenden** verweigert das Öffnen, solange eine
+Restore-Entscheidung aussteht. Ein Prozessabbruch zwischen den beiden PostgreSQL-
+Umbenennungen wird anhand der real vorhandenen Datenbanknamen fortgesetzt. Defekte oder
+unplausible Zustände bleiben geschlossen.
 
-Für aktuelle native Sicherungen gibt es zusätzlich
-**„Wiederherstellung vorbereiten“**. Dieser Schritt ist ausschließlich im Zustand
-`LOCKED` möglich. Der Administrator muss den im Manifest gespeicherten
-Sicherungszeitpunkt wortgleich eingeben und ausdrücklich bestätigen, dass alle Kassen
-online und ihre lokalen Warteschlangen leer sind. VereinOrder prüft Manifest,
-Prüfsumme, `pg_restore --list` und Migrationsstand, zählt offene Kassensitzungen,
-erstellt eine strukturgeprüfte `PRE_RESTORE`-Sicherung und spielt den gewählten Dump
-noch einmal vollständig in eine isolierte Nebendatenbank ein. Erfolg oder Ablehnung
-werden auditierbar erfasst. Die Festdatenbank bleibt auch bei erfolgreicher
-Vorbereitung unverändert.
+## 4. Technischer Notfallweg ohne laufendes Backend
 
-Ältere, neuere oder auseinandergelaufene Migrationsstände können noch nicht geprüft
-werden. Insbesondere wird ein älterer Dump nicht ohne den späteren, abgesicherten
-`migrate deploy`-Schritt als verwendbar ausgewiesen.
+Der letzte Rückweg hängt nicht von Node oder Prisma ab. Benötigt werden `psql`,
+`pg_dump`, `pg_restore`, `jq` und `sha256sum` sowie dieselben libpq-Variablen wie für
+PostgreSQL (`PGHOST`, `PGPORT`, `PGUSER`, `PGPASSWORD`).
 
-Die eigentliche native Wiederherstellung eines PostgreSQL-Dumps ist noch nicht freigegeben. Die
-Administration zeigt für native Sicherungen deshalb bewusst keine
-**„Wiederherstellen“**-Schaltfläche. Auch der API-Endpunkt lehnt `.dump`- und
-`.manifest.json`-Dateien ab. Das alte `infrastructure/scripts/restore.sh` gehört nicht
-zum nativen Format und darf dafür nicht verwendet werden.
+```bash
+export POSTGRES_DB=vereinorder
+export BACKUP_DIR=./backups
+export STATE_DIR=./state
+./scripts/ops/restore.sh ./backups/<datei>.dump ./backups/<datei>.manifest.json
+docker compose restart backend
+```
 
-Die vorhandene JSON-Wiederherstellung ist ein Übergangsweg für Altbestände. Sie ist nur
-für Administratoren und ausschließlich im vollständig gesperrten Wartungsmodus
-(`LOCKED`) verfügbar. Sie ersetzt Daten in der aktuellen Datenbank und ist kein Ersatz
-für den noch folgenden, abgesicherten nativen Wiederherstellungsweg über eine
-Nebendatenbank.
+Das Skript verlangt den exakten Manifest-Zeitpunkt, prüft SHA-256, Struktur,
+Tabellenzählungen und Fremdschlüssel, erzeugt einen separaten Sicherheitsdump und
+verwendet dieselben absturzfortsetzbaren Datenbanknamen. Die Zustandsdatei wird für den
+anschließenden Backend-Audit im `STATE_DIR` hinterlegt. Die Rückfalldatenbank niemals
+vor der fachlichen Abnahme manuell löschen.
 
-Bis die absturzfeste Umschaltung und ihr Rückweg umgesetzt und abgenommen sind, gilt bei
-einem Wiederherstellungsbedarf:
+## 5. Update mit Sicherheitssicherung
 
-1. System im Wartungsmodus auf `LOCKED` setzen und keine weiteren Buchungen zulassen.
-2. Dump und zugehöriges Manifest unverändert sichern; keine Datei umbenennen oder
-   bearbeiten.
-3. Keine eigenständige Wiederherstellung in der Betriebsdatenbank versuchen.
-4. Den technischen Verantwortlichen mit beiden Dateien und dem Diagnosebericht
-   hinzuziehen.
+Updates laufen ausschließlich über:
 
-## 4. Kontrolle
+```bash
+export ADMIN_TOKEN='<aktuelles Administrator-JWT>'
+./scripts/ops/upgrade.sh
+```
 
-In der Systemdiagnose müssen PostgreSQL-Sicherung, Werkzeugversionen und freie
-Speicherreserve fehlerfrei sein. Sie zeigt zusätzlich Größe und Anzahl des Bestands
-sowie den Zeitpunkt der jüngsten Wiederherstellungsprüfung. In der Sicherungsliste
-werden beschädigte oder unvollständige Paare sichtbar als defekt geführt. Änderungen an
-einer bereits gelisteten Datei lösen bei der nächsten Abfrage eine erneute Hash- und
-Strukturprüfung aus. Vor einem Fest sollte mindestens eine aktuelle externe Kopie den
-Status **„Wiederherstellungsgeprüft“** erhalten haben.
+Das Skript setzt `LOCKED`, erzeugt und prüft `PRE_MIGRATION`, führt `prisma migrate
+deploy` und `prisma migrate status` im Backend-Abbild aus und beendet die Wartung erst
+nach Erfolg. Bei einem Fehler bleibt das System gesperrt und die Sicherheitssicherung
+erhalten.
+
+## 6. ARM64-/AMD64- und Neustart-Abnahme
+
+Vor einem Release und einmal auf dem eingesetzten Raspberry Pi:
+
+1. `pnpm test:pg-tools` ausführen; Server und Client müssen dieselbe Hauptversion
+   melden.
+2. Backend-Abbild für `linux/amd64` und `linux/arm64` bauen.
+3. Auf dem Pi Sicherung und Wiederherstellungsprüfung ausführen.
+4. Einen Restore auf einer ausdrücklich gekennzeichneten Testdatenbank umschalten,
+   Backend-Neustart abwarten und eine Testbestellung durchführen.
+5. Rücknahme ausführen und prüfen, dass der ursprüngliche Stand wieder aktiv ist.
+
+Destruktive Prüfungen dürfen niemals gegen Festdaten laufen. Host, Port und ein
+eindeutig auf `_test` lautender Datenbankname sind vorher zu kontrollieren.

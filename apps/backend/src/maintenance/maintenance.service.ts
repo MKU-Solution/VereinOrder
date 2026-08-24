@@ -5,6 +5,8 @@ import { PRISMA_CLIENT } from "../prisma/prisma.module";
 import { AuditService } from "../audit/audit.service";
 import { MaintenanceStateService } from "./maintenance-state.service";
 import { MaintenanceState } from "./maintenance.types";
+import * as path from "node:path";
+import { FileRestoreSwapStateStore } from "../backup/restore-swap";
 
 /**
  * Entwurf Abschnitt 6, Vorschlag: mindestens 20 Sekunden zwischen dem Beginn
@@ -92,6 +94,14 @@ export class MaintenanceService {
     const current = this.stateService.read();
     if (current.phase === "OPEN") {
       throw new ConflictException("Wartungsmodus ist nicht aktiv.");
+    }
+    const restoreStore = new FileRestoreSwapStateStore(
+      path.resolve(process.env.STATE_DIR || path.join(process.cwd(), "state")),
+    );
+    if (await restoreStore.read()) {
+      throw new ConflictException(
+        "Die Wiederherstellung muss zuerst ausdrücklich abgenommen oder zurückgenommen werden.",
+      );
     }
     this.stateService.clear();
     await this.auditService.log({

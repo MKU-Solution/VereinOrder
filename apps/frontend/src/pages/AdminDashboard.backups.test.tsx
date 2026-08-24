@@ -29,9 +29,8 @@ const nativeBackup = {
   trigger: "MANUAL",
   verification: "STRUCTURE_VERIFIED",
   compatibility: "CURRENT",
-  restoreAvailable: false,
-  restoreUnavailableReason:
-    "Native Wiederherstellung folgt im nächsten abgesicherten #67-Schnitt.",
+  restoreAvailable: true,
+  restoreUnavailableReason: null,
   restoreVerificationAvailable: true,
   restoreVerificationUnavailableReason: null,
   restorePreparationAvailable: true,
@@ -124,6 +123,8 @@ beforeEach(() => {
     if (url === "/events") return Promise.resolve({ data: [] });
     if (url === "/backup/list")
       return Promise.resolve({ data: [nativeBackup, legacyBackup] });
+    if (url === "/backup/restore-operation")
+      return Promise.resolve({ data: null });
     if (url === "/diagnostics/status")
       return Promise.resolve({ data: diagnostics });
     return Promise.resolve({ data: [] });
@@ -145,7 +146,7 @@ async function openBackupTab() {
 }
 
 describe("Native Datensicherung V1 in der Administration (Issue #67)", () => {
-  it("zeigt Custom-Dump und Manifest ehrlich als strukturgeprüft und trennt Prüfung von Vorbereitung", async () => {
+  it("zeigt Custom-Dump und Manifest ehrlich und bietet den abgesicherten nativen Restore", async () => {
     await openBackupTab();
 
     expect(
@@ -163,26 +164,24 @@ describe("Native Datensicherung V1 in der Administration (Issue #67)", () => {
       within(nativeRow).getByRole("button", { name: "Manifest" }),
     ).toBeInTheDocument();
     expect(
-      within(nativeRow).queryByRole("button", { name: /Wiederherstellen/ }),
-    ).not.toBeInTheDocument();
-    expect(
       within(nativeRow).getByRole("button", {
         name: "Wiederherstellung prüfen",
       }),
     ).toBeInTheDocument();
     expect(
       within(nativeRow).getByRole("button", {
-        name: "Wiederherstellung vorbereiten",
+        name: "Sicher wiederherstellen",
       }),
     ).toBeInTheDocument();
   });
 
-  it("verlangt Zeitpunkt und Warteschlangenbestätigung und meldet die Vorbereitung ohne vorgetäuschten Restore", async () => {
+  it("verlangt Zeitpunkt und Warteschlangenbestätigung vor der echten Umschaltung", async () => {
     const alertSpy = vi.spyOn(window, "alert").mockImplementation(() => {});
     mockedApi.post.mockResolvedValueOnce({
       data: {
-        safetyBackup: { filename: "vereinorder_safety_prerestore.dump" },
-        liveDatabaseChanged: false,
+        operation: { phase: "COMPLETED" },
+        liveDatabaseChanged: true,
+        restartScheduled: true,
       },
     });
     await openBackupTab();
@@ -190,14 +189,14 @@ describe("Native Datensicherung V1 in der Administration (Issue #67)", () => {
 
     fireEvent.click(
       within(nativeRow).getByRole("button", {
-        name: "Wiederherstellung vorbereiten",
+        name: "Sicher wiederherstellen",
       }),
     );
     const dialog = screen.getByRole("dialog", {
-      name: "Wiederherstellung vorbereiten",
+      name: "Sicher wiederherstellen",
     });
     const submit = within(dialog).getByRole("button", {
-      name: "Sicher vorbereiten",
+      name: "Jetzt sicher wiederherstellen",
     });
     expect(submit).toBeDisabled();
     expect(
@@ -218,7 +217,7 @@ describe("Native Datensicherung V1 in der Administration (Issue #67)", () => {
 
     await vi.waitFor(() =>
       expect(mockedApi.post).toHaveBeenCalledWith(
-        `/backup/prepare-restore/${nativeBackup.filename}`,
+        `/backup/native-restore/${nativeBackup.filename}`,
         {
           confirmedCreatedAt: nativeBackup.createdAt,
           queuesConfirmed: true,
@@ -227,9 +226,63 @@ describe("Native Datensicherung V1 in der Administration (Issue #67)", () => {
     );
     await vi.waitFor(() =>
       expect(alertSpy).toHaveBeenCalledWith(
-        expect.stringContaining(
-          "eine Wiederherstellung wurde noch nicht ausgeführt",
-        ),
+        expect.stringContaining("Das Backend startet jetzt kontrolliert neu"),
+      ),
+    );
+  });
+
+  it("zeigt Rücknahme und Abnahme eines offenen Restore-Vorgangs erst nach exakter Bestätigung", async () => {
+    vi.spyOn(window, "alert").mockImplementation(() => {});
+    const operation = {
+      swapId: "0123456789abcdef",
+      phase: "COMPLETED",
+      backupFilename: nativeBackup.filename,
+      backupCreatedAt: nativeBackup.createdAt,
+      safetyBackupFilename: "vereinorder_safety_prerestore.dump",
+      activeCashierSessions: 2,
+      requestedAt: "2026-08-24T09:00:00.000Z",
+      requestedByUsername: "admin",
+      rollbackAvailable: true,
+      acceptanceAvailable: true,
+    };
+    mockedApi.get.mockImplementation((url: string) => {
+      if (url === "/events") return Promise.resolve({ data: [] });
+      if (url === "/backup/list")
+        return Promise.resolve({ data: [nativeBackup] });
+      if (url === "/backup/restore-operation")
+        return Promise.resolve({ data: operation });
+      return Promise.resolve({ data: [] });
+    });
+    await openBackupTab();
+
+    expect(
+      await screen.findByText("Wiederherstellung wartet auf Abnahme"),
+    ).toBeInTheDocument();
+    const rollback = screen.getByRole("button", {
+      name: "Wiederherstellung rückgängig machen",
+    });
+    const accept = screen.getByRole("button", {
+      name: "Wiederherstellung abnehmen und Wartung beenden",
+    });
+    expect(rollback).toBeDisabled();
+    expect(accept).toBeDisabled();
+
+    fireEvent.change(
+      screen.getByLabelText(
+        "Sicherungszeitpunkt für die Entscheidung exakt eingeben",
+      ),
+      { target: { value: nativeBackup.createdAt } },
+    );
+    expect(rollback).toBeEnabled();
+    expect(accept).toBeEnabled();
+    fireEvent.click(rollback);
+    await vi.waitFor(() =>
+      expect(mockedApi.post).toHaveBeenCalledWith(
+        "/backup/restore-operation/rollback",
+        {
+          swapId: operation.swapId,
+          confirmedCreatedAt: nativeBackup.createdAt,
+        },
       ),
     );
   });

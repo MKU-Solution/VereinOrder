@@ -33,6 +33,10 @@ class MemoryStore implements RestoreSwapStateStore {
     this.state = { ...state };
     this.writes.push({ ...state });
   }
+
+  async clear(): Promise<void> {
+    this.state = null;
+  }
 }
 
 class MemoryDriver implements RestoreSwapDatabaseDriver {
@@ -155,6 +159,56 @@ describe("absturzfester Restore-Datenbanktausch (Issue #67)", () => {
     expect(store.writes.map((entry) => entry.phase)).toEqual(["SWAPPED"]);
   });
 
+  it("nimmt den getauschten Stand über eine zweite absturzfeste Umbenennungsfolge zurück", async () => {
+    const state = requested();
+    const store = new MemoryStore();
+    store.state = { ...state, phase: "COMPLETED" };
+    const driver = new MemoryDriver([
+      state.liveDatabase,
+      state.previousDatabase,
+    ]);
+    const coordinator = new RestoreSwapCoordinator(DATABASE_URL, store, driver);
+
+    const rolledBack = await coordinator.rollback();
+    expect(rolledBack.phase).toBe("ROLLED_BACK");
+    expect(store.writes.map((entry) => entry.phase)).toEqual([
+      "ROLLBACK_LIVE_RENAMED",
+      "ROLLED_BACK",
+    ]);
+    expect(driver.databases).toEqual(
+      new Set([state.liveDatabase, state.stagedDatabase]),
+    );
+    await expect(coordinator.markRollbackCompleted()).resolves.toMatchObject({
+      phase: "ROLLBACK_COMPLETED",
+    });
+  });
+
+  it("setzt die Rücknahme nach Abbruch zwischen den Umbenennungen fort", async () => {
+    const state = requested();
+    const store = new MemoryStore();
+    store.state = { ...state, phase: "COMPLETED" };
+    const driver = new MemoryDriver([
+      state.stagedDatabase,
+      state.previousDatabase,
+    ]);
+
+    const result = await new RestoreSwapCoordinator(
+      DATABASE_URL,
+      store,
+      driver,
+    ).rollback();
+
+    expect(result.phase).toBe("ROLLED_BACK");
+    expect(driver.calls).toEqual([
+      "list",
+      `rename:${state.previousDatabase}->${state.liveDatabase}`,
+      "list",
+    ]);
+    expect(
+      driver.calls.filter((call) => call.startsWith("terminate:")),
+    ).toHaveLength(0);
+  });
+
   it("rekonstruiert die Zwischenphase, wenn der Zustands-Sync nach der ersten Umbenennung ausfiel", async () => {
     const state = requested();
     const store = new MemoryStore();
@@ -224,6 +278,8 @@ describe("absturzfester Restore-Datenbanktausch (Issue #67)", () => {
       >({
         code: "INVALID_STATE",
       });
+      await store.clear();
+      await expect(store.read()).resolves.toBeNull();
     } finally {
       await fs.rm(directory, { recursive: true, force: true });
     }
