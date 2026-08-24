@@ -1067,6 +1067,20 @@ absturzfeste Datenbankumbenennung, der Rückweg und der Prozessneustart bleiben 
 nächste Teil von Schnitt 3; die Oberfläche bezeichnet den jetzigen Schritt deshalb
 bewusst nur als Vorbereitung.
 
+**Umsetzungsstand der absturzfesten Umschaltbasis:** Der Datenbanktausch ist als
+eigenständige, streng validierte Zustandsmaschine umgesetzt. Ihr Zustand wird im
+`STATE_DIR` atomar und ohne Verbindungsdaten veröffentlicht. Vor und nach jeder der
+beiden PostgreSQL-Umbenennungen wird zusätzlich die tatsächlich vorhandene
+Datenbanklage ausgewertet. Dadurch kann ein neu gestarteter Prozess sowohl nach
+`aktiv -> rückfall` als auch nach `vorbereitet -> aktiv` ohne Wiederholung eines bereits
+erfolgten Schritts fortsetzen; unplausible Namenskombinationen brechen vor einer
+weiteren Mutation geschlossen ab. Der Abbruchspalt ist gegen echte, eindeutig
+gekennzeichnete PostgreSQL-Testdatenbanken nachgewiesen. Die Basis ist noch nicht an
+den HTTP-Endpunkt gekoppelt: Prozessneustart, Abschlussaudit in der neuen Datenbank,
+fachliche Freigabe und Rückweg werden gemeinsam mit dieser Aktivierung ergänzt, damit
+die bestehende Restore-Vorbereitung bis dahin weiterhin garantiert
+`liveDatabaseChanged: false` liefert.
+
 **Umsetzungsstand Aufbewahrung und Speicherdiagnose:** Vor jeder Sicherung wird die
 konfigurierte Mindestreserve auf dem Dateisystem des `BACKUP_DIR` geprüft. Nach einer
 erfolgreichen, auditierten Sicherung rotiert VereinOrder ausschließlich vollständig
