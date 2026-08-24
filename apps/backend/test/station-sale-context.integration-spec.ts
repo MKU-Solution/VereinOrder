@@ -32,14 +32,14 @@ describe("getStationSaleContext – Zielstation im Produktkontext gegen echtes P
 
   afterAll(async () => {
     // Löscht über die Kaskadenregeln (onDelete: Cascade auf eventId) auch
-    // Warengruppen, Produkte und Stationen mit.
+    // Kategorien, Produkte und Stationen mit.
     if (eventIds.length) {
       await prisma.event.deleteMany({ where: { id: { in: eventIds } } });
     }
     await prisma.$disconnect();
   });
 
-  it("liefert targetStationId an Produkt und Warengruppe, sodass resolveTargetStationId korrekt auflöst", async () => {
+  it("liefert targetStationId an Produkt und Kategorie, sodass resolveTargetStationId korrekt auflöst", async () => {
     const event = await prisma.event.create({
       data: {
         name: `Wächtertest Stationskontext ${randomUUID()}`,
@@ -56,7 +56,7 @@ describe("getStationSaleContext – Zielstation im Produktkontext gegen echtes P
       data: { name: "Getränkestand", eventId: event.id },
     });
 
-    // Warengruppe mit eigener Vorgabe-Zielstation.
+    // Kategorie mit eigener Vorgabe-Zielstation.
     const kategorie = await prisma.productCategory.create({
       data: {
         name: "Getränke",
@@ -64,7 +64,7 @@ describe("getStationSaleContext – Zielstation im Produktkontext gegen echtes P
         targetStationId: stationKategorie.id,
       },
     });
-    // Zweite Warengruppe ohne Zielstation (zentrale Ausgabe).
+    // Zweite Kategorie ohne Zielstation (zentrale Ausgabe).
     const kategorieZentral = await prisma.productCategory.create({
       data: { name: "Sonstiges", eventId: event.id },
     });

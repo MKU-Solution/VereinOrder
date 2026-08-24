@@ -332,7 +332,7 @@ export function EventConfigurationActions({
                       Issue #84: Die Zielstation sitzt jetzt an der
                       Kategorie, das Produkt trägt nur noch eine Ausnahme.
                       Diese Abbildung ist trotzdem unverändert Station-zu-
-                      Station (nicht produkt- oder warengruppenspezifisch)
+                      Station (nicht produkt- oder kategoriespezifisch)
                       und deckt beide Fälle bereits vollständig ab: sie wird
                       aus ALLEN Stationen der Quellveranstaltung aufgebaut
                       (loadStations liefert /stations/admin/all, ungefiltert

@@ -425,7 +425,7 @@ export const RevisionDashboard = () => {
       <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-hide">
         {[
           { id: "overview", label: "Übersicht & Verlauf", icon: TrendingUp },
-          { id: "products", label: "Produkte & Warengruppen", icon: Package },
+          { id: "products", label: "Produkte & Kategorien", icon: Package },
           { id: "staff", label: "Mitarbeiterabrechnung", icon: Users },
           { id: "sessions", label: "Kassensitzungen", icon: Wallet },
         ].map((tab) => {
@@ -499,7 +499,7 @@ export const RevisionDashboard = () => {
           <div className="glass p-6 rounded-3xl">
             <h2 className="text-lg font-bold flex items-center gap-2 mb-6">
               <Layers className="w-5 h-5 text-purple-400" />
-              Umsatz nach Warengruppen
+              Umsatz nach Kategorien
             </h2>
 
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">

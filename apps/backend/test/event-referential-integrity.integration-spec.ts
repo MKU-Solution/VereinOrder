@@ -4,8 +4,8 @@ import { assertTestDatabaseUrl } from "./test-database";
 
 /**
  * Wächtertest für Issue #96: Die einzelnen Fremdschlüssel von Produkt,
- * Warengruppe und Station sichern nur die Existenz ihrer Ziele. Sie verhindern
- * nicht, dass ein Produkt oder eine Warengruppe auf Daten einer anderen
+ * Kategorie und Station sichern nur die Existenz ihrer Ziele. Sie verhindern
+ * nicht, dass ein Produkt oder eine Kategorie auf Daten einer anderen
  * Veranstaltung verweist. Diese Tests schreiben absichtlich ohne Service- oder
  * API-Schicht, damit die Datenbankregel selbst geschützt ist.
  */
@@ -87,14 +87,14 @@ describe("Eventbezogene Referenzintegrität gegen echtes PostgreSQL (Issue #96)"
     expect(product.targetStationId).toBeNull();
   });
 
-  it("akzeptiert eine Warengruppe mit Zielstation derselben Veranstaltung", async () => {
-    const event = await createEvent("Gültige Warengruppenreferenz");
+  it("akzeptiert eine Kategorie mit Zielstation derselben Veranstaltung", async () => {
+    const event = await createEvent("Gültige Kategoriereferenz");
     const station = await prisma.station.create({
       data: { name: "Ausgabe", eventId: event.id },
     });
     const category = await prisma.productCategory.create({
       data: {
-        name: "Warengruppe mit lokaler Station",
+        name: "Kategorie mit lokaler Station",
         eventId: event.id,
         targetStationId: station.id,
       },
@@ -122,8 +122,8 @@ describe("Eventbezogene Referenzintegrität gegen echtes PostgreSQL (Issue #96)"
     ).rejects.toMatchObject({ code: "P2003" });
   });
 
-  it("verwirft eine Warengruppe mit Zielstation einer fremden Veranstaltung", async () => {
-    const event = await createEvent("Warengruppe Veranstaltung A");
+  it("verwirft eine Kategorie mit Zielstation einer fremden Veranstaltung", async () => {
+    const event = await createEvent("Kategorie Veranstaltung A");
     const foreignEvent = await createEvent("Station Veranstaltung B");
     const foreignStation = await prisma.station.create({
       data: { name: "Fremde Station", eventId: foreignEvent.id },
@@ -132,7 +132,7 @@ describe("Eventbezogene Referenzintegrität gegen echtes PostgreSQL (Issue #96)"
     await expect(
       prisma.productCategory.create({
         data: {
-          name: "Warengruppe mit fremder Station",
+          name: "Kategorie mit fremder Station",
           eventId: event.id,
           targetStationId: foreignStation.id,
         },
