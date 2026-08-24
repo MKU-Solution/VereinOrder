@@ -48,6 +48,19 @@ cp .env.example .env
 docker compose up -d
 ```
 
+Vor dem ersten Start und bei jedem Update werden Migrationen ausschließlich über den
+abgesicherten Betriebsweg ausgeführt:
+
+```bash
+export ADMIN_TOKEN='<aktuelles Administrator-JWT>'
+./scripts/ops/upgrade.sh
+```
+
+Der Ablauf setzt den Wartungsmodus, erzeugt eine geprüfte `PRE_MIGRATION`-Sicherung,
+führt `prisma migrate deploy` sowie `prisma migrate status` aus und öffnet das System
+erst nach Erfolg wieder. Details und der Notfall-Restore stehen in
+[`docs/ops/backup-recovery.md`](./backup-recovery.md).
+
 ---
 
 ## 4. Ausfallsicherheit bei Stromausfall
@@ -83,3 +96,11 @@ Betrieb und Fehlersuche stehen vollständig in
 ## 6. Offline-Betrieb & WLAN-Access-Point
 
 Im Festbetrieb ist keine Verbindung zum öffentlichen Internet erforderlich. Die Kellner-Handys verbinden sich direkt mit dem lokalen WLAN des Festzelts und rufen im Browser `http://vereinorder.local` oder die IP-Adresse des Raspberry Pi auf.
+
+## 7. Datensicherung vor dem Fest
+
+Auf dem ARM64-Gerät mindestens eine native Sicherung erstellen, die vollständige
+Wiederherstellungsprüfung ausführen und einen kontrollierten Backend-Neustart im
+Wartungsmodus testen. Dump und Manifest gemeinsam auf einen geschützten zweiten
+Datenträger kopieren. Der vollständige Ablauf einschließlich Rücknahme steht im
+Backup-Handbuch.

@@ -115,7 +115,7 @@ interface DatabaseIdentity {
   serverVersionNum: number;
 }
 
-interface DatabaseMeasurements {
+export interface DatabaseMeasurements {
   tableNames: string[];
   counts: Record<string, number>;
   sums: BackupSums;
@@ -954,7 +954,7 @@ export class NativeBackupService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
-  private async measureDatabase(
+  async measureDatabase(
     prisma: PrismaClient = this.prisma,
   ): Promise<DatabaseMeasurements> {
     const [
@@ -1040,7 +1040,7 @@ export class NativeBackupService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
-  private async readMigrations(
+  async readMigrations(
     prisma: PrismaClient = this.prisma,
   ): Promise<BackupMigration[]> {
     return prisma.$queryRawUnsafe<BackupMigration[]>(
@@ -1070,7 +1070,7 @@ export class NativeBackupService implements OnModuleInit, OnModuleDestroy {
       compatibility: "UNKNOWN",
       restoreAvailable: false,
       restoreUnavailableReason:
-        "Native Wiederherstellung folgt im nächsten abgesicherten #67-Schnitt.",
+        "Der Migrationsstand wurde noch nicht verglichen.",
       restoreVerificationAvailable: false,
       restoreVerificationUnavailableReason:
         "Der Migrationsstand wurde noch nicht verglichen.",
@@ -1082,6 +1082,14 @@ export class NativeBackupService implements OnModuleInit, OnModuleDestroy {
   }
 
   private applyRestoreVerificationAvailability(item: BackupListItem): void {
+    item.restoreAvailable =
+      item.format === "POSTGRES_CUSTOM" &&
+      (item.compatibility === "CURRENT" || item.compatibility === "OLDER");
+    item.restoreUnavailableReason = item.restoreAvailable
+      ? null
+      : item.compatibility === "NEWER" || item.compatibility === "DIVERGED"
+        ? "Der Migrationsstand ist nicht mit der laufenden Anwendung vereinbar."
+        : "Der Migrationsstand konnte nicht sicher verglichen werden.";
     item.restoreVerificationAvailable =
       item.format === "POSTGRES_CUSTOM" && item.compatibility === "CURRENT";
     item.restoreVerificationUnavailableReason =
@@ -1117,7 +1125,7 @@ export class NativeBackupService implements OnModuleInit, OnModuleDestroy {
     return JSON.stringify(normalize(value));
   }
 
-  private compareMigrations(
+  compareMigrations(
     backup: BackupMigration[],
     current: BackupMigration[],
   ): BackupListItem["compatibility"] {

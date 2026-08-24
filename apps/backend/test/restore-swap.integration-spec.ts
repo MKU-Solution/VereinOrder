@@ -75,7 +75,7 @@ describe("Restore-Tausch gegen echte PostgreSQL-Testdatenbanken (Issue #67)", ()
     else process.env.PSQL_BIN = previousPsqlBin;
   }, 60_000);
 
-  it("setzt den echten Tausch nach einem Abbruch zwischen Umbenennung und Zustands-Sync fort", async () => {
+  it("setzt echten Tausch und Rücknahme nach Abbrüchen zwischen Umbenennung und Zustands-Sync fort", async () => {
     const store = new FileRestoreSwapStateStore(stateDirectory);
     const tools = new PostgreSqlBackupTools();
     await store.write(state);
@@ -102,6 +102,29 @@ describe("Restore-Tausch gegen echte PostgreSQL-Testdatenbanken (Issue #67)", ()
     await expect(
       new PostgreSqlBackupTools().listDatabaseNames(controlUrl),
     ).resolves.toEqual(expect.not.arrayContaining([state.stagedDatabase]));
+
+    await restartedCoordinator.markCompleted();
+    await tools.terminateDatabaseConnections(controlUrl, state.liveDatabase);
+    await tools.renameDatabase(
+      controlUrl,
+      state.liveDatabase,
+      state.stagedDatabase,
+    );
+    expect((await store.read())?.phase).toBe("COMPLETED");
+
+    const rollbackAfterRestart = new RestoreSwapCoordinator(
+      controlUrl,
+      new FileRestoreSwapStateStore(stateDirectory),
+      new PostgreSqlBackupTools(),
+    );
+    await expect(rollbackAfterRestart.rollback()).resolves.toMatchObject({
+      phase: "ROLLED_BACK",
+    });
+    await expect(readMarker(state.liveDatabase)).resolves.toBe("ORIGINAL");
+    await expect(readMarker(state.stagedDatabase)).resolves.toBe("RESTORED");
+    await expect(
+      new PostgreSqlBackupTools().listDatabaseNames(controlUrl),
+    ).resolves.toEqual(expect.not.arrayContaining([state.previousDatabase]));
   }, 60_000);
 
   async function cleanupDatabases(): Promise<void> {

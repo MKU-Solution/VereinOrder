@@ -29,6 +29,14 @@ services:
       JWT_SECRET: ${JWT_SECRET:-vereinorder_super_secret_production_key_festbetrieb_2026}
       PRINT_WORKER_TOKEN: ${PRINT_WORKER_TOKEN:?PRINT_WORKER_TOKEN muss gesetzt sein}
       BACKUP_DIR: /app/backups
+      BACKUP_RETENTION_HOURLY_KEEP: ${BACKUP_RETENTION_HOURLY_KEEP:-24}
+      BACKUP_RETENTION_DAILY_KEEP: ${BACKUP_RETENTION_DAILY_KEEP:-14}
+      BACKUP_RETENTION_EVENT_KEEP: ${BACKUP_RETENTION_EVENT_KEEP:-3}
+      BACKUP_MIN_FREE_BYTES: ${BACKUP_MIN_FREE_BYTES:-1073741824}
+      # Nach einer erfolgreichen Datenbankumschaltung beendet sich das
+      # Backend kontrolliert; restart: always startet es gegen der neuen
+      # Datenbank wieder im weiterhin gesperrten Wartungsmodus.
+      RESTORE_EXIT_AFTER_SWAP: "1"
       # Wartungsmodus (#67): Der Zustand liegt bewusst ausserhalb der
       # Datenbank, weil eine Wiederherstellung die Datenbank ersetzt - ein
       # Feld darin wuerde im gefaehrlichsten Augenblick ueberschrieben. Das

@@ -23,3 +23,14 @@ export class PrepareNativeRestoreDto {
   @Equals(true)
   queuesConfirmed: true;
 }
+
+export class ConfirmRestoreOperationDto {
+  @IsString()
+  @Matches(/^[a-f0-9]{16}$/)
+  swapId: string;
+
+  @IsString()
+  @MaxLength(64)
+  @IsISO8601({ strict: true, strictSeparator: true })
+  confirmedCreatedAt: string;
+}

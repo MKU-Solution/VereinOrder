@@ -6,7 +6,24 @@ const SWAP_ID_PATTERN = /^[a-f0-9]{16}$/;
 const LIVE_DATABASE_PATTERN = /^vereinorder(?:_[a-z0-9]+)*$/;
 const MAX_DATABASE_NAME_LENGTH = 63;
 
-export type RestoreSwapPhase = "REQUESTED" | "LIVE_RENAMED" | "SWAPPED";
+export type RestoreSwapPhase =
+  | "REQUESTED"
+  | "LIVE_RENAMED"
+  | "SWAPPED"
+  | "COMPLETED"
+  | "ROLLBACK_LIVE_RENAMED"
+  | "ROLLED_BACK"
+  | "ROLLBACK_COMPLETED";
+
+export interface RestoreSwapContext {
+  backupFilename: string;
+  backupCreatedAt: string;
+  backupChecksumSha256: string;
+  safetyBackupFilename: string;
+  requestedByUserId: string;
+  requestedByUsername: string;
+  activeCashierSessions: number;
+}
 
 export interface RestoreSwapState {
   version: 1;
@@ -16,11 +33,13 @@ export interface RestoreSwapState {
   stagedDatabase: string;
   previousDatabase: string;
   requestedAt: string;
+  context: RestoreSwapContext;
 }
 
 export interface RestoreSwapStateStore {
   read(): Promise<RestoreSwapState | null>;
   write(state: RestoreSwapState): Promise<void>;
+  clear(): Promise<void>;
 }
 
 export interface RestoreSwapDatabaseDriver {
@@ -53,6 +72,15 @@ export function createRestoreSwapState(
   liveDatabase: string,
   requestedAt = new Date().toISOString(),
   swapId = randomBytes(8).toString("hex"),
+  context: RestoreSwapContext = {
+    backupFilename: "vereinorder_unknown_manual.dump",
+    backupCreatedAt: requestedAt,
+    backupChecksumSha256: "0".repeat(64),
+    safetyBackupFilename: "vereinorder_unknown_prerestore.dump",
+    requestedByUserId: "unknown",
+    requestedByUsername: "unknown",
+    activeCashierSessions: 0,
+  },
 ): RestoreSwapState {
   const testMarker = /(?:^|_)test(?:_|$)/.test(liveDatabase) ? "test_" : "";
   const state: RestoreSwapState = {
@@ -63,6 +91,7 @@ export function createRestoreSwapState(
     stagedDatabase: `vereinorder_restore_${testMarker}${swapId}`,
     previousDatabase: `vereinorder_pre_${testMarker}${swapId}`,
     requestedAt,
+    context,
   };
   assertRestoreSwapState(state);
   return state;
@@ -75,6 +104,7 @@ export function assertRestoreSwapState(
     throw invalidState("Der Restore-Zustand ist kein Objekt.");
   }
   const expectedKeys = [
+    "context",
     "liveDatabase",
     "phase",
     "previousDatabase",
@@ -89,7 +119,17 @@ export function assertRestoreSwapState(
   if (value.version !== 1) {
     throw invalidState("Die Version des Restore-Zustands ist ungültig.");
   }
-  if (!["REQUESTED", "LIVE_RENAMED", "SWAPPED"].includes(String(value.phase))) {
+  if (
+    ![
+      "REQUESTED",
+      "LIVE_RENAMED",
+      "SWAPPED",
+      "COMPLETED",
+      "ROLLBACK_LIVE_RENAMED",
+      "ROLLED_BACK",
+      "ROLLBACK_COMPLETED",
+    ].includes(String(value.phase))
+  ) {
     throw invalidState("Die Phase des Restore-Zustands ist ungültig.");
   }
   if (typeof value.swapId !== "string" || !SWAP_ID_PATTERN.test(value.swapId)) {
@@ -118,6 +158,7 @@ export function assertRestoreSwapState(
   ) {
     throw invalidState("Der Zeitstempel des Restore-Zustands ist ungültig.");
   }
+  assertRestoreSwapContext(value.context);
 }
 
 export class FileRestoreSwapStateStore implements RestoreSwapStateStore {
@@ -183,6 +224,10 @@ export class FileRestoreSwapStateStore implements RestoreSwapStateStore {
       throw error;
     }
   }
+
+  async clear(): Promise<void> {
+    await fs.rm(this.statePath, { force: true });
+  }
 }
 
 export class RestoreSwapCoordinator {
@@ -208,15 +253,68 @@ export class RestoreSwapCoordinator {
   }
 
   async resume(): Promise<RestoreSwapState> {
-    let state = await this.store.read();
-    if (!state) {
-      throw new RestoreSwapError(
-        "STATE_NOT_FOUND",
-        "Es besteht kein persistierter Restore-Vorgang.",
+    const state = await this.requireState();
+    if (
+      state.phase === "ROLLBACK_LIVE_RENAMED" ||
+      state.phase === "ROLLED_BACK" ||
+      state.phase === "ROLLBACK_COMPLETED"
+    ) {
+      return this.resumeRollback(state);
+    }
+    return this.resumeForward(state);
+  }
+
+  async markCompleted(): Promise<RestoreSwapState> {
+    const state = await this.requireState();
+    if (state.phase !== "SWAPPED" && state.phase !== "COMPLETED") {
+      throw invalidState(
+        "Nur ein vollständig getauschter Restore kann abgeschlossen werden.",
       );
     }
-    assertRestoreSwapState(state);
+    if (state.phase === "COMPLETED") return state;
+    const completed: RestoreSwapState = { ...state, phase: "COMPLETED" };
+    await this.store.write(completed);
+    return completed;
+  }
 
+  async rollback(): Promise<RestoreSwapState> {
+    const state = await this.requireState();
+    if (
+      ![
+        "SWAPPED",
+        "COMPLETED",
+        "ROLLBACK_LIVE_RENAMED",
+        "ROLLED_BACK",
+        "ROLLBACK_COMPLETED",
+      ].includes(state.phase)
+    ) {
+      throw invalidState(
+        "Der Restore kann in dieser Phase nicht zurückgenommen werden.",
+      );
+    }
+    return this.resumeRollback(state);
+  }
+
+  async markRollbackCompleted(): Promise<RestoreSwapState> {
+    const state = await this.requireState();
+    if (state.phase !== "ROLLED_BACK" && state.phase !== "ROLLBACK_COMPLETED") {
+      throw invalidState(
+        "Nur ein vollständig zurückgenommener Restore kann abgeschlossen werden.",
+      );
+    }
+    if (state.phase === "ROLLBACK_COMPLETED") return state;
+    const completed: RestoreSwapState = {
+      ...state,
+      phase: "ROLLBACK_COMPLETED",
+    };
+    await this.store.write(completed);
+    return completed;
+  }
+
+  private async resumeForward(
+    initialState: RestoreSwapState,
+  ): Promise<RestoreSwapState> {
+    let state = initialState;
     for (;;) {
       const databases = new Set(
         await this.driver.listDatabaseNames(this.databaseUrl),
@@ -225,7 +323,7 @@ export class RestoreSwapCoordinator {
       const hasStaged = databases.has(state.stagedDatabase);
       const hasPrevious = databases.has(state.previousDatabase);
 
-      if (state.phase === "SWAPPED") {
+      if (state.phase === "SWAPPED" || state.phase === "COMPLETED") {
         if (hasLive && !hasStaged && hasPrevious) return state;
         throw inconsistentLayout(state, hasLive, hasStaged, hasPrevious);
       }
@@ -272,6 +370,81 @@ export class RestoreSwapCoordinator {
       throw inconsistentLayout(state, hasLive, hasStaged, hasPrevious);
     }
   }
+
+  private async resumeRollback(
+    initialState: RestoreSwapState,
+  ): Promise<RestoreSwapState> {
+    let state = initialState;
+    for (;;) {
+      const databases = new Set(
+        await this.driver.listDatabaseNames(this.databaseUrl),
+      );
+      const hasLive = databases.has(state.liveDatabase);
+      const hasStaged = databases.has(state.stagedDatabase);
+      const hasPrevious = databases.has(state.previousDatabase);
+
+      if (
+        state.phase === "ROLLED_BACK" ||
+        state.phase === "ROLLBACK_COMPLETED"
+      ) {
+        if (hasLive && hasStaged && !hasPrevious) return state;
+        throw inconsistentLayout(state, hasLive, hasStaged, hasPrevious);
+      }
+
+      if (hasLive && !hasStaged && hasPrevious) {
+        if (state.phase !== "SWAPPED" && state.phase !== "COMPLETED") {
+          throw inconsistentLayout(state, hasLive, hasStaged, hasPrevious);
+        }
+        await this.driver.terminateDatabaseConnections(
+          this.databaseUrl,
+          state.liveDatabase,
+        );
+        await this.driver.renameDatabase(
+          this.databaseUrl,
+          state.liveDatabase,
+          state.stagedDatabase,
+        );
+        state = { ...state, phase: "ROLLBACK_LIVE_RENAMED" };
+        await this.store.write(state);
+        continue;
+      }
+
+      if (!hasLive && hasStaged && hasPrevious) {
+        if (state.phase === "SWAPPED" || state.phase === "COMPLETED") {
+          state = { ...state, phase: "ROLLBACK_LIVE_RENAMED" };
+          await this.store.write(state);
+        }
+        await this.driver.renameDatabase(
+          this.databaseUrl,
+          state.previousDatabase,
+          state.liveDatabase,
+        );
+        state = { ...state, phase: "ROLLED_BACK" };
+        await this.store.write(state);
+        continue;
+      }
+
+      if (hasLive && hasStaged && !hasPrevious) {
+        state = { ...state, phase: "ROLLED_BACK" };
+        await this.store.write(state);
+        return state;
+      }
+
+      throw inconsistentLayout(state, hasLive, hasStaged, hasPrevious);
+    }
+  }
+
+  private async requireState(): Promise<RestoreSwapState> {
+    const state = await this.store.read();
+    if (!state) {
+      throw new RestoreSwapError(
+        "STATE_NOT_FOUND",
+        "Es besteht kein persistierter Restore-Vorgang.",
+      );
+    }
+    assertRestoreSwapState(state);
+    return state;
+  }
 }
 
 function isSafeLiveDatabaseName(value: string): boolean {
@@ -297,8 +470,73 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   );
 }
 
+function assertRestoreSwapContext(
+  value: unknown,
+): asserts value is RestoreSwapContext {
+  if (!isPlainObject(value)) {
+    throw invalidState("Der Restore-Kontext ist ungültig.");
+  }
+  const expectedKeys = [
+    "activeCashierSessions",
+    "backupChecksumSha256",
+    "backupCreatedAt",
+    "backupFilename",
+    "requestedByUserId",
+    "requestedByUsername",
+    "safetyBackupFilename",
+  ];
+  if (Object.keys(value).sort().join("|") !== expectedKeys.join("|")) {
+    throw invalidState("Der Restore-Kontext enthält unerwartete Felder.");
+  }
+  if (
+    typeof value.backupFilename !== "string" ||
+    value.backupFilename.length > 255 ||
+    !/^vereinorder_[A-Za-z0-9._-]+\.dump$/.test(value.backupFilename)
+  ) {
+    throw invalidState("Der Sicherungsname im Restore-Kontext ist ungültig.");
+  }
+  if (
+    typeof value.safetyBackupFilename !== "string" ||
+    value.safetyBackupFilename.length > 255 ||
+    !/^vereinorder_[A-Za-z0-9._-]+_prerestore(?:-\d+)?\.dump$/.test(
+      value.safetyBackupFilename,
+    )
+  ) {
+    throw invalidState("Der Name der Sicherheitssicherung ist ungültig.");
+  }
+  if (
+    typeof value.backupCreatedAt !== "string" ||
+    !isExactIsoTimestamp(value.backupCreatedAt) ||
+    typeof value.backupChecksumSha256 !== "string" ||
+    !/^[a-f0-9]{64}$/.test(value.backupChecksumSha256)
+  ) {
+    throw invalidState(
+      "Die Sicherungsidentität im Restore-Kontext ist ungültig.",
+    );
+  }
+  if (
+    typeof value.requestedByUserId !== "string" ||
+    value.requestedByUserId.length < 1 ||
+    value.requestedByUserId.length > 255 ||
+    typeof value.requestedByUsername !== "string" ||
+    value.requestedByUsername.length < 1 ||
+    value.requestedByUsername.length > 255
+  ) {
+    throw invalidState(
+      "Die Administratoridentität im Restore-Kontext ist ungültig.",
+    );
+  }
+  if (
+    typeof value.activeCashierSessions !== "number" ||
+    !Number.isSafeInteger(value.activeCashierSessions) ||
+    value.activeCashierSessions < 0
+  ) {
+    throw invalidState("Die Zahl offener Kassensitzungen ist ungültig.");
+  }
+}
+
 function isNodeError(error: unknown): error is NodeJS.ErrnoException {
-  return error instanceof Error;
+  return typeof error === "object" && error !== null && "code" in error;
 }
 
 function invalidState(message: string): RestoreSwapError {

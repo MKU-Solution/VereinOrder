@@ -111,6 +111,19 @@ interface BackupItem {
   downloadFiles?: string[];
 }
 
+interface RestoreOperation {
+  swapId: string;
+  phase: string;
+  backupFilename: string;
+  backupCreatedAt: string;
+  safetyBackupFilename: string;
+  activeCashierSessions: number;
+  requestedAt: string;
+  requestedByUsername: string;
+  rollbackAvailable: boolean;
+  acceptanceAvailable: boolean;
+}
+
 interface AuditLogItem {
   id: string;
   action: string;
@@ -298,6 +311,11 @@ export const AdminDashboard = () => {
   const [restoreCreatedAtConfirmation, setRestoreCreatedAtConfirmation] =
     useState("");
   const [restoreQueuesConfirmed, setRestoreQueuesConfirmed] = useState(false);
+  const [restoreOperation, setRestoreOperation] =
+    useState<RestoreOperation | null>(null);
+  const [restoreOperationConfirmation, setRestoreOperationConfirmation] =
+    useState("");
+  const [restoreOperationBusy, setRestoreOperationBusy] = useState(false);
   const [isRetryingJobs, setIsRetryingJobs] = useState(false);
   const [eventId, setEventId] = useState<string>("");
 
@@ -495,6 +513,12 @@ export const AdminDashboard = () => {
         setDiagnosticsPollFailed(false);
       } else {
         setData(res.data);
+      }
+
+      if (activeTab === "backups") {
+        const operation = await api.get("/backup/restore-operation");
+        setRestoreOperation(operation.data || null);
+        setRestoreOperationConfirmation("");
       }
 
       if (activeTab === "printers") {
@@ -1180,24 +1204,53 @@ export const AdminDashboard = () => {
     setPreparingBackup(backup.filename);
     try {
       const response = await api.post(
-        `/backup/prepare-restore/${backup.filename}`,
+        `/backup/native-restore/${backup.filename}`,
         {
           confirmedCreatedAt: restoreCreatedAtConfirmation,
           queuesConfirmed: restoreQueuesConfirmed,
         },
       );
       alert(
-        `Vorbereitung erfolgreich. Die PRE_RESTORE-Sicherung ${response.data.safetyBackup.filename} wurde erstellt und der gewählte Dump isoliert geprüft. Die Festdatenbank blieb unverändert; eine Wiederherstellung wurde noch nicht ausgeführt.`,
+        `Wiederherstellung erfolgreich umgeschaltet. Die Sicherheitssicherung bleibt bis zur ausdrücklichen Abnahme erhalten.${response.data.restartScheduled ? " Das Backend startet jetzt kontrolliert neu." : ""}`,
       );
       setRestorePreparationTarget(null);
       fetchData();
     } catch (err) {
       console.error("Failed to prepare backup restoration", err);
       alert(
-        "Die Wiederherstellung konnte nicht sicher vorbereitet werden. Die Festdatenbank wurde nicht verändert.",
+        backendMessage(
+          err,
+          "Die Wiederherstellung konnte nicht sicher abgeschlossen werden. Der Wartungsmodus bleibt gesperrt.",
+        ),
       );
     } finally {
       setPreparingBackup(null);
+    }
+  };
+
+  const handleRestoreOperation = async (action: "rollback" | "accept") => {
+    if (!restoreOperation) return;
+    setRestoreOperationBusy(true);
+    try {
+      await api.post(`/backup/restore-operation/${action}`, {
+        swapId: restoreOperation.swapId,
+        confirmedCreatedAt: restoreOperationConfirmation,
+      });
+      alert(
+        action === "rollback"
+          ? "Die Wiederherstellung wurde auf die vorherige Datenbank zurückgenommen. Bitte prüfen und anschließend ausdrücklich abnehmen."
+          : "Der geprüfte Zustand wurde abgenommen, die Rückfalldatenbank entfernt und der Wartungsmodus beendet.",
+      );
+      fetchData();
+    } catch (err) {
+      alert(
+        backendMessage(
+          err,
+          "Die Restore-Entscheidung konnte nicht sicher ausgeführt werden.",
+        ),
+      );
+    } finally {
+      setRestoreOperationBusy(false);
     }
   };
 
@@ -2405,6 +2458,80 @@ export const AdminDashboard = () => {
               </button>
             </div>
 
+            {restoreOperation && (
+              <section className="rounded-2xl border border-amber-500/40 bg-amber-500/10 p-5">
+                <div className="flex items-start gap-3">
+                  <AlertTriangle className="mt-0.5 h-6 w-6 shrink-0 text-amber-300" />
+                  <div className="min-w-0 flex-1">
+                    <h3 className="font-black text-amber-100">
+                      Wiederherstellung wartet auf Abnahme
+                    </h3>
+                    <p className="mt-1 break-all text-sm text-amber-100/80">
+                      {restoreOperation.backupFilename} · Phase{" "}
+                      {restoreOperation.phase}
+                    </p>
+                    <p className="mt-1 text-sm text-slate-300">
+                      {restoreOperation.activeCashierSessions} offene
+                      Kassensitzung(en) wurden protokolliert. Die
+                      Rückfalldatenbank bleibt bis zu deiner Entscheidung
+                      erhalten.
+                    </p>
+                    <label
+                      htmlFor="restore-operation-confirmation"
+                      className="mt-4 block text-sm font-bold text-slate-200"
+                    >
+                      Sicherungszeitpunkt für die Entscheidung exakt eingeben
+                    </label>
+                    <code className="mt-1 block break-all text-xs text-amber-200">
+                      {restoreOperation.backupCreatedAt}
+                    </code>
+                    <input
+                      id="restore-operation-confirmation"
+                      value={restoreOperationConfirmation}
+                      onChange={(event) =>
+                        setRestoreOperationConfirmation(event.target.value)
+                      }
+                      autoComplete="off"
+                      spellCheck={false}
+                      className="mt-2 min-h-11 w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 font-mono text-sm text-white focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-400/30"
+                    />
+                    <div className="mt-4 flex flex-col gap-2 sm:flex-row">
+                      {restoreOperation.rollbackAvailable && (
+                        <button
+                          type="button"
+                          onClick={() => handleRestoreOperation("rollback")}
+                          disabled={
+                            restoreOperationBusy ||
+                            restoreOperationConfirmation !==
+                              restoreOperation.backupCreatedAt
+                          }
+                          className="min-h-11 rounded-xl border border-rose-500/40 bg-rose-500/20 px-4 py-2 font-bold text-rose-200 hover:bg-rose-500/30 disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                          Wiederherstellung rückgängig machen
+                        </button>
+                      )}
+                      {restoreOperation.acceptanceAvailable && (
+                        <button
+                          type="button"
+                          onClick={() => handleRestoreOperation("accept")}
+                          disabled={
+                            restoreOperationBusy ||
+                            restoreOperationConfirmation !==
+                              restoreOperation.backupCreatedAt
+                          }
+                          className="min-h-11 rounded-xl bg-emerald-600 px-4 py-2 font-black text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                          {restoreOperation.phase === "ROLLBACK_COMPLETED"
+                            ? "Rücknahme abnehmen und Wartung beenden"
+                            : "Wiederherstellung abnehmen und Wartung beenden"}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </section>
+            )}
+
             <div className="overflow-x-auto">
               <table className="w-full text-left">
                 <thead>
@@ -2502,23 +2629,24 @@ export const AdminDashboard = () => {
                                 : "Wiederherstellung prüfen"}
                             </button>
                           )}
-                          {b.restorePreparationAvailable && (
-                            <button
-                              onClick={() => openRestorePreparation(b)}
-                              disabled={
-                                preparingBackup !== null ||
-                                verifyingBackup !== null
-                              }
-                              className="px-3 py-1.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 rounded-lg transition text-xs font-bold flex items-center gap-1.5 border border-amber-500/30 disabled:opacity-50 disabled:cursor-not-allowed"
-                              title="Nur im Zustand LOCKED: exakte Bestätigung, PRE_RESTORE-Sicherung und erneute isolierte Prüfung"
-                            >
-                              <RotateCcw className="w-3.5 h-3.5" />
-                              {preparingBackup === b.filename
-                                ? "Vorbereitung läuft …"
-                                : "Wiederherstellung vorbereiten"}
-                            </button>
-                          )}
-                          {b.restoreAvailable ? (
+                          {b.restoreAvailable &&
+                            b.format === "POSTGRES_CUSTOM" && (
+                              <button
+                                onClick={() => openRestorePreparation(b)}
+                                disabled={
+                                  preparingBackup !== null ||
+                                  verifyingBackup !== null
+                                }
+                                className="px-3 py-1.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 rounded-lg transition text-xs font-bold flex items-center gap-1.5 border border-amber-500/30 disabled:opacity-50 disabled:cursor-not-allowed"
+                                title="Nur im Zustand LOCKED: PRE_RESTORE-Sicherung, isolierte Prüfung, Datenbanktausch und Rückfallebene"
+                              >
+                                <RotateCcw className="w-3.5 h-3.5" />
+                                {preparingBackup === b.filename
+                                  ? "Wiederherstellung läuft …"
+                                  : "Sicher wiederherstellen"}
+                              </button>
+                            )}
+                          {b.restoreAvailable && b.format === "LEGACY_JSON" ? (
                             <button
                               onClick={() => handleRestoreBackup(b.filename)}
                               className="px-3 py-1.5 bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 rounded-lg transition text-xs font-bold flex items-center gap-1.5 border border-rose-500/30"
@@ -2527,7 +2655,8 @@ export const AdminDashboard = () => {
                               <RotateCcw className="w-3.5 h-3.5" />
                               Legacy wiederherstellen
                             </button>
-                          ) : !b.restoreVerificationAvailable &&
+                          ) : !b.restoreAvailable &&
+                            !b.restoreVerificationAvailable &&
                             !b.restorePreparationAvailable ? (
                             <span
                               className="max-w-52 text-left text-[11px] leading-snug text-slate-500"
@@ -3757,12 +3886,18 @@ export const AdminDashboard = () => {
               id="restore-preparation-title"
               className="text-xl font-black text-white"
             >
-              Wiederherstellung vorbereiten
+              Sicher wiederherstellen
             </h2>
             <p className="mt-2 text-sm leading-relaxed text-slate-300">
-              Dieser Schritt erstellt zuerst eine geprüfte PRE_RESTORE-Sicherung
-              und prüft den gewählten Dump erneut in einer isolierten
-              Nebendatenbank. Die Festdatenbank wird nicht verändert.
+              Dieser Schritt erstellt eine geprüfte PRE_RESTORE-Sicherung,
+              stellt den Dump in einer Nebendatenbank wieder her und prüft ihn
+              vollständig. Erst danach werden die Datenbanken umgeschaltet. Der
+              bisherige Stand bleibt als sofortige Rückfallebene erhalten.
+            </p>
+            <p className="mt-3 rounded-xl border border-rose-500/30 bg-rose-500/10 p-3 text-sm font-bold text-rose-200">
+              Nach der Umschaltung bleibt der Wartungsmodus gesperrt. Du musst
+              den neuen Stand anschließend ausdrücklich abnehmen oder die
+              Wiederherstellung rückgängig machen.
             </p>
             <div className="mt-4 rounded-xl border border-amber-500/20 bg-amber-500/10 p-3 text-sm">
               <div className="font-bold text-amber-200">
@@ -3825,8 +3960,8 @@ export const AdminDashboard = () => {
                 className="min-h-11 rounded-xl bg-amber-500 px-4 py-2 font-black text-slate-950 hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-40"
               >
                 {preparingBackup !== null
-                  ? "Vorbereitung läuft …"
-                  : "Sicher vorbereiten"}
+                  ? "Wiederherstellung läuft …"
+                  : "Jetzt sicher wiederherstellen"}
               </button>
             </div>
           </div>

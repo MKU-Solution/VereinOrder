@@ -18,14 +18,14 @@
     "test": "node --test"
   },
   "dependencies": {
-    "@prisma/client": "^5.14.0"
+    "@prisma/client": "^5.14.0",
+    "prisma": "^5.14.0"
   },
   "devDependencies": {
     "@typescript-eslint/eslint-plugin": "7.18.0",
     "@typescript-eslint/parser": "7.18.0",
     "eslint": "8.57.1",
     "prettier": "3.4.2",
-    "prisma": "^5.14.0",
     "typescript": "^5.4.5",
     "ts-node": "^10.9.2",
     "@types/node": "^20.12.7",
