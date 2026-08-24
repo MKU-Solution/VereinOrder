@@ -119,4 +119,54 @@ describe("PostgreSQL-Werkzeugumgebung (Issue #67)", () => {
     );
     expect(JSON.stringify(run.mock.calls)).not.toContain("DATABASE_URL");
   });
+
+  it("listet, trennt und benennt nur streng begrenzte Restore-Datenbanken um", async () => {
+    const tools = new PostgreSqlBackupTools();
+    const run = jest
+      .spyOn(tools as any, "run")
+      .mockResolvedValueOnce({
+        stdout:
+          "vereinorder_issue67_test\nvereinorder_restore_0123456789abcdef\n",
+      })
+      .mockResolvedValue({ stdout: "" });
+    const url =
+      "postgresql://user:secret@postgres:5432/vereinorder_issue67_test";
+
+    await expect(tools.listDatabaseNames(url)).resolves.toEqual([
+      "vereinorder_issue67_test",
+      "vereinorder_restore_0123456789abcdef",
+    ]);
+    await tools.terminateDatabaseConnections(url, "vereinorder_issue67_test");
+    await tools.renameDatabase(
+      url,
+      "vereinorder_issue67_test",
+      "vereinorder_pre_0123456789abcdef",
+    );
+
+    expect(run).toHaveBeenNthCalledWith(
+      2,
+      expect.any(String),
+      expect.arrayContaining([expect.stringContaining("pg_terminate_backend")]),
+      expect.objectContaining({ PGDATABASE: "postgres", PGPASSWORD: "secret" }),
+      expect.any(Number),
+    );
+    expect(run).toHaveBeenNthCalledWith(
+      3,
+      expect.any(String),
+      expect.arrayContaining([
+        '--command=ALTER DATABASE "vereinorder_issue67_test" RENAME TO "vereinorder_pre_0123456789abcdef"',
+      ]),
+      expect.objectContaining({ PGDATABASE: "postgres", PGPASSWORD: "secret" }),
+      expect.any(Number),
+    );
+    await expect(
+      tools.renameDatabase(
+        url,
+        'vereinorder_issue67_test";DROP DATABASE postgres',
+        "vereinorder_pre_0123456789abcdef",
+      ),
+    ).rejects.toBeInstanceOf(PostgreSqlToolError);
+    expect(run).toHaveBeenCalledTimes(3);
+    expect(JSON.stringify(run.mock.calls)).not.toContain("DATABASE_URL");
+  });
 });

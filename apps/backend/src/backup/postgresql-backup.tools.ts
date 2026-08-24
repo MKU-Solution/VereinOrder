@@ -8,6 +8,8 @@ const DUMP_TIMEOUT_MS = 15 * 60_000;
 const RESTORE_TIMEOUT_MS = 30 * 60_000;
 const DATABASE_ADMIN_TIMEOUT_MS = 60_000;
 const SAFE_GENERATED_DATABASE_NAME = /^vereinorder_restorecheck_[a-f0-9]{16}$/;
+const SAFE_RESTORE_SWAP_DATABASE_NAME = /^vereinorder(?:_[a-z0-9]+)*$/;
+const MAX_DATABASE_NAME_LENGTH = 63;
 
 export class PostgreSqlToolError extends Error {
   constructor(
@@ -202,11 +204,87 @@ export class PostgreSqlBackupTools {
     );
   }
 
+  async listDatabaseNames(databaseUrl: string): Promise<string[]> {
+    const connection = buildPostgreSqlConnectionEnvironment(databaseUrl);
+    const result = await this.run(
+      process.env.PSQL_BIN || "psql",
+      [
+        "--no-psqlrc",
+        "--set=ON_ERROR_STOP=1",
+        "--tuples-only",
+        "--no-align",
+        "--command=SELECT datname FROM pg_catalog.pg_database ORDER BY datname",
+      ],
+      { ...connection.environment, PGDATABASE: "postgres" },
+      DATABASE_ADMIN_TIMEOUT_MS,
+    );
+    return result.stdout
+      .split(/\r?\n/)
+      .map((name) => name.trim())
+      .filter(Boolean);
+  }
+
+  async terminateDatabaseConnections(
+    databaseUrl: string,
+    databaseName: string,
+  ): Promise<void> {
+    this.assertRestoreSwapDatabaseName(databaseName);
+    const connection = buildPostgreSqlConnectionEnvironment(databaseUrl);
+    await this.run(
+      process.env.PSQL_BIN || "psql",
+      [
+        "--no-psqlrc",
+        "--set=ON_ERROR_STOP=1",
+        `--command=SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '${databaseName}' AND pid <> pg_backend_pid()`,
+      ],
+      { ...connection.environment, PGDATABASE: "postgres" },
+      DATABASE_ADMIN_TIMEOUT_MS,
+    );
+  }
+
+  async renameDatabase(
+    databaseUrl: string,
+    sourceDatabase: string,
+    targetDatabase: string,
+  ): Promise<void> {
+    this.assertRestoreSwapDatabaseName(sourceDatabase);
+    this.assertRestoreSwapDatabaseName(targetDatabase);
+    if (sourceDatabase === targetDatabase) {
+      throw new PostgreSqlToolError(
+        "DATABASE_URL_INVALID",
+        "Quell- und Zieldatenbank der Umbenennung müssen verschieden sein.",
+      );
+    }
+    const connection = buildPostgreSqlConnectionEnvironment(databaseUrl);
+    await this.run(
+      process.env.PSQL_BIN || "psql",
+      [
+        "--no-psqlrc",
+        "--set=ON_ERROR_STOP=1",
+        `--command=ALTER DATABASE "${sourceDatabase}" RENAME TO "${targetDatabase}"`,
+      ],
+      { ...connection.environment, PGDATABASE: "postgres" },
+      DATABASE_ADMIN_TIMEOUT_MS,
+    );
+  }
+
   private assertGeneratedDatabaseName(databaseName: string): void {
     if (!SAFE_GENERATED_DATABASE_NAME.test(databaseName)) {
       throw new PostgreSqlToolError(
         "DATABASE_URL_INVALID",
         "Der interne Name der Prüf-Datenbank ist ungültig.",
+      );
+    }
+  }
+
+  private assertRestoreSwapDatabaseName(databaseName: string): void {
+    if (
+      databaseName.length > MAX_DATABASE_NAME_LENGTH ||
+      !SAFE_RESTORE_SWAP_DATABASE_NAME.test(databaseName)
+    ) {
+      throw new PostgreSqlToolError(
+        "DATABASE_URL_INVALID",
+        "Der interne Name der Restore-Datenbank ist ungültig.",
       );
     }
   }
