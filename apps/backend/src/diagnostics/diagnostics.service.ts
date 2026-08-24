@@ -85,6 +85,7 @@ export class DiagnosticsService {
     const backups = await this.backupService.listBackups();
     const latestBackup = backups.length > 0 ? backups[0] : null;
     const backupToolStatus = this.backupService.getToolStatus();
+    const backupStorage = await this.backupService.getStorageStatus(backups);
     let backupAgeHours: number | null = null;
     if (latestBackup) {
       const backupTime = new Date(latestBackup.createdAt).getTime();
@@ -144,6 +145,16 @@ export class DiagnosticsService {
       });
     }
 
+    if (!backupStorage.creationAllowed) {
+      recommendations.push({
+        level: "ERROR",
+        title: "Zu wenig freier Speicher für Datensicherungen",
+        message:
+          "Die konfigurierte Speicherreserve ist unterschritten. Es wird keine neue Sicherung erstellt; bitte Speicherplatz freigeben oder Sicherungen extern archivieren.",
+        actionTab: "backups",
+      });
+    }
+
     if (unresolvedPrintJobs > 0) {
       recommendations.push({
         level: "WARNING",
@@ -178,7 +189,8 @@ export class DiagnosticsService {
     if (
       dbStatus === "ERROR" ||
       failedPrintJobs > 0 ||
-      !backupToolStatus.enabled
+      !backupToolStatus.enabled ||
+      !backupStorage.creationAllowed
     ) {
       overallHealth = "RED";
     } else if (recommendations.some((r) => r.level === "WARNING")) {
@@ -241,6 +253,7 @@ export class DiagnosticsService {
         totalBackups: backups.length,
         latestBackup,
         toolStatus: backupToolStatus,
+        storage: backupStorage,
       },
       recommendations,
     };

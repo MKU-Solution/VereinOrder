@@ -17,6 +17,7 @@ describe("Native PostgreSQL-Sicherung gegen echte Testdatenbank (Issue #67)", ()
   let previousDumpBin: string | undefined;
   let previousRestoreBin: string | undefined;
   let previousPsqlBin: string | undefined;
+  let previousMinFreeBytes: string | undefined;
   const cleanupEventIds: string[] = [];
   const cleanupUserIds: string[] = [];
 
@@ -25,10 +26,12 @@ describe("Native PostgreSQL-Sicherung gegen echte Testdatenbank (Issue #67)", ()
     previousDumpBin = process.env.PG_DUMP_BIN;
     previousRestoreBin = process.env.PG_RESTORE_BIN;
     previousPsqlBin = process.env.PSQL_BIN;
+    previousMinFreeBytes = process.env.BACKUP_MIN_FREE_BYTES;
     backupDir = fs.mkdtempSync(
       path.join(os.tmpdir(), "vereinorder-native-backup-integration-"),
     );
     process.env.BACKUP_DIR = backupDir;
+    process.env.BACKUP_MIN_FREE_BYTES = "0";
 
     if (process.platform === "win32") {
       const postgresBin = "C:\\Program Files\\PostgreSQL\\18\\bin";
@@ -64,6 +67,9 @@ describe("Native PostgreSQL-Sicherung gegen echte Testdatenbank (Issue #67)", ()
     else process.env.PG_RESTORE_BIN = previousRestoreBin;
     if (previousPsqlBin === undefined) delete process.env.PSQL_BIN;
     else process.env.PSQL_BIN = previousPsqlBin;
+    if (previousMinFreeBytes === undefined)
+      delete process.env.BACKUP_MIN_FREE_BYTES;
+    else process.env.BACKUP_MIN_FREE_BYTES = previousMinFreeBytes;
   });
 
   it("erzeugt einen echten Custom-Dump mit vollständigem, nachgemessenem Manifest", async () => {
@@ -199,6 +205,13 @@ describe("Native PostgreSQL-Sicherung gegen echte Testdatenbank (Issue #67)", ()
     const downloadPath = await service.getDownloadFilePath(result.filename);
     expect(path.basename(downloadPath)).toBe(result.filename);
     expect(fs.readFileSync(downloadPath)).toEqual(fs.readFileSync(dumpPath));
+    const storage = await service.getStorageStatus(listed);
+    expect(storage).toMatchObject({
+      backupCount: 1,
+      latestStructuredBackup: { filename: result.filename },
+      creationAllowed: true,
+    });
+    expect(storage.backupBytes).toBeGreaterThan(result.sizeBytes);
 
     let verified;
     try {

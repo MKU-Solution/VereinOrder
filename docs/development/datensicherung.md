@@ -1055,6 +1055,19 @@ absturzfeste Zustandsmaschine, der Rückweg, `restore.sh` und die Vorwärtsmigra
 beiden notwendigen Umbenennungen nicht in einem gemeinsamen Transaktionsblock; dieser
 Crash-Zwischenraum wird daher nicht als Nebenwirkung der Prüf-Funktion eingeführt.
 
+**Umsetzungsstand Aufbewahrung und Speicherdiagnose:** Vor jeder Sicherung wird die
+konfigurierte Mindestreserve auf dem Dateisystem des `BACKUP_DIR` geprüft. Nach einer
+erfolgreichen, auditierten Sicherung rotiert VereinOrder ausschließlich vollständig
+geprüfte native Paare: die jüngsten stündlichen Läufe, Tagesletzte und Ereignisbackups
+nach den vier Variablen aus Abschnitt 9. Die jüngste strukturgeprüfte und die jüngste
+wiederherstellungsgeprüfte Sicherung sind unabhängig von den Zahlen geschützt.
+Manuelle, Legacy-, defekte und unvollständige Sicherungen werden bis zu einer eigenen
+Anheftungs-/Bereinigungsfunktion nie automatisch gelöscht. Vor jeder Löschung wird die
+vollständige Kandidatenliste auditiert; das Manifest als Commit-Marker wird zuerst
+entfernt, sodass ein Absturz höchstens einen unsichtbaren verwaisten Dump hinterlässt.
+Die Systemdiagnose zeigt Kapazität, freien Speicher, Bestandsgröße, Rücklage und die
+jüngsten Prüfstufen.
+
 **Als eigene Vorgänge herausgelöst:**
 
 - **Der Einrichtungszustand für PINs nach einer redigierten Wiederherstellung**

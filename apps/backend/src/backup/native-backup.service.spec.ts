@@ -2,7 +2,7 @@ import { ConflictException, ServiceUnavailableException } from "@nestjs/common";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { parseBackupManifest } from "./backup-manifest";
+import { BackupTrigger, parseBackupManifest } from "./backup-manifest";
 import { NativeBackupService } from "./native-backup.service";
 
 function createPrisma(options?: { changeTablesAfterDump?: boolean }) {
@@ -76,23 +76,38 @@ describe("Native PostgreSQL-Sicherung V1 (Issue #67)", () => {
   let backupDir: string;
   let previousBackupDir: string | undefined;
   let previousDatabaseUrl: string | undefined;
+  let previousRetentionEnvironment: Record<string, string | undefined>;
 
   beforeEach(() => {
     previousBackupDir = process.env.BACKUP_DIR;
     previousDatabaseUrl = process.env.DATABASE_URL;
+    previousRetentionEnvironment = Object.fromEntries(
+      [
+        "BACKUP_RETENTION_HOURLY_KEEP",
+        "BACKUP_RETENTION_DAILY_KEEP",
+        "BACKUP_RETENTION_EVENT_KEEP",
+        "BACKUP_MIN_FREE_BYTES",
+      ].map((name) => [name, process.env[name]]),
+    );
     backupDir = fs.mkdtempSync(
       path.join(os.tmpdir(), "vereinorder-native-backup-spec-"),
     );
     process.env.BACKUP_DIR = backupDir;
     process.env.DATABASE_URL =
       "postgresql://backup-user:secret@postgres:5432/vereinorder_issue67_test?schema=public";
+    process.env.BACKUP_MIN_FREE_BYTES = "0";
   });
 
   afterEach(() => {
+    jest.useRealTimers();
     if (previousBackupDir === undefined) delete process.env.BACKUP_DIR;
     else process.env.BACKUP_DIR = previousBackupDir;
     if (previousDatabaseUrl === undefined) delete process.env.DATABASE_URL;
     else process.env.DATABASE_URL = previousDatabaseUrl;
+    for (const [name, value] of Object.entries(previousRetentionEnvironment)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
     fs.rmSync(backupDir, { recursive: true, force: true });
   });
 
@@ -121,7 +136,8 @@ describe("Native PostgreSQL-Sicherung V1 (Issue #67)", () => {
       process.env.DATABASE_URL,
       expect.stringContaining(".partial.dump"),
     );
-    expect(tools.verifyDump).toHaveBeenCalledTimes(1);
+    // Einmal vor Veröffentlichung und einmal vor einer möglichen Rotation.
+    expect(tools.verifyDump).toHaveBeenCalledTimes(2);
     expect(fs.readdirSync(backupDir).sort()).toEqual(
       result.artifacts.slice().sort(),
     );
@@ -256,6 +272,154 @@ describe("Native PostgreSQL-Sicherung V1 (Issue #67)", () => {
     ).rejects.toBeInstanceOf(ConflictException);
     release();
     await expect(first).resolves.toMatchObject({ format: "POSTGRES_CUSTOM" });
+  });
+
+  it("bricht bei unterschrittener Speicherreserve vor pg_dump ab und auditiert einen sicheren Code", async () => {
+    process.env.BACKUP_MIN_FREE_BYTES = String(Number.MAX_SAFE_INTEGER);
+    const prisma = createPrisma();
+    const tools = createTools();
+    const service = new NativeBackupService(
+      prisma as any,
+      { read: () => ({ phase: "OPEN" }) } as any,
+      tools as any,
+    );
+
+    await expect(service.createBackup("MANUAL", null)).rejects.toBeInstanceOf(
+      ServiceUnavailableException,
+    );
+
+    expect(tools.createDump).not.toHaveBeenCalled();
+    expect(prisma.auditLog.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          action: "BACKUP_FAILED",
+          details: expect.objectContaining({
+            errorCode: "BACKUP_FREE_SPACE_LOW",
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("rotiert stündliche Sicherungen, schützt aber die jüngste und eine wiederherstellungsgeprüfte Sicherung", async () => {
+    jest.useFakeTimers();
+    process.env.BACKUP_RETENTION_HOURLY_KEEP = "1";
+    process.env.BACKUP_RETENTION_DAILY_KEEP = "0";
+    const prisma = createPrisma();
+    const service = new NativeBackupService(
+      prisma as any,
+      { read: () => ({ phase: "OPEN" }) } as any,
+      createTools() as any,
+    );
+
+    jest.setSystemTime(new Date("2026-08-20T10:00:00.000Z"));
+    const restored = await service.createBackup("SCHEDULE", null);
+    const restoredManifestPath = path.join(
+      backupDir,
+      restored.filename.replace(/\.dump$/, ".manifest.json"),
+    );
+    const restoredManifest = parseBackupManifest(
+      fs.readFileSync(restoredManifestPath, "utf8"),
+    );
+    restoredManifest.verification.restoration = {
+      status: "PASSED",
+      checkedAt: "2026-08-20T10:05:00.000Z",
+    };
+    fs.writeFileSync(restoredManifestPath, JSON.stringify(restoredManifest));
+
+    jest.setSystemTime(new Date("2026-08-20T11:00:00.000Z"));
+    const obsolete = await service.createBackup("SCHEDULE", null);
+    jest.setSystemTime(new Date("2026-08-20T12:00:00.000Z"));
+    const newest = await service.createBackup("SCHEDULE", null);
+
+    const listed = await service.listBackups();
+    expect(listed.map((backup) => backup.filename).sort()).toEqual(
+      [restored.filename, newest.filename].sort(),
+    );
+    expect(fs.existsSync(path.join(backupDir, obsolete.filename))).toBe(false);
+    expect(
+      prisma.auditLog.create.mock.calls.some(
+        ([call]) => call.data.action === "BACKUP_ROTATION_STARTED",
+      ),
+    ).toBe(true);
+    expect(
+      prisma.auditLog.create.mock.calls.some(
+        ([call]) => call.data.action === "BACKUP_ROTATION_COMPLETED",
+      ),
+    ).toBe(true);
+    jest.useRealTimers();
+  });
+
+  it("meldet Speicherbelegung, Rücklage und jüngste Prüfstufen", async () => {
+    process.env.BACKUP_MIN_FREE_BYTES = "1234";
+    const service = new NativeBackupService(
+      createPrisma() as any,
+      { read: () => ({ phase: "OPEN" }) } as any,
+      createTools() as any,
+    );
+    const created = await service.createBackup("MANUAL", null);
+
+    const storage = await service.getStorageStatus();
+
+    expect(storage).toMatchObject({
+      backupCount: 1,
+      latestStructuredBackup: { filename: created.filename },
+      latestRestoredBackup: null,
+      retention: { minFreeBytes: 1234 },
+      creationAllowed: true,
+    });
+    expect(storage.totalBytes).toBeGreaterThan(0);
+    expect(storage.freeBytes).toBeGreaterThan(0);
+    expect(storage.backupBytes).toBeGreaterThan(created.sizeBytes);
+  });
+
+  it("begrenzt Ereignissicherungen je Auslöser und löscht manuelle Sicherungen nie automatisch", async () => {
+    jest.useFakeTimers();
+    process.env.BACKUP_RETENTION_HOURLY_KEEP = "0";
+    process.env.BACKUP_RETENTION_DAILY_KEEP = "0";
+    process.env.BACKUP_RETENTION_EVENT_KEEP = "1";
+    const service = new NativeBackupService(
+      createPrisma() as any,
+      { read: () => ({ phase: "OPEN" }) } as any,
+      createTools() as any,
+    );
+    const createAt = async (timestamp: string, trigger: BackupTrigger) => {
+      jest.setSystemTime(new Date(timestamp));
+      return service.createBackup(trigger, null);
+    };
+
+    const manualOne = await createAt("2026-08-21T08:00:00.000Z", "MANUAL");
+    const manualTwo = await createAt("2026-08-21T09:00:00.000Z", "MANUAL");
+    const oldPreRestore = await createAt(
+      "2026-08-21T10:00:00.000Z",
+      "PRE_RESTORE",
+    );
+    const newPreRestore = await createAt(
+      "2026-08-21T11:00:00.000Z",
+      "PRE_RESTORE",
+    );
+    const oldPreMigration = await createAt(
+      "2026-08-21T12:00:00.000Z",
+      "PRE_MIGRATION",
+    );
+    const newPreMigration = await createAt(
+      "2026-08-21T13:00:00.000Z",
+      "PRE_MIGRATION",
+    );
+
+    const filenames = (await service.listBackups()).map(
+      (backup) => backup.filename,
+    );
+    expect(filenames).toEqual(
+      expect.arrayContaining([
+        manualOne.filename,
+        manualTwo.filename,
+        newPreRestore.filename,
+        newPreMigration.filename,
+      ]),
+    );
+    expect(filenames).not.toContain(oldPreRestore.filename);
+    expect(filenames).not.toContain(oldPreMigration.filename);
   });
 
   it("führt im gesperrten Wartungsmodus keinen Zeitplanlauf und keinen Datenbankzugriff aus", async () => {

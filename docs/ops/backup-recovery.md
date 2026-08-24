@@ -19,6 +19,17 @@ VereinOrder ist keine RKSV-Registrierkasse.
 - `pg_dump`, `pg_restore` und PostgreSQL-Server müssen dieselbe Hauptversion haben.
   Eine fehlende oder abweichende Werkzeugversion sperrt die Sicherung und wird in der
   Systemdiagnose als Fehler angezeigt.
+- Vor dem ersten Schreibzugriff prüft VereinOrder den freien Speicher im
+  Sicherungsverzeichnis. Unterhalb von `BACKUP_MIN_FREE_BYTES` wird kein neuer Dump
+  begonnen und die Systemdiagnose zeigt einen Fehler.
+- Nach einer erfolgreichen Sicherung werden stündliche Sicherungen gemäß
+  `BACKUP_RETENTION_HOURLY_KEEP` und `BACKUP_RETENTION_DAILY_KEEP` rotiert.
+  `PRE_RESTORE` und `PRE_MIGRATION` haben mit `BACKUP_RETENTION_EVENT_KEEP` eine eigene
+  Grenze. Die jüngste strukturgeprüfte und die jüngste wiederherstellungsgeprüfte
+  Sicherung bleiben immer erhalten.
+- Manuelle Sicherungen, JSON-Altbestände sowie beschädigte oder unvollständige Dateien
+  werden nicht automatisch gelöscht. Sie müssen nach externer Archivierung bewusst
+  durch einen technischen Verantwortlichen bereinigt werden.
 
 ## 2. Manuelle Sicherung und externe Kopie
 
@@ -79,8 +90,10 @@ einem Wiederherstellungsbedarf:
 
 ## 4. Kontrolle
 
-In der Systemdiagnose müssen PostgreSQL-Sicherung sowie Werkzeugversionen fehlerfrei
-sein. In der Sicherungsliste werden beschädigte oder unvollständige Paare sichtbar als
-defekt geführt. Änderungen an einer bereits gelisteten Datei lösen bei der nächsten
-Abfrage eine erneute Hash- und Strukturprüfung aus. Vor einem Fest sollte mindestens
-eine aktuelle externe Kopie den Status **„Wiederherstellungsgeprüft“** erhalten haben.
+In der Systemdiagnose müssen PostgreSQL-Sicherung, Werkzeugversionen und freie
+Speicherreserve fehlerfrei sein. Sie zeigt zusätzlich Größe und Anzahl des Bestands
+sowie den Zeitpunkt der jüngsten Wiederherstellungsprüfung. In der Sicherungsliste
+werden beschädigte oder unvollständige Paare sichtbar als defekt geführt. Änderungen an
+einer bereits gelisteten Datei lösen bei der nächsten Abfrage eine erneute Hash- und
+Strukturprüfung aus. Vor einem Fest sollte mindestens eine aktuelle externe Kopie den
+Status **„Wiederherstellungsgeprüft“** erhalten haben.
