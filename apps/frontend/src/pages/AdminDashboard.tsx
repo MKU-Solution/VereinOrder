@@ -136,6 +136,15 @@ const backendMessage = (error: unknown, fallback: string): string => {
   return fallback;
 };
 
+const formatStorageBytes = (value: unknown): string => {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0)
+    return "unbekannt";
+  if (value >= 1024 ** 3) return `${(value / 1024 ** 3).toFixed(1)} GB`;
+  if (value >= 1024 ** 2) return `${(value / 1024 ** 2).toFixed(1)} MB`;
+  if (value >= 1024) return `${(value / 1024).toFixed(1)} kB`;
+  return `${value} B`;
+};
+
 /**
  * Bekannte Fehlerkennungen von Druckern in Klartext (Konzept 64, Abschnitt
  * 2.3: "kein Fehlercode ohne Übersetzung"). Unbekannte Codes werden roh
@@ -1530,9 +1539,9 @@ export const AdminDashboard = () => {
           <div className="space-y-6">
             {/* Top Bar: Overall Health & Actions */}
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-slate-900/80 border border-slate-800 p-5 rounded-2xl">
-              <div className="flex items-center gap-3">
+              <div className="flex min-w-0 flex-col items-start gap-3 sm:flex-row sm:items-center">
                 <div
-                  className={`p-3 rounded-2xl border ${
+                  className={`shrink-0 p-3 rounded-2xl border ${
                     diagnosticsData?.overallHealth === "GREEN"
                       ? "bg-emerald-500/20 text-emerald-400 border-emerald-500/30"
                       : diagnosticsData?.overallHealth === "YELLOW"
@@ -1542,13 +1551,13 @@ export const AdminDashboard = () => {
                 >
                   <Activity className="w-7 h-7" />
                 </div>
-                <div>
-                  <div className="flex items-center gap-2">
+                <div className="min-w-0 w-full">
+                  <div className="flex min-w-0 flex-col items-start gap-2 sm:flex-row sm:items-center">
                     <h3 className="text-xl font-bold text-white">
                       Systemgesundheit:
                     </h3>
                     <span
-                      className={`px-3 py-1 rounded-full text-xs font-extrabold uppercase tracking-wide border ${
+                      className={`max-w-full px-3 py-1 rounded-full text-center text-xs font-extrabold uppercase tracking-wide border ${
                         diagnosticsData?.overallHealth === "GREEN"
                           ? "bg-emerald-500/20 text-emerald-400 border-emerald-500/30"
                           : diagnosticsData?.overallHealth === "YELLOW"
@@ -1563,7 +1572,7 @@ export const AdminDashboard = () => {
                           : "✖ Systemstörung"}
                     </span>
                   </div>
-                  <p className="text-xs text-slate-400 mt-1">
+                  <p className="text-xs text-slate-400 mt-1 break-words">
                     Serverzeit:{" "}
                     {new Date(
                       diagnosticsData?.serverTime || Date.now(),
@@ -1957,6 +1966,54 @@ export const AdminDashboard = () => {
                     </div>
                   )}
                 </div>
+
+                {diagnosticsData?.backup.storage && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+                    <div className="bg-slate-800/50 p-3 rounded-xl">
+                      <div className="text-slate-400">Freier Speicher</div>
+                      <div
+                        className={`font-bold ${
+                          diagnosticsData.backup.storage.creationAllowed
+                            ? "text-emerald-400"
+                            : "text-rose-400"
+                        }`}
+                      >
+                        {formatStorageBytes(
+                          diagnosticsData.backup.storage.freeBytes,
+                        )}
+                      </div>
+                      <div className="text-slate-500 text-[11px]">
+                        Rücklage:{" "}
+                        {formatStorageBytes(
+                          diagnosticsData.backup.storage.retention
+                            ?.minFreeBytes,
+                        )}
+                      </div>
+                    </div>
+                    <div className="bg-slate-800/50 p-3 rounded-xl">
+                      <div className="text-slate-400">Backup-Bestand</div>
+                      <div className="text-slate-200 font-bold">
+                        {formatStorageBytes(
+                          diagnosticsData.backup.storage.backupBytes,
+                        )}
+                      </div>
+                      <div className="text-slate-500 text-[11px]">
+                        {diagnosticsData.backup.storage.backupCount} geprüfte
+                        oder sichtbare Sicherungen
+                      </div>
+                    </div>
+                    <div className="sm:col-span-2 bg-slate-800/50 p-3 rounded-xl text-slate-400">
+                      Letzte Wiederherstellungsprüfung:{" "}
+                      <span className="text-slate-200 font-medium">
+                        {diagnosticsData.backup.storage.latestRestoredBackup
+                          ? new Date(
+                              diagnosticsData.backup.storage.latestRestoredBackup.createdAt,
+                            ).toLocaleString("de-AT")
+                          : "noch nicht durchgeführt"}
+                      </span>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           </div>

@@ -82,6 +82,24 @@ export interface BackupListItem {
   downloadFiles: string[];
 }
 
+export interface BackupRetentionPolicy {
+  hourlyKeep: number;
+  dailyKeep: number;
+  eventKeep: number;
+  minFreeBytes: number;
+}
+
+export interface BackupStorageStatus {
+  totalBytes: number;
+  freeBytes: number;
+  backupCount: number;
+  backupBytes: number;
+  latestStructuredBackup: BackupListItem | null;
+  latestRestoredBackup: BackupListItem | null;
+  retention: BackupRetentionPolicy;
+  creationAllowed: boolean;
+}
+
 interface DatabaseIdentity {
   databaseName: string;
   serverVersionNum: number;
@@ -229,6 +247,7 @@ export class NativeBackupService implements OnModuleInit, OnModuleDestroy {
     let audited = false;
     try {
       await this.ensureBackupDirectory();
+      await this.assertMinimumFreeSpace();
       const status = await this.refreshToolStatus();
       if (!status.enabled) {
         throw new ServiceUnavailableException(status.message);
@@ -334,6 +353,11 @@ export class NativeBackupService implements OnModuleInit, OnModuleDestroy {
         },
       );
       audited = true;
+      await this.rotateBackups(createdBy).catch(async (rotationError) => {
+        await this.writeAudit("BACKUP_ROTATION_FAILED", "backup", createdBy, {
+          errorCode: this.safeErrorCode(rotationError),
+        }).catch(() => undefined);
+      });
       return this.toListItem(manifest);
     } catch (error) {
       await this.removeIfPresent(temporaryDumpPath);
@@ -507,6 +531,43 @@ export class NativeBackupService implements OnModuleInit, OnModuleDestroy {
       (a, b) =>
         new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
     );
+  }
+
+  async getStorageStatus(
+    listedBackups?: BackupListItem[],
+  ): Promise<BackupStorageStatus> {
+    await this.ensureBackupDirectory();
+    const backups = listedBackups ?? (await this.listBackups());
+    const capacity = await this.readStorageCapacity();
+    const names = await fs.readdir(this.backupDir);
+    let backupBytes = 0;
+    for (const name of names) {
+      if (!SAFE_BACKUP_FILE.test(name) && !LEGACY_BACKUP_FILE.test(name))
+        continue;
+      const stat = await fs
+        .lstat(path.join(this.backupDir, name))
+        .catch(() => null);
+      if (stat?.isFile() && !stat.isSymbolicLink()) backupBytes += stat.size;
+    }
+    const latestStructuredBackup =
+      backups.find(
+        (backup) =>
+          backup.verification === "STRUCTURE_VERIFIED" ||
+          backup.verification === "RESTORE_VERIFIED",
+      ) ?? null;
+    const latestRestoredBackup =
+      backups.find((backup) => backup.verification === "RESTORE_VERIFIED") ??
+      null;
+    const retention = this.readRetentionPolicy();
+    return {
+      ...capacity,
+      backupCount: backups.length,
+      backupBytes,
+      latestStructuredBackup,
+      latestRestoredBackup,
+      retention,
+      creationAllowed: capacity.freeBytes >= retention.minFreeBytes,
+    };
   }
 
   async verifyRestoration(
@@ -949,6 +1010,208 @@ export class NativeBackupService implements OnModuleInit, OnModuleDestroy {
   private async ensureBackupDirectory(): Promise<void> {
     await fs.mkdir(this.backupDir, { recursive: true, mode: 0o700 });
     await fs.chmod(this.backupDir, 0o700).catch(() => undefined);
+  }
+
+  private readRetentionPolicy(): BackupRetentionPolicy {
+    return {
+      hourlyKeep: this.readNonNegativeInteger(
+        "BACKUP_RETENTION_HOURLY_KEEP",
+        24,
+      ),
+      dailyKeep: this.readNonNegativeInteger("BACKUP_RETENTION_DAILY_KEEP", 14),
+      eventKeep: this.readNonNegativeInteger("BACKUP_RETENTION_EVENT_KEEP", 3),
+      minFreeBytes: this.readNonNegativeInteger(
+        "BACKUP_MIN_FREE_BYTES",
+        1_073_741_824,
+        Number.MAX_SAFE_INTEGER,
+      ),
+    };
+  }
+
+  private readNonNegativeInteger(
+    name: string,
+    fallback: number,
+    maximum = 10_000,
+  ): number {
+    const raw = process.env[name];
+    if (raw === undefined || raw.trim() === "") return fallback;
+    if (!/^\d+$/.test(raw)) return fallback;
+    const parsed = Number(raw);
+    return Number.isSafeInteger(parsed) && parsed <= maximum
+      ? parsed
+      : fallback;
+  }
+
+  private async readStorageCapacity(): Promise<{
+    totalBytes: number;
+    freeBytes: number;
+  }> {
+    const stats = await fs.statfs(this.backupDir, { bigint: true });
+    const totalBytes = stats.bsize * stats.blocks;
+    const freeBytes = stats.bsize * stats.bavail;
+    if (
+      totalBytes > BigInt(Number.MAX_SAFE_INTEGER) ||
+      freeBytes > BigInt(Number.MAX_SAFE_INTEGER)
+    ) {
+      throw new Error("BACKUP_STORAGE_METRIC_OUT_OF_RANGE");
+    }
+    return {
+      totalBytes: Number(totalBytes),
+      freeBytes: Number(freeBytes),
+    };
+  }
+
+  private async assertMinimumFreeSpace(): Promise<void> {
+    const policy = this.readRetentionPolicy();
+    const capacity = await this.readStorageCapacity();
+    if (capacity.freeBytes < policy.minFreeBytes) {
+      throw new Error("BACKUP_FREE_SPACE_LOW");
+    }
+  }
+
+  private async rotateBackups(
+    createdBy: BackupCreatedBy | null,
+  ): Promise<void> {
+    const policy = this.readRetentionPolicy();
+    const manifests = await this.readValidNativeManifestsForRotation();
+    if (manifests.length === 0) return;
+
+    const protectedDumps = new Set<string>();
+    protectedDumps.add(manifests[0].dumpFile);
+    const latestRestored = manifests.find(
+      (manifest) => manifest.verification.restoration.status === "PASSED",
+    );
+    if (latestRestored) protectedDumps.add(latestRestored.dumpFile);
+
+    // Manuelle Sicherungen sind bis zu einer eigenen Anheftungsfunktion
+    // implizit geschützt. Automatische Rotation darf keine bewusste
+    // Administrator-Sicherung stillschweigend entfernen.
+    for (const manifest of manifests) {
+      if (manifest.trigger === "MANUAL") protectedDumps.add(manifest.dumpFile);
+    }
+
+    const scheduled = manifests.filter(
+      (manifest) => manifest.trigger === "SCHEDULE",
+    );
+    for (const manifest of scheduled.slice(0, policy.hourlyKeep)) {
+      protectedDumps.add(manifest.dumpFile);
+    }
+    const dailyCandidates = scheduled.slice(policy.hourlyKeep);
+    const dailyLast = new Map<string, BackupManifest>();
+    for (const manifest of dailyCandidates) {
+      const day = manifest.createdAt.slice(0, 10);
+      if (!dailyLast.has(day)) dailyLast.set(day, manifest);
+    }
+    for (const manifest of [...dailyLast.values()].slice(0, policy.dailyKeep)) {
+      protectedDumps.add(manifest.dumpFile);
+    }
+
+    for (const trigger of ["PRE_RESTORE", "PRE_MIGRATION"] as const) {
+      for (const manifest of manifests
+        .filter((candidate) => candidate.trigger === trigger)
+        .slice(0, policy.eventKeep)) {
+        protectedDumps.add(manifest.dumpFile);
+      }
+    }
+
+    const deletions = manifests.filter(
+      (manifest) => !protectedDumps.has(manifest.dumpFile),
+    );
+    if (deletions.length === 0) return;
+    const filenames = deletions.map((manifest) => manifest.dumpFile);
+    await this.writeAudit("BACKUP_ROTATION_STARTED", "backup", createdBy, {
+      filenames,
+    });
+    for (const manifest of deletions) {
+      await this.removeNativeBackupPair(manifest);
+    }
+    await this.writeAudit("BACKUP_ROTATION_COMPLETED", "backup", createdBy, {
+      filenames,
+      deletedCount: filenames.length,
+    });
+  }
+
+  private async readValidNativeManifestsForRotation(): Promise<
+    BackupManifest[]
+  > {
+    const names = await fs.readdir(this.backupDir);
+    const manifests: BackupManifest[] = [];
+    for (const name of names.filter((entry) =>
+      entry.endsWith(".manifest.json"),
+    )) {
+      try {
+        const manifest = parseBackupManifest(
+          await fs.readFile(path.join(this.backupDir, name), "utf8"),
+        );
+        const expectedManifest = manifest.dumpFile.replace(
+          /\.dump$/,
+          ".manifest.json",
+        );
+        if (
+          name !== expectedManifest ||
+          !SAFE_BACKUP_FILE.test(name) ||
+          !SAFE_BACKUP_FILE.test(manifest.dumpFile) ||
+          manifest.verification.structure.status !== "PASSED"
+        ) {
+          continue;
+        }
+        const dumpStat = await fs
+          .lstat(path.join(this.backupDir, manifest.dumpFile))
+          .catch(() => null);
+        if (
+          !dumpStat?.isFile() ||
+          dumpStat.isSymbolicLink() ||
+          dumpStat.size !== manifest.dumpSizeBytes
+        ) {
+          continue;
+        }
+        const dumpPath = path.join(this.backupDir, manifest.dumpFile);
+        if ((await this.hashFile(dumpPath)) !== manifest.dumpSha256) continue;
+        await this.tools.verifyDump(dumpPath);
+        manifests.push(manifest);
+      } catch {
+        // Defekte, unvollständige und unbekannte Dateien werden niemals
+        // automatisch gelöscht. Sie bleiben in der Diagnose sichtbar.
+      }
+    }
+    return manifests.sort(
+      (left, right) =>
+        new Date(right.createdAt).getTime() -
+        new Date(left.createdAt).getTime(),
+    );
+  }
+
+  private async removeNativeBackupPair(
+    manifest: BackupManifest,
+  ): Promise<void> {
+    const manifestName = manifest.dumpFile.replace(/\.dump$/, ".manifest.json");
+    if (
+      !SAFE_BACKUP_FILE.test(manifest.dumpFile) ||
+      !SAFE_BACKUP_FILE.test(manifestName)
+    ) {
+      throw new Error("BACKUP_ROTATION_UNSAFE_FILENAME");
+    }
+    const manifestPath = path.join(this.backupDir, manifestName);
+    const dumpPath = path.join(this.backupDir, manifest.dumpFile);
+    const resolvedDirectory = await fs.realpath(this.backupDir);
+    for (const filePath of [manifestPath, dumpPath]) {
+      const stat = await fs.lstat(filePath);
+      const resolvedFile = await fs.realpath(filePath);
+      if (
+        !stat.isFile() ||
+        stat.isSymbolicLink() ||
+        path.dirname(resolvedFile) !== resolvedDirectory
+      ) {
+        throw new Error("BACKUP_ROTATION_UNSAFE_FILE");
+      }
+    }
+    // Das Manifest ist der Commit-Marker. Es verschwindet zuerst, damit ein
+    // Absturz höchstens einen ignorierten Dump, nie aber ein scheinbar
+    // vollständiges Paar hinterlässt.
+    await fs.unlink(manifestPath);
+    await this.syncDirectory();
+    await fs.unlink(dumpPath);
+    await this.syncDirectory();
   }
 
   private async hashFile(filename: string): Promise<string> {

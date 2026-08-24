@@ -65,6 +65,51 @@ const mockedApi = api as unknown as {
   post: ReturnType<typeof vi.fn>;
 };
 
+const diagnostics = {
+  overallHealth: "GREEN",
+  serverTime: "2026-08-24T09:00:00.000Z",
+  backend: {
+    appVersion: "0.1.0",
+    nodeVersion: "v22.0.0",
+    uptimeSeconds: 60,
+    memory: { rssMb: "10.0", heapUsedMb: "5.0", heapTotalMb: "8.0" },
+  },
+  database: {
+    status: "ONLINE",
+    latencyMs: 2,
+    counts: { events: 1, activeEvents: 1, orders: 12, products: 5, users: 2 },
+  },
+  printers: {
+    total: 0,
+    active: 0,
+    queue: { pending: 0, failed: 0, printed: 0, unclear: 0 },
+    cupsHostReachable: null,
+    cupsCheckedAt: null,
+    list: [],
+  },
+  backup: {
+    totalBackups: 1,
+    latestBackup: nativeBackup,
+    toolStatus: { enabled: true },
+    storage: {
+      totalBytes: 8 * 1024 ** 3,
+      freeBytes: 2 * 1024 ** 3,
+      backupCount: 1,
+      backupBytes: 8192,
+      latestStructuredBackup: nativeBackup,
+      latestRestoredBackup: null,
+      retention: {
+        hourlyKeep: 24,
+        dailyKeep: 14,
+        eventKeep: 3,
+        minFreeBytes: 1024 ** 3,
+      },
+      creationAllowed: true,
+    },
+  },
+  recommendations: [],
+};
+
 beforeEach(() => {
   useAuthStore.setState({
     user: { username: "admin", userId: "admin-id", role: "ADMINISTRATOR" },
@@ -74,6 +119,8 @@ beforeEach(() => {
     if (url === "/events") return Promise.resolve({ data: [] });
     if (url === "/backup/list")
       return Promise.resolve({ data: [nativeBackup, legacyBackup] });
+    if (url === "/diagnostics/status")
+      return Promise.resolve({ data: diagnostics });
     return Promise.resolve({ data: [] });
   });
   mockedApi.post.mockResolvedValue({ data: {} });
@@ -156,5 +203,19 @@ describe("Native Datensicherung V1 in der Administration (Issue #67)", () => {
       "title",
       "Nur im gesperrten Wartungsmodus wiederherstellen",
     );
+  });
+
+  it("zeigt freien Speicher, Rücklage und den Stand der Wiederherstellungsprüfung in der Diagnose", async () => {
+    render(<AdminDashboard />);
+    fireEvent.click(
+      screen.getByRole("button", { name: /System-Status & Diagnose/ }),
+    );
+
+    expect(await screen.findByText("Freier Speicher")).toBeInTheDocument();
+    expect(screen.getByText("2.0 GB")).toBeInTheDocument();
+    expect(screen.getByText(/Rücklage:/)).toHaveTextContent("1.0 GB");
+    expect(
+      screen.getByText(/Letzte Wiederherstellungsprüfung:/),
+    ).toHaveTextContent("noch nicht durchgeführt");
   });
 });
