@@ -104,6 +104,8 @@ interface BackupItem {
   compatibility?: "CURRENT" | "OLDER" | "NEWER" | "DIVERGED" | "UNKNOWN";
   restoreAvailable?: boolean;
   restoreUnavailableReason?: string | null;
+  restoreVerificationAvailable?: boolean;
+  restoreVerificationUnavailableReason?: string | null;
   downloadFiles?: string[];
 }
 
@@ -278,6 +280,7 @@ export const AdminDashboard = () => {
   const [printersList, setPrintersList] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isBackingUp, setIsBackingUp] = useState(false);
+  const [verifyingBackup, setVerifyingBackup] = useState<string | null>(null);
   const [isRetryingJobs, setIsRetryingJobs] = useState(false);
   const [eventId, setEventId] = useState<string>("");
 
@@ -1120,6 +1123,24 @@ export const AdminDashboard = () => {
     } catch (err) {
       console.error("Failed to restore backup", err);
       alert("Fehler bei der Wiederherstellung des Backups");
+    }
+  };
+
+  const handleVerifyRestore = async (filename: string) => {
+    setVerifyingBackup(filename);
+    try {
+      await api.post(`/backup/verify-restore/${filename}`);
+      alert(
+        "Wiederherstellungsprüfung erfolgreich. Der Dump wurde vollständig in eine isolierte Nebendatenbank eingespielt, fachlich verglichen und anschließend wieder entfernt. Die Festdatenbank blieb unverändert.",
+      );
+      fetchData();
+    } catch (err) {
+      console.error("Failed to verify backup restoration", err);
+      alert(
+        "Die Wiederherstellungsprüfung ist fehlgeschlagen. Die Festdatenbank wurde nicht verändert.",
+      );
+    } finally {
+      setVerifyingBackup(null);
     }
   };
 
@@ -2363,6 +2384,19 @@ export const AdminDashboard = () => {
                                   : "Download"}
                             </button>
                           ))}
+                          {b.restoreVerificationAvailable && (
+                            <button
+                              onClick={() => handleVerifyRestore(b.filename)}
+                              disabled={verifyingBackup !== null}
+                              className="px-3 py-1.5 bg-sky-500/20 hover:bg-sky-500/30 text-sky-300 rounded-lg transition text-xs font-bold flex items-center gap-1.5 border border-sky-500/30 disabled:opacity-50 disabled:cursor-not-allowed"
+                              title="Vollständig in einer isolierten Nebendatenbank prüfen; die Festdatenbank bleibt unverändert"
+                            >
+                              <ShieldCheck className="w-3.5 h-3.5" />
+                              {verifyingBackup === b.filename
+                                ? "Prüfung läuft …"
+                                : "Wiederherstellung prüfen"}
+                            </button>
+                          )}
                           {b.restoreAvailable ? (
                             <button
                               onClick={() => handleRestoreBackup(b.filename)}
@@ -2372,15 +2406,16 @@ export const AdminDashboard = () => {
                               <RotateCcw className="w-3.5 h-3.5" />
                               Legacy wiederherstellen
                             </button>
-                          ) : (
+                          ) : !b.restoreVerificationAvailable ? (
                             <span
                               className="max-w-52 text-left text-[11px] leading-snug text-slate-500"
                               title={b.restoreUnavailableReason || undefined}
                             >
-                              {b.restoreUnavailableReason ||
+                              {b.restoreVerificationUnavailableReason ||
+                                b.restoreUnavailableReason ||
                                 "Wiederherstellung nicht verfügbar"}
                             </span>
-                          )}
+                          ) : null}
                         </div>
                       </td>
                     </tr>

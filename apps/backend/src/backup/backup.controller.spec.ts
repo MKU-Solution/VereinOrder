@@ -9,6 +9,7 @@ describe("BackupController – Rollen und Formatsperren (Issue #67)", () => {
   const native = {
     createBackup: jest.fn(),
     listBackups: jest.fn(),
+    verifyRestoration: jest.fn(),
     getDownloadFilePath: jest.fn(),
   };
   const controller = new BackupController(legacy as any, native as any);
@@ -18,12 +19,29 @@ describe("BackupController – Rollen und Formatsperren (Issue #67)", () => {
   it.each([
     "createBackup",
     "listBackups",
+    "verifyRestore",
     "downloadBackup",
     "restoreBackup",
   ] as const)("schützt %s ausdrücklich mit ADMINISTRATOR", (method) => {
     expect(Reflect.getMetadata(ROLES_KEY, controller[method])).toEqual([
       "ADMINISTRATOR",
     ]);
+  });
+
+  it("übergibt Dump und Administratoridentität an die isolierte Wiederherstellungsprüfung", async () => {
+    native.verifyRestoration.mockResolvedValue({
+      filename: "vereinorder_test_manual.dump",
+    });
+
+    await controller.verifyRestore(
+      { user: { userId: "admin-id", username: "admin" } },
+      { filename: "vereinorder_test_manual.dump" },
+    );
+
+    expect(native.verifyRestoration).toHaveBeenCalledWith(
+      "vereinorder_test_manual.dump",
+      { userId: "admin-id", username: "admin" },
+    );
   });
 
   it("übergibt die auditierbare Administratoridentität an die native Sicherung", async () => {

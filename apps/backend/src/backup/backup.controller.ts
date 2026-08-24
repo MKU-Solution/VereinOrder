@@ -45,6 +45,18 @@ export class BackupController {
     return this.nativeBackupService.listBackups();
   }
 
+  @Post("verify-restore/:filename")
+  @Roles("ADMINISTRATOR")
+  async verifyRestore(
+    @Request() req: any,
+    @Param() params: BackupFilenameParamDto,
+  ) {
+    return this.nativeBackupService.verifyRestoration(params.filename, {
+      userId: req.user.userId,
+      username: req.user.username,
+    });
+  }
+
   @Get("download/:filename")
   @Roles("ADMINISTRATOR")
   async downloadBackup(

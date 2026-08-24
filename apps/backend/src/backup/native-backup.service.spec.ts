@@ -66,6 +66,9 @@ function createTools() {
       fs.writeFileSync(destination, Buffer.from("PGDMP\0native-test-dump"));
     }),
     verifyDump: jest.fn().mockResolvedValue(undefined),
+    createVerificationDatabase: jest.fn().mockResolvedValue(undefined),
+    restoreDump: jest.fn().mockResolvedValue(undefined),
+    dropVerificationDatabase: jest.fn().mockResolvedValue(undefined),
   };
 }
 
@@ -322,5 +325,151 @@ describe("Native PostgreSQL-Sicherung V1 (Issue #67)", () => {
       format: "CORRUPT",
       downloadFiles: [],
     });
+  });
+
+  it("stellt einen aktuellen Dump isoliert wieder her, vergleicht ihn vollständig und entfernt die Prüfdatenbank", async () => {
+    const prisma = createPrisma();
+    const tools = createTools();
+    const service = new NativeBackupService(
+      prisma as any,
+      { read: () => ({ phase: "OPEN" }) } as any,
+      tools as any,
+    );
+    const created = await service.createBackup("MANUAL", {
+      userId: "admin-id",
+      username: "admin",
+    });
+    const restoredPrisma = {
+      ...createPrisma(),
+      $disconnect: jest.fn().mockResolvedValue(undefined),
+    };
+    jest
+      .spyOn(service as any, "createVerificationClient")
+      .mockReturnValue(restoredPrisma);
+
+    const result = await service.verifyRestoration(created.filename, {
+      userId: "admin-id",
+      username: "admin",
+    });
+
+    expect(result).toMatchObject({
+      filename: created.filename,
+      verification: "RESTORE_VERIFIED",
+      compatibility: "CURRENT",
+      restoreVerificationAvailable: true,
+    });
+    expect(tools.createVerificationDatabase).toHaveBeenCalledWith(
+      process.env.DATABASE_URL,
+      expect.stringMatching(/^vereinorder_restorecheck_[a-f0-9]{16}$/),
+    );
+    expect(tools.restoreDump).toHaveBeenCalledWith(
+      process.env.DATABASE_URL,
+      expect.stringMatching(/^vereinorder_restorecheck_[a-f0-9]{16}$/),
+      expect.stringContaining(created.filename),
+    );
+    expect(tools.dropVerificationDatabase).toHaveBeenCalledWith(
+      process.env.DATABASE_URL,
+      expect.stringMatching(/^vereinorder_restorecheck_[a-f0-9]{16}$/),
+    );
+    expect(restoredPrisma.$disconnect).toHaveBeenCalledTimes(1);
+    expect(prisma.auditLog.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          action: "RESTORE_VERIFICATION_COMPLETED",
+          userId: "admin-id",
+        }),
+      }),
+    );
+    const manifest = parseBackupManifest(
+      fs.readFileSync(
+        path.join(
+          backupDir,
+          created.artifacts.find((name) => name.endsWith(".manifest.json"))!,
+        ),
+        "utf8",
+      ),
+    );
+    expect(manifest.verification.restoration.status).toBe("PASSED");
+  });
+
+  it("lässt bei abgebrochenem pg_restore die Festdatenbank unangetastet und räumt die Prüfdatenbank auf", async () => {
+    const prisma = createPrisma();
+    const tools = createTools();
+    const service = new NativeBackupService(
+      prisma as any,
+      { read: () => ({ phase: "OPEN" }) } as any,
+      tools as any,
+    );
+    const created = await service.createBackup("MANUAL", {
+      userId: "admin-id",
+      username: "admin",
+    });
+    tools.restoreDump.mockRejectedValueOnce(new Error("sensitive stderr"));
+    const writesBefore = prisma.auditLog.create.mock.calls.length;
+
+    await expect(
+      service.verifyRestoration(created.filename, {
+        userId: "admin-id",
+        username: "admin",
+      }),
+    ).rejects.toBeInstanceOf(ServiceUnavailableException);
+
+    expect(tools.dropVerificationDatabase).toHaveBeenCalledTimes(1);
+    expect((service as any).createVerificationClient).toBeDefined();
+    expect(prisma.auditLog.create.mock.calls.length).toBe(writesBefore + 1);
+    expect(
+      JSON.stringify(prisma.auditLog.create.mock.calls.slice(writesBefore)),
+    ).not.toContain("sensitive stderr");
+    const manifest = parseBackupManifest(
+      fs.readFileSync(
+        path.join(
+          backupDir,
+          created.artifacts.find((name) => name.endsWith(".manifest.json"))!,
+        ),
+        "utf8",
+      ),
+    );
+    expect(manifest.verification.restoration.status).toBe("FAILED");
+  });
+
+  it("meldet eine nicht entfernbare Prüfdatenbank als eigenen sicheren Fehler", async () => {
+    const prisma = createPrisma();
+    const tools = createTools();
+    const service = new NativeBackupService(
+      prisma as any,
+      { read: () => ({ phase: "OPEN" }) } as any,
+      tools as any,
+    );
+    const created = await service.createBackup("MANUAL", {
+      userId: "admin-id",
+      username: "admin",
+    });
+    jest.spyOn(service as any, "createVerificationClient").mockReturnValue({
+      ...createPrisma(),
+      $disconnect: jest.fn().mockResolvedValue(undefined),
+    });
+    tools.dropVerificationDatabase.mockRejectedValueOnce(
+      new Error("sensitive cleanup stderr"),
+    );
+
+    await expect(
+      service.verifyRestoration(created.filename, {
+        userId: "admin-id",
+        username: "admin",
+      }),
+    ).rejects.toBeInstanceOf(ServiceUnavailableException);
+
+    const calls = prisma.auditLog.create.mock.calls;
+    const lastAudit = calls[calls.length - 1]?.[0];
+    expect(lastAudit).toMatchObject({
+      data: {
+        action: "RESTORE_VERIFICATION_FAILED",
+        details: {
+          phase: "DROP_DATABASE",
+          errorCode: "RESTORE_CLEANUP_FAILED",
+        },
+      },
+    });
+    expect(JSON.stringify(lastAudit)).not.toContain("sensitive cleanup stderr");
   });
 });

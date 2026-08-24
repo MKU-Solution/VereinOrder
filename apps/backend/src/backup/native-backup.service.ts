@@ -31,6 +31,7 @@ import {
   PostgreSqlBackupTools,
   PostgreSqlToolError,
   buildPostgreSqlConnectionEnvironment,
+  buildPostgreSqlDatabaseUrl,
 } from "./postgresql-backup.tools";
 
 const STARTUP_BACKUP_DELAY_MS = 90_000;
@@ -76,6 +77,8 @@ export interface BackupListItem {
   compatibility: "CURRENT" | "OLDER" | "NEWER" | "DIVERGED" | "UNKNOWN";
   restoreAvailable: boolean;
   restoreUnavailableReason: string | null;
+  restoreVerificationAvailable: boolean;
+  restoreVerificationUnavailableReason: string | null;
   downloadFiles: string[];
 }
 
@@ -95,6 +98,7 @@ interface DatabaseMeasurements {
 export class NativeBackupService implements OnModuleInit, OnModuleDestroy {
   private readonly backupDir: string;
   private backupInProgress = false;
+  private restoreVerificationInProgress = false;
   private startupTimer: NodeJS.Timeout | null = null;
   private toolStatus: BackupToolStatus = {
     state: "DB_UNREACHABLE",
@@ -186,7 +190,8 @@ export class NativeBackupService implements OnModuleInit, OnModuleDestroy {
   async runScheduledBackupIfDue(): Promise<void> {
     if (
       this.maintenanceState.read().phase === "LOCKED" ||
-      this.backupInProgress
+      this.backupInProgress ||
+      this.restoreVerificationInProgress
     ) {
       return;
     }
@@ -212,8 +217,8 @@ export class NativeBackupService implements OnModuleInit, OnModuleDestroy {
     trigger: BackupTrigger,
     createdBy: BackupCreatedBy | null,
   ): Promise<BackupListItem> {
-    if (this.backupInProgress) {
-      throw new ConflictException("Eine Datensicherung läuft bereits.");
+    if (this.backupInProgress || this.restoreVerificationInProgress) {
+      throw new ConflictException("Eine Sicherungsprüfung läuft bereits.");
     }
     this.backupInProgress = true;
     let finalDumpPath: string | null = null;
@@ -411,6 +416,7 @@ export class NativeBackupService implements OnModuleInit, OnModuleDestroy {
         item.compatibility = currentMigrations
           ? this.compareMigrations(manifest.migrations, currentMigrations)
           : "UNKNOWN";
+        this.applyRestoreVerificationAvailability(item);
         items.push(item);
       } catch {
         const stat = await fs.stat(manifestPath).catch(() => null);
@@ -429,6 +435,9 @@ export class NativeBackupService implements OnModuleInit, OnModuleDestroy {
           restoreAvailable: false,
           restoreUnavailableReason:
             "Manifest oder Dump ist beschädigt oder unvollständig.",
+          restoreVerificationAvailable: false,
+          restoreVerificationUnavailableReason:
+            "Beschädigte oder unvollständige Sicherungen können nicht geprüft werden.",
           downloadFiles: [],
         });
       }
@@ -462,6 +471,9 @@ export class NativeBackupService implements OnModuleInit, OnModuleDestroy {
           compatibility: "UNKNOWN",
           restoreAvailable: true,
           restoreUnavailableReason: null,
+          restoreVerificationAvailable: false,
+          restoreVerificationUnavailableReason:
+            "JSON-Altsicherungen werden in einem eigenen Übernahmeschritt behandelt.",
           downloadFiles: [name],
         });
       } catch {
@@ -483,6 +495,9 @@ export class NativeBackupService implements OnModuleInit, OnModuleDestroy {
           compatibility: "UNKNOWN",
           restoreAvailable: false,
           restoreUnavailableReason: "Die JSON-Altsicherung ist beschädigt.",
+          restoreVerificationAvailable: false,
+          restoreVerificationUnavailableReason:
+            "Die JSON-Altsicherung ist beschädigt.",
           downloadFiles: [],
         });
       }
@@ -492,6 +507,215 @@ export class NativeBackupService implements OnModuleInit, OnModuleDestroy {
       (a, b) =>
         new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
     );
+  }
+
+  async verifyRestoration(
+    filename: string,
+    verifiedBy: BackupCreatedBy,
+  ): Promise<BackupListItem> {
+    if (this.backupInProgress || this.restoreVerificationInProgress) {
+      throw new ConflictException("Eine Sicherungsprüfung läuft bereits.");
+    }
+    if (!filename.endsWith(".dump") || !SAFE_BACKUP_FILE.test(filename)) {
+      throw new ConflictException(
+        "Nur ein nativer PostgreSQL-Dump kann wiederherstellungsgeprüft werden.",
+      );
+    }
+
+    this.restoreVerificationInProgress = true;
+    const databaseUrl = process.env.DATABASE_URL;
+    const verificationDatabase = `vereinorder_restorecheck_${randomUUID().replace(/-/g, "").slice(0, 16)}`;
+    let manifest: BackupManifest | null = null;
+    let manifestPath: string | null = null;
+    let verificationAttempted = false;
+    let verificationDatabaseCreated = false;
+    let verificationPhase = "PRECHECK";
+    let failure: unknown = null;
+
+    try {
+      if (!databaseUrl) {
+        throw new ServiceUnavailableException(
+          "DATABASE_URL fehlt; die Wiederherstellungsprüfung ist deaktiviert.",
+        );
+      }
+      buildPostgreSqlConnectionEnvironment(databaseUrl);
+      const status = await this.refreshToolStatus();
+      if (!status.enabled) {
+        throw new ServiceUnavailableException(status.message);
+      }
+
+      const dumpPath = await this.getDownloadFilePath(filename);
+      const manifestName = filename.replace(/\.dump$/, ".manifest.json");
+      manifestPath = await this.getDownloadFilePath(manifestName);
+      manifest = parseBackupManifest(await fs.readFile(manifestPath, "utf8"));
+      if (manifest.dumpFile !== filename) {
+        throw new ConflictException(
+          "Dump und Sicherungsmanifest gehören nicht zusammen.",
+        );
+      }
+
+      const dumpStats = await fs.lstat(dumpPath);
+      if (
+        !dumpStats.isFile() ||
+        dumpStats.isSymbolicLink() ||
+        dumpStats.size !== manifest.dumpSizeBytes
+      ) {
+        throw new ConflictException(
+          "Die Sicherungsdatei hat nicht die im Manifest ausgewiesene Größe.",
+        );
+      }
+      if ((await this.hashFile(dumpPath)) !== manifest.dumpSha256) {
+        throw new ConflictException(
+          "Die SHA-256-Prüfsumme der Sicherung stimmt nicht.",
+        );
+      }
+      await this.tools.verifyDump(dumpPath);
+
+      const currentMigrations = await this.readMigrations();
+      const compatibility = this.compareMigrations(
+        manifest.migrations,
+        currentMigrations,
+      );
+      if (compatibility !== "CURRENT") {
+        throw new ConflictException(
+          compatibility === "OLDER"
+            ? "Diese Sicherung ist älter. Die abgesicherte Vorwärtsmigration der Nebendatenbank folgt in einem eigenen Schnitt."
+            : "Der Migrationsstand dieser Sicherung ist nicht mit der aktuellen Datenbank vereinbar.",
+        );
+      }
+
+      verificationAttempted = true;
+      verificationPhase = "CREATE_DATABASE";
+      await this.tools.createVerificationDatabase(
+        databaseUrl,
+        verificationDatabase,
+      );
+      verificationDatabaseCreated = true;
+      verificationPhase = "RESTORE_DUMP";
+      await this.tools.restoreDump(databaseUrl, verificationDatabase, dumpPath);
+
+      const verificationUrl = buildPostgreSqlDatabaseUrl(
+        databaseUrl,
+        verificationDatabase,
+      );
+      const verificationPrisma = this.createVerificationClient(verificationUrl);
+      try {
+        verificationPhase = "MEASURE_DATABASE";
+        const restored = await this.measureDatabase(verificationPrisma);
+        const unvalidatedForeignKeys = await verificationPrisma.$queryRawUnsafe<
+          Array<{ count: bigint }>
+        >(
+          `SELECT COUNT(*)::bigint AS count
+               FROM pg_catalog.pg_constraint
+               WHERE contype = 'f' AND NOT convalidated`,
+        );
+        if (this.safeNumber(unvalidatedForeignKeys[0].count) !== 0) {
+          throw new Error("RESTORE_UNVALIDATED_FOREIGN_KEYS");
+        }
+        if (
+          this.stableJson(restored.tableNames) !==
+            this.stableJson(Object.keys(manifest.countsAfter).sort()) ||
+          this.stableJson(restored.counts) !==
+            this.stableJson(manifest.countsAfter) ||
+          this.stableJson(restored.sums) !==
+            this.stableJson(manifest.sumsAfter) ||
+          this.stableJson(restored.migrations) !==
+            this.stableJson(manifest.migrations)
+        ) {
+          throw new Error("RESTORE_MEASUREMENTS_MISMATCH");
+        }
+      } finally {
+        await verificationPrisma.$disconnect();
+      }
+
+      if ((await this.hashFile(dumpPath)) !== manifest.dumpSha256) {
+        throw new Error("BACKUP_HASH_CHANGED");
+      }
+    } catch (error) {
+      failure = error;
+    }
+
+    if (verificationDatabaseCreated && databaseUrl) {
+      try {
+        await this.tools.dropVerificationDatabase(
+          databaseUrl,
+          verificationDatabase,
+        );
+      } catch {
+        verificationPhase = "DROP_DATABASE";
+        failure = new Error("RESTORE_CLEANUP_FAILED");
+      }
+    }
+
+    try {
+      if (failure) {
+        if (verificationAttempted && manifest && manifestPath) {
+          manifest.verification.restoration = {
+            status: "FAILED",
+            checkedAt: new Date().toISOString(),
+          };
+          await this.replaceManifest(manifestPath, manifest).catch(
+            () => undefined,
+          );
+        }
+        await this.writeAudit(
+          "RESTORE_VERIFICATION_FAILED",
+          filename,
+          verifiedBy,
+          { phase: verificationPhase, errorCode: this.safeErrorCode(failure) },
+        ).catch(() => undefined);
+        if (
+          failure instanceof ConflictException ||
+          failure instanceof ServiceUnavailableException
+        ) {
+          throw failure;
+        }
+        throw new ServiceUnavailableException(
+          "Die Sicherung konnte nicht vollständig in einer isolierten Prüfdatenbank wiederhergestellt werden.",
+        );
+      }
+
+      const previousRestoration = manifest!.verification.restoration;
+      manifest!.verification.restoration = {
+        status: "PASSED",
+        checkedAt: new Date().toISOString(),
+      };
+      await this.replaceManifest(manifestPath!, manifest!);
+      try {
+        await this.writeAudit(
+          "RESTORE_VERIFICATION_COMPLETED",
+          filename,
+          verifiedBy,
+          {
+            checksumSha256: manifest!.dumpSha256,
+            counts: manifest!.countsAfter,
+          },
+        );
+      } catch (auditError) {
+        manifest!.verification.restoration = previousRestoration;
+        await this.replaceManifest(manifestPath!, manifest!).catch(
+          () => undefined,
+        );
+        throw auditError;
+      }
+
+      const result = this.toListItem(manifest!);
+      result.compatibility = "CURRENT";
+      this.applyRestoreVerificationAvailability(result);
+      return result;
+    } catch (error) {
+      if (
+        error instanceof ConflictException ||
+        error instanceof ServiceUnavailableException
+      ) {
+        throw error;
+      }
+      throw new ServiceUnavailableException(
+        "Die Wiederherstellungsprüfung konnte nicht sicher abgeschlossen und auditiert werden.",
+      );
+    } finally {
+      this.restoreVerificationInProgress = false;
+    }
   }
 
   async getDownloadFilePath(filename: string): Promise<string> {
@@ -534,7 +758,9 @@ export class NativeBackupService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
-  private async measureDatabase(): Promise<DatabaseMeasurements> {
+  private async measureDatabase(
+    prisma: PrismaClient = this.prisma,
+  ): Promise<DatabaseMeasurements> {
     const [
       tableRows,
       migrations,
@@ -543,31 +769,31 @@ export class NativeBackupService implements OnModuleInit, OnModuleDestroy {
       voucherRows,
       auditRows,
     ] = await Promise.all([
-      this.prisma.$queryRawUnsafe<Array<{ tableName: string }>>(
+      prisma.$queryRawUnsafe<Array<{ tableName: string }>>(
         `SELECT tablename AS "tableName"
            FROM pg_catalog.pg_tables
            WHERE schemaname = 'public'
            ORDER BY tablename`,
       ),
-      this.readMigrations(),
-      this.prisma.$queryRawUnsafe<
+      this.readMigrations(prisma),
+      prisma.$queryRawUnsafe<
         Array<{ dataMode: string; amount: bigint }>
       >(`SELECT "dataMode"::text AS "dataMode",
                   COALESCE(SUM("totalAmount"), 0)::bigint AS amount
            FROM "Order" GROUP BY "dataMode"`),
-      this.prisma.$queryRawUnsafe<
+      prisma.$queryRawUnsafe<
         Array<{ dataMode: string; method: string; amount: bigint }>
       >(`SELECT o."dataMode"::text AS "dataMode", p.method::text AS method,
                   COALESCE(SUM(p.amount), 0)::bigint AS amount
            FROM "Payment" p JOIN "Order" o ON o.id = p."orderId"
            GROUP BY o."dataMode", p.method`),
-      this.prisma.$queryRawUnsafe<
+      prisma.$queryRawUnsafe<
         Array<{ dataMode: string; status: string; count: bigint }>
       >(`SELECT o."dataMode"::text AS "dataMode", v.status::text AS status,
                   COUNT(*)::bigint AS count
            FROM "ProductVoucher" v JOIN "Order" o ON o.id = v."orderId"
            GROUP BY o."dataMode", v.status`),
-      this.prisma.$queryRawUnsafe<
+      prisma.$queryRawUnsafe<
         Array<{ total: bigint; withUser: bigint }>
       >(`SELECT COUNT(*)::bigint AS total,
                   COUNT(*) FILTER (WHERE "userId" IS NOT NULL)::bigint AS "withUser"
@@ -581,9 +807,9 @@ export class NativeBackupService implements OnModuleInit, OnModuleDestroy {
         throw new Error("UNSAFE_TABLE_NAME");
       }
       const quoted = `"${tableName.replace(/"/g, '""')}"`;
-      const result = await this.prisma.$queryRawUnsafe<
-        Array<{ count: bigint }>
-      >(`SELECT COUNT(*)::bigint AS count FROM ${quoted}`);
+      const result = await prisma.$queryRawUnsafe<Array<{ count: bigint }>>(
+        `SELECT COUNT(*)::bigint AS count FROM ${quoted}`,
+      );
       counts[tableName] = this.safeNumber(result[0].count);
     }
 
@@ -618,8 +844,10 @@ export class NativeBackupService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
-  private async readMigrations(): Promise<BackupMigration[]> {
-    return this.prisma.$queryRawUnsafe<BackupMigration[]>(
+  private async readMigrations(
+    prisma: PrismaClient = this.prisma,
+  ): Promise<BackupMigration[]> {
+    return prisma.$queryRawUnsafe<BackupMigration[]>(
       `SELECT migration_name AS name, checksum
        FROM "_prisma_migrations"
        WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL
@@ -647,8 +875,43 @@ export class NativeBackupService implements OnModuleInit, OnModuleDestroy {
       restoreAvailable: false,
       restoreUnavailableReason:
         "Native Wiederherstellung folgt im nächsten abgesicherten #67-Schnitt.",
+      restoreVerificationAvailable: false,
+      restoreVerificationUnavailableReason:
+        "Der Migrationsstand wurde noch nicht verglichen.",
       downloadFiles: [manifest.dumpFile, manifestFile],
     };
+  }
+
+  private applyRestoreVerificationAvailability(item: BackupListItem): void {
+    item.restoreVerificationAvailable =
+      item.format === "POSTGRES_CUSTOM" && item.compatibility === "CURRENT";
+    item.restoreVerificationUnavailableReason =
+      item.restoreVerificationAvailable
+        ? null
+        : item.compatibility === "OLDER"
+          ? "Ältere Sicherungen benötigen zuerst die abgesicherte Vorwärtsmigration der Nebendatenbank."
+          : item.compatibility === "NEWER" || item.compatibility === "DIVERGED"
+            ? "Der Migrationsstand ist nicht mit der aktuellen Datenbank vereinbar."
+            : "Der Migrationsstand konnte nicht sicher verglichen werden.";
+  }
+
+  private createVerificationClient(databaseUrl: string): PrismaClient {
+    return new PrismaClient({ datasources: { db: { url: databaseUrl } } });
+  }
+
+  private stableJson(value: unknown): string {
+    const normalize = (entry: unknown): unknown => {
+      if (Array.isArray(entry)) return entry.map(normalize);
+      if (entry && typeof entry === "object") {
+        return Object.fromEntries(
+          Object.entries(entry as Record<string, unknown>)
+            .sort(([left], [right]) => left.localeCompare(right, "en"))
+            .map(([key, nested]) => [key, normalize(nested)]),
+        );
+      }
+      return entry;
+    };
+    return JSON.stringify(normalize(value));
   }
 
   private compareMigrations(

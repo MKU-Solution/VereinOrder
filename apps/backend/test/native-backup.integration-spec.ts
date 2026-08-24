@@ -16,6 +16,7 @@ describe("Native PostgreSQL-Sicherung gegen echte Testdatenbank (Issue #67)", ()
   let previousBackupDir: string | undefined;
   let previousDumpBin: string | undefined;
   let previousRestoreBin: string | undefined;
+  let previousPsqlBin: string | undefined;
   const cleanupEventIds: string[] = [];
   const cleanupUserIds: string[] = [];
 
@@ -23,6 +24,7 @@ describe("Native PostgreSQL-Sicherung gegen echte Testdatenbank (Issue #67)", ()
     previousBackupDir = process.env.BACKUP_DIR;
     previousDumpBin = process.env.PG_DUMP_BIN;
     previousRestoreBin = process.env.PG_RESTORE_BIN;
+    previousPsqlBin = process.env.PSQL_BIN;
     backupDir = fs.mkdtempSync(
       path.join(os.tmpdir(), "vereinorder-native-backup-integration-"),
     );
@@ -32,8 +34,10 @@ describe("Native PostgreSQL-Sicherung gegen echte Testdatenbank (Issue #67)", ()
       const postgresBin = "C:\\Program Files\\PostgreSQL\\18\\bin";
       const dump = path.join(postgresBin, "pg_dump.exe");
       const restore = path.join(postgresBin, "pg_restore.exe");
+      const psql = path.join(postgresBin, "psql.exe");
       if (fs.existsSync(dump)) process.env.PG_DUMP_BIN = dump;
       if (fs.existsSync(restore)) process.env.PG_RESTORE_BIN = restore;
+      if (fs.existsSync(psql)) process.env.PSQL_BIN = psql;
     }
   });
 
@@ -58,6 +62,8 @@ describe("Native PostgreSQL-Sicherung gegen echte Testdatenbank (Issue #67)", ()
     else process.env.PG_DUMP_BIN = previousDumpBin;
     if (previousRestoreBin === undefined) delete process.env.PG_RESTORE_BIN;
     else process.env.PG_RESTORE_BIN = previousRestoreBin;
+    if (previousPsqlBin === undefined) delete process.env.PSQL_BIN;
+    else process.env.PSQL_BIN = previousPsqlBin;
   });
 
   it("erzeugt einen echten Custom-Dump mit vollständigem, nachgemessenem Manifest", async () => {
@@ -193,5 +199,46 @@ describe("Native PostgreSQL-Sicherung gegen echte Testdatenbank (Issue #67)", ()
     const downloadPath = await service.getDownloadFilePath(result.filename);
     expect(path.basename(downloadPath)).toBe(result.filename);
     expect(fs.readFileSync(downloadPath)).toEqual(fs.readFileSync(dumpPath));
-  }, 60_000);
+
+    let verified;
+    try {
+      verified = await service.verifyRestoration(result.filename, {
+        userId: admin.id,
+        username: admin.username,
+      });
+    } catch (error) {
+      const failureAudit = await prisma.auditLog.findFirst({
+        where: {
+          action: "RESTORE_VERIFICATION_FAILED",
+          entityId: result.filename,
+        },
+        orderBy: { createdAt: "desc" },
+      });
+      throw new Error(
+        `Wiederherstellungsprüfung fehlgeschlagen (${error instanceof Error ? error.name : "unbekannt"}): ${JSON.stringify(failureAudit?.details ?? null)}`,
+      );
+    }
+    expect(verified).toMatchObject({
+      verification: "RESTORE_VERIFIED",
+      compatibility: "CURRENT",
+      restoreVerificationAvailable: true,
+    });
+    const verifiedManifest = parseBackupManifest(
+      fs.readFileSync(manifestPath, "utf8"),
+    );
+    expect(verifiedManifest.verification.restoration.status).toBe("PASSED");
+    const leakedVerificationDatabases = await prisma.$queryRawUnsafe<
+      Array<{ databaseName: string }>
+    >(`SELECT datname AS "databaseName"
+         FROM pg_catalog.pg_database
+         WHERE datname LIKE 'vereinorder_restorecheck_%'`);
+    expect(leakedVerificationDatabases).toEqual([]);
+    const verificationAudit = await prisma.auditLog.findFirst({
+      where: {
+        action: "RESTORE_VERIFICATION_COMPLETED",
+        entityId: result.filename,
+      },
+    });
+    expect(verificationAudit).not.toBeNull();
+  }, 120_000);
 });
