@@ -1,4 +1,5 @@
 import { fireEvent, render, screen } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api } from "../lib/api";
@@ -81,9 +82,10 @@ afterEach(() => {
 });
 
 async function openPrinterTab() {
-  render(<AdminDashboard />);
-  fireEvent.click(
-    screen.getByRole("button", { name: /Drucker & Bon-Routing/ }),
+  render(
+    <MemoryRouter initialEntries={["/admin/printers"]}>
+      <AdminDashboard />
+    </MemoryRouter>,
   );
   await screen.findByText("Küchendrucker");
 }
@@ -211,10 +213,9 @@ describe("Unklare Druckaufträge", () => {
     expect(
       screen.getByText(/Verbindung nach 412 Byte abgebrochen/),
     ).toBeInTheDocument();
-    // Tab-Abzeichen zeigt denselben Zähler wie der Abschnitt.
-    expect(
-      screen.getByRole("button", { name: /Drucker & Bon-Routing/ }),
-    ).toHaveTextContent("1");
+    expect(screen.getByLabelText("Betriebsstatus")).toHaveTextContent(
+      "1 Hinweis",
+    );
   });
 
   it("druckt über den richtigen Endpunkt erneut und zeigt danach das Ergebnis", async () => {

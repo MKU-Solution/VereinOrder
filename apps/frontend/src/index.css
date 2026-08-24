@@ -13,3 +13,33 @@
     @apply bg-slate-900/40 backdrop-blur-md border border-slate-700/50 shadow-xl;
   }
 }
+
+.admin-scrollbar {
+  scrollbar-color: #475569 #0f172a;
+  scrollbar-width: thin;
+}
+
+.admin-scrollbar::-webkit-scrollbar {
+  width: 8px;
+}
+
+.admin-scrollbar::-webkit-scrollbar-track {
+  background: #0f172a;
+}
+
+.admin-scrollbar::-webkit-scrollbar-thumb {
+  border: 2px solid #0f172a;
+  border-radius: 999px;
+  background: #475569;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

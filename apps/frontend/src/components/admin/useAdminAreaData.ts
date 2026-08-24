@@ -6,6 +6,7 @@ import {
   getAdminAreaEndpoint,
   type AdminAreaId,
 } from "./adminAreaRegistry";
+import type { EventItem } from "./adminDomainTypes";
 
 export interface RestoreOperation {
   swapId: string;
@@ -35,6 +36,13 @@ export const useAdminAreaData = (activeArea: AdminAreaId) => {
   const [data, setData] = useState<any[]>([]);
   const [diagnosticsData, setDiagnosticsData] = useState<any>(null);
   const [printersList, setPrintersList] = useState<any[]>([]);
+  const [events, setEvents] = useState<EventItem[]>([]);
+  const [connectionStatus, setConnectionStatus] = useState<
+    "checking" | "connected" | "error"
+  >("checking");
+  const [connectionCheckedAt, setConnectionCheckedAt] = useState<Date | null>(
+    null,
+  );
   const [eventId, setEventId] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -48,6 +56,9 @@ export const useAdminAreaData = (activeArea: AdminAreaId) => {
     useState<RestoreOperation | null>(null);
   const [restoreOperationConfirmation, setRestoreOperationConfirmation] =
     useState("");
+  const activeAreaRequiresEvent =
+    getAdminAreaDefinition(activeArea).requiresEvent;
+  const endpointEventId = activeAreaRequiresEvent ? eventId : "";
 
   useEffect(() => {
     const fetchInitialData = async () => {
@@ -56,26 +67,30 @@ export const useAdminAreaData = (activeArea: AdminAreaId) => {
           api.get("/events"),
           api.get("/print-jobs/printers"),
         ]);
+        setEvents(eventsRes.data || []);
         if (eventsRes.data?.length > 0) setEventId(eventsRes.data[0].id);
         if (printersRes.data) setPrintersList(printersRes.data);
+        setConnectionStatus("connected");
+        setConnectionCheckedAt(new Date());
       } catch (error) {
         console.error("Failed to load initial admin data", error);
+        setConnectionStatus("error");
+        setConnectionCheckedAt(new Date());
       }
     };
     void fetchInitialData();
   }, []);
 
   const fetchData = useCallback(async () => {
-    const definition = getAdminAreaDefinition(activeArea);
     if (activeArea === "maintenance") {
       setLoadError(null);
       return;
     }
-    if (definition.requiresEvent && !eventId) return;
+    if (activeAreaRequiresEvent && !endpointEventId) return;
 
     const endpoint = getAdminAreaEndpoint(
       activeArea,
-      eventId,
+      endpointEventId,
       auditFilterAction,
       auditSearch,
     );
@@ -113,7 +128,13 @@ export const useAdminAreaData = (activeArea: AdminAreaId) => {
     } finally {
       setIsLoading(false);
     }
-  }, [activeArea, auditFilterAction, auditSearch, eventId]);
+  }, [
+    activeArea,
+    activeAreaRequiresEvent,
+    auditFilterAction,
+    auditSearch,
+    endpointEventId,
+  ]);
 
   useEffect(() => {
     void fetchData();
@@ -143,6 +164,9 @@ export const useAdminAreaData = (activeArea: AdminAreaId) => {
     data,
     diagnosticsData,
     printersList,
+    events,
+    connectionStatus,
+    connectionCheckedAt,
     eventId,
     setEventId,
     isLoading,

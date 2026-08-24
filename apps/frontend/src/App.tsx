@@ -56,7 +56,7 @@ function App() {
               <Route path="/revision" element={<RevisionDashboard />} />
             </Route>
             <Route element={<RoleGuard route={routeAccess.admin} />}>
-              <Route path="/admin" element={<AdminDashboard />} />
+              <Route path="/admin/*" element={<AdminDashboard />} />
             </Route>
             <Route element={<RoleGuard route={routeAccess.cashier} />}>
               <Route path="/cashier" element={<CashierDashboard />} />
