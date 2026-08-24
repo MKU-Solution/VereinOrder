@@ -18,6 +18,7 @@ import {
 import { SessionGate } from "./SessionGate";
 import { useMaintenanceStatus } from "../../lib/maintenance";
 import { Maintenance } from "../../pages/Maintenance";
+import { AdminApplicationFrame } from "../admin/AdminApplicationFrame";
 
 const allowedLockTimeouts = [30, 60, 120, 300, 900];
 
@@ -26,6 +27,8 @@ export const AppLayout = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const maintenanceStatus = useMaintenanceStatus();
+  const isAdminRoute =
+    location.pathname === "/admin" || location.pathname.startsWith("/admin/");
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [lockTimeoutSeconds, setLockTimeoutSeconds] = useState(() => {
     const stored = Number(localStorage.getItem("authLockTimeoutSeconds"));
@@ -178,19 +181,49 @@ export const AppLayout = () => {
     };
   }, [lockTimeoutSeconds, sessionMode, user]);
 
-  // Issue #67 (Wartungsmodus): für ADMINISTRATOR bleibt /admin bedienbar
+  const sessionGate = sessionMode && user && (
+    <SessionGate
+      key={sessionMode}
+      mode={sessionMode}
+      timeoutSeconds={lockTimeoutSeconds}
+      onTimeoutChange={updateLockTimeout}
+      onClose={() => {
+        localStorage.setItem("authLastActivityAt", String(Date.now()));
+        setSessionMode(null);
+      }}
+      onAuthenticated={finishSessionAuthentication}
+    />
+  );
+
+  // Issue #67 (Wartungsmodus): für ADMINISTRATOR bleibt /admin/* bedienbar
   // (Entwurf Abschnitt 6) - jede andere Rolle bekommt statt der gewohnten
   // Oberfläche die ganzseitige Anzeige, weil jede ihrer Anfragen ohnehin 503
   // bekäme. Erst nach diesem Punkt geprüft (nicht als früher return), damit
   // sämtliche Hooks oben immer in derselben Reihenfolge laufen.
   if (maintenanceStatus && maintenanceStatus.phase !== "OPEN") {
     if (user?.role === "ADMINISTRATOR") {
-      if (location.pathname !== "/admin") {
-        return <Navigate to="/admin" replace />;
+      if (!isAdminRoute) {
+        return <Navigate to="/admin/overview" replace />;
       }
     } else {
       return <Maintenance status={maintenanceStatus} />;
     }
+  }
+
+  if (isAdminRoute && user) {
+    return (
+      <>
+        <AdminApplicationFrame
+          username={user.username}
+          onExitAdmin={() => navigate("/")}
+          onSwitchUser={() => setSessionMode("switch")}
+          onLogout={handleLogout}
+        >
+          <Outlet />
+        </AdminApplicationFrame>
+        {sessionGate}
+      </>
+    );
   }
 
   return (
@@ -361,19 +394,7 @@ export const AppLayout = () => {
         <Outlet />
       </main>
 
-      {sessionMode && user && (
-        <SessionGate
-          key={sessionMode}
-          mode={sessionMode}
-          timeoutSeconds={lockTimeoutSeconds}
-          onTimeoutChange={updateLockTimeout}
-          onClose={() => {
-            localStorage.setItem("authLastActivityAt", String(Date.now()));
-            setSessionMode(null);
-          }}
-          onAuthenticated={finishSessionAuthentication}
-        />
-      )}
+      {sessionGate}
     </div>
   );
 };

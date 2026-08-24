@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api } from "../lib/api";
@@ -138,9 +139,10 @@ afterEach(() => {
 });
 
 async function openBackupTab() {
-  render(<AdminDashboard />);
-  fireEvent.click(
-    screen.getByRole("button", { name: /Backups & Datensicherung/ }),
+  render(
+    <MemoryRouter initialEntries={["/admin/backups"]}>
+      <AdminDashboard />
+    </MemoryRouter>,
   );
   await screen.findByText(nativeBackup.filename);
 }
@@ -326,9 +328,10 @@ describe("Native Datensicherung V1 in der Administration (Issue #67)", () => {
   });
 
   it("zeigt freien Speicher, Rücklage und den Stand der Wiederherstellungsprüfung in der Diagnose", async () => {
-    render(<AdminDashboard />);
-    fireEvent.click(
-      screen.getByRole("button", { name: /System-Status & Diagnose/ }),
+    render(
+      <MemoryRouter initialEntries={["/admin/diagnostics"]}>
+        <AdminDashboard />
+      </MemoryRouter>,
     );
 
     expect(await screen.findByText("Freier Speicher")).toBeInTheDocument();
