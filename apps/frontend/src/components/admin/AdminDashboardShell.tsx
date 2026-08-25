@@ -11,12 +11,16 @@ import {
 } from "lucide-react";
 
 import type { EventItem } from "./adminDomainTypes";
+import { AdminEventSelector } from "./AdminEventSelector";
 import { getAdminPageDefinition, type AdminPageId } from "./adminAreaRegistry";
 
 interface AdminDashboardShellProps {
   activePage: AdminPageId;
   unresolvedJobCount: number;
   selectedEvent?: EventItem;
+  events?: EventItem[];
+  selectedEventId?: string;
+  onSelectEvent?: (eventId: string) => void;
   connectionStatus: "checking" | "connected" | "error";
   connectionCheckedAt: Date | null;
   showOperatingStatus?: boolean;
@@ -36,6 +40,9 @@ export const AdminDashboardShell = ({
   activePage,
   unresolvedJobCount,
   selectedEvent,
+  events,
+  selectedEventId,
+  onSelectEvent,
   connectionStatus,
   connectionCheckedAt,
   showOperatingStatus = true,
@@ -92,6 +99,14 @@ export const AdminDashboardShell = ({
           </button>
         )}
       </div>
+
+      {page.requiresEvent && events && onSelectEvent && (
+        <AdminEventSelector
+          events={events}
+          selectedEventId={selectedEventId || selectedEvent?.id || ""}
+          onSelectEvent={onSelectEvent}
+        />
+      )}
 
       {showOperatingStatus && (
         <section
