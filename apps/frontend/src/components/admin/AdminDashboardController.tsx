@@ -10,16 +10,14 @@ import { AdminStationsView } from "./AdminStationsView";
 import { AdminCategoriesView } from "./AdminCategoriesView";
 import { AdminProductsView } from "./AdminProductsView";
 import { AdminUsersView } from "./AdminUsersView";
-import { MaintenancePanel } from "./MaintenancePanel";
-import type { AuditLogItem, BackupItem, EventItem } from "./adminDomainTypes";
-import { backendMessage, formatStorageBytes } from "./adminFormatters";
-import {
-  describeJobType,
-  describeUnresolvedReason,
-  formatClockTime,
-  formatMinutesAgoLong,
-  getPrinterDiagState,
-} from "./printerAdminModel";
+import { AdminPrintersView } from "./AdminPrintersView";
+import { AdminBackupsView } from "./AdminBackupsView";
+import { AdminMaintenanceView } from "./AdminMaintenanceView";
+import { AdminDiagnosticsView } from "./AdminDiagnosticsView";
+import { AdminAuditView } from "./AdminAuditView";
+import type { BackupItem, EventItem } from "./adminDomainTypes";
+import { backendMessage } from "./adminFormatters";
+import { describeJobType, describeUnresolvedReason } from "./printerAdminModel";
 import {
   ProductOptionGroupsEditor,
   loadOptionGroupsFromProduct,
@@ -37,25 +35,7 @@ import {
 } from "./adminAreaRegistry";
 import { useAdminAreaData } from "./useAdminAreaData";
 import { useAuthStore } from "../../store/useAuthStore";
-import {
-  Edit2,
-  ShieldAlert,
-  CheckCircle2,
-  AlertTriangle,
-  Printer,
-  HardDrive,
-  Download,
-  RotateCcw,
-  ShieldCheck,
-  Search,
-  FileSpreadsheet,
-  Activity,
-  Cpu,
-  Database,
-  RefreshCw,
-  AlertOctagon,
-  ArrowRight,
-} from "lucide-react";
+import { ShieldAlert, AlertTriangle } from "lucide-react";
 
 type Tab = AdminAreaId;
 
@@ -84,10 +64,6 @@ export const AdminDashboardController = ({
     isLoading,
     loadError,
     auditStats,
-    auditFilterAction,
-    setAuditFilterAction,
-    auditSearch,
-    setAuditSearch,
     diagnosticsLastFetchedAt,
     diagnosticsPollFailed,
     restoreOperation,
@@ -97,7 +73,6 @@ export const AdminDashboardController = ({
   } = useAdminAreaData(activeTab);
   const [isBackingUp, setIsBackingUp] = useState(false);
   const [overviewRefreshToken, setOverviewRefreshToken] = useState(0);
-  const [verifyingBackup, setVerifyingBackup] = useState<string | null>(null);
   const [preparingBackup, setPreparingBackup] = useState<string | null>(null);
   const [restorePreparationTarget, setRestorePreparationTarget] =
     useState<BackupItem | null>(null);
@@ -134,9 +109,11 @@ export const AdminDashboardController = ({
   const [modalError, setModalError] = useState("");
   const [isSavingModal, setIsSavingModal] = useState(false);
 
-  // Product Modal State
+  // Product Edit/Create Modal State
   const [isProductModalOpen, setIsProductModalOpen] = useState(false);
   const [editingProduct, setEditingProduct] = useState<any>(null);
+  const [productCategories, setProductCategories] = useState<any[]>([]);
+  const [productStations, setProductStations] = useState<any[]>([]);
   const [productFormData, setProductFormData] = useState({
     name: "",
     euro: "",
@@ -145,8 +122,6 @@ export const AdminDashboardController = ({
     targetStationId: "",
     sortOrder: "0",
   });
-  const [productCategories, setProductCategories] = useState<any[]>([]);
-  const [productStations, setProductStations] = useState<any[]>([]);
 
   useEffect(() => {
     if (!eventId) {
@@ -213,12 +188,6 @@ export const AdminDashboardController = ({
   // Nur zum Ausblenden von Knöpfen, siehe Konzept 64, Abschnitt 0 und 2.7 -
   // maßgeblich bleibt der RolesGuard im Backend.
   const canDiscardPrintJobs = currentUserRole === "ADMINISTRATOR";
-
-  const printersById = useMemo(() => {
-    const map: Record<string, any> = {};
-    for (const p of printersList) map[p.id] = p;
-    return map;
-  }, [printersList]);
 
   // Issue #84: Anzeige im Produktmodal, welche Station ohne eigene
   // Ausnahme gilt - die Zielstation der gewählten Kategorie, sonst die
@@ -839,7 +808,6 @@ export const AdminDashboardController = ({
   };
 
   const handleVerifyRestore = async (filename: string) => {
-    setVerifyingBackup(filename);
     try {
       await api.post(`/backup/verify-restore/${filename}`);
       alert(
@@ -851,8 +819,6 @@ export const AdminDashboardController = ({
       alert(
         "Die Wiederherstellungsprüfung ist fehlgeschlagen. Die Festdatenbank wurde nicht verändert.",
       );
-    } finally {
-      setVerifyingBackup(null);
     }
   };
 
@@ -1001,13 +967,14 @@ export const AdminDashboardController = ({
 
       await api.post(`/print-jobs/${job.id}/resolve`, payload);
 
+      const targetPrinterName =
+        printersList.find((p) => p.id === resolveTargetPrinterId)?.name ??
+        "unbekannt";
       const feedback =
         action === "REPRINTED"
           ? {
               tone: "reprint" as const,
-              text: `Neuer Druckauftrag an „${
-                printersById[resolveTargetPrinterId]?.name ?? "unbekannt"
-              }" eingereiht.`,
+              text: `Neuer Druckauftrag an „${targetPrinterName}" eingereiht.`,
             }
           : action === "CONFIRMED_PRINTED"
             ? { tone: "ok" as const, text: "Als gedruckt bestätigt." }
@@ -1015,9 +982,6 @@ export const AdminDashboardController = ({
 
       setJustResolvedIds((prev) => ({ ...prev, [job.id]: feedback }));
       setResolveDialog(null);
-      // Zähler sofort nachziehen (2.8, Punkt 3); die anschließende
-      // Verzögerung erlaubt, dass die Inline-Bestätigung an Ort und Stelle
-      // sichtbar bleibt, bevor die Karte aus der Liste verschwindet.
       setTimeout(() => {
         setJustResolvedIds((prev) => {
           const rest = { ...prev };
@@ -1116,83 +1080,6 @@ export const AdminDashboardController = ({
     }
   };
 
-  const formatUptime = (seconds: number) => {
-    const d = Math.floor(seconds / (3600 * 24));
-    const h = Math.floor((seconds % (3600 * 24)) / 3600);
-    const m = Math.floor((seconds % 3600) / 60);
-    const s = Math.floor(seconds % 60);
-
-    const parts = [];
-    if (d > 0) parts.push(`${d}d`);
-    if (h > 0 || d > 0) parts.push(`${h}h`);
-    parts.push(`${m}m`);
-    parts.push(`${s}s`);
-    return parts.join(" ");
-  };
-
-  const getActionBadge = (action?: string) => {
-    if (!action)
-      return (
-        <span className="bg-slate-800 text-slate-500 px-2.5 py-0.5 rounded-full text-xs font-medium">
-          Unbekannt
-        </span>
-      );
-    if (action.includes("CANCEL")) {
-      return (
-        <span className="bg-rose-500/20 text-rose-300 border border-rose-500/30 px-2.5 py-0.5 rounded-full text-xs font-bold">
-          Storno
-        </span>
-      );
-    }
-    if (action.includes("PRICE")) {
-      return (
-        <span className="bg-amber-500/20 text-amber-300 border border-amber-500/30 px-2.5 py-0.5 rounded-full text-xs font-bold">
-          Preisänderung
-        </span>
-      );
-    }
-    if (action.includes("PAYMENT")) {
-      return (
-        <span className="bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-2.5 py-0.5 rounded-full text-xs font-bold">
-          Zahlung
-        </span>
-      );
-    }
-    if (action === "LOGIN") {
-      return (
-        <span className="bg-blue-500/20 text-blue-300 border border-blue-500/30 px-2.5 py-0.5 rounded-full text-xs font-bold">
-          Login
-        </span>
-      );
-    }
-    if (action === "FAILED_LOGIN") {
-      return (
-        <span className="bg-red-600/30 text-red-300 border border-red-500/50 px-2.5 py-0.5 rounded-full text-xs font-bold">
-          Fehlversuch
-        </span>
-      );
-    }
-    if (action.includes("RKSV")) {
-      return (
-        <span className="bg-purple-500/20 text-purple-300 border border-purple-500/30 px-2.5 py-0.5 rounded-full text-xs font-bold">
-          RKSV-Erklärung
-        </span>
-      );
-    }
-    if (action.includes("BACKUP")) {
-      return (
-        <span className="bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 px-2.5 py-0.5 rounded-full text-xs font-bold">
-          Datensicherung
-        </span>
-      );
-    }
-    return (
-      <span className="bg-slate-800 text-slate-300 px-2.5 py-0.5 rounded-full text-xs font-medium">
-        {action}
-      </span>
-    );
-  };
-
   const activePageDefinition = getAdminPageDefinition(activePage);
   const selectedEvent =
     events.find((event) => event.id === eventId) ?? events[0];
@@ -1228,503 +1115,19 @@ export const AdminDashboardController = ({
             onRetry={() => void fetchData()}
           >
             {activeTab === "diagnostics" ? (
-              /* DIAGNOSTICS & SYSTEM STATUS */
-              <div className="space-y-6">
-                {/* Top Bar: Overall Health & Actions */}
-                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-slate-900/80 border border-slate-800 p-5 rounded-2xl">
-                  <div className="flex min-w-0 flex-col items-start gap-3 sm:flex-row sm:items-center">
-                    <div
-                      className={`shrink-0 p-3 rounded-2xl border ${
-                        diagnosticsData?.overallHealth === "GREEN"
-                          ? "bg-emerald-500/20 text-emerald-400 border-emerald-500/30"
-                          : diagnosticsData?.overallHealth === "YELLOW"
-                            ? "bg-amber-500/20 text-amber-400 border-amber-500/30"
-                            : "bg-rose-500/20 text-rose-400 border-rose-500/30"
-                      }`}
-                    >
-                      <Activity className="w-7 h-7" />
-                    </div>
-                    <div className="min-w-0 w-full">
-                      <div className="flex min-w-0 flex-col items-start gap-2 sm:flex-row sm:items-center">
-                        <h3 className="text-xl font-bold text-white">
-                          Systemgesundheit:
-                        </h3>
-                        <span
-                          className={`max-w-full px-3 py-1 rounded-full text-center text-xs font-extrabold uppercase tracking-wide border ${
-                            diagnosticsData?.overallHealth === "GREEN"
-                              ? "bg-emerald-500/20 text-emerald-400 border-emerald-500/30"
-                              : diagnosticsData?.overallHealth === "YELLOW"
-                                ? "bg-amber-500/20 text-amber-300 border-amber-500/30"
-                                : "bg-rose-500/20 text-rose-300 border-rose-500/30"
-                          }`}
-                        >
-                          {diagnosticsData?.overallHealth === "GREEN"
-                            ? "● Bereit für Festbetrieb"
-                            : diagnosticsData?.overallHealth === "YELLOW"
-                              ? "▲ Handlung empfohlen"
-                              : "✖ Systemstörung"}
-                        </span>
-                      </div>
-                      <p className="text-xs text-slate-400 mt-1 break-words">
-                        Serverzeit:{" "}
-                        {new Date(
-                          diagnosticsData?.serverTime || Date.now(),
-                        ).toLocaleString("de-AT")}{" "}
-                        • Automatische Prüfung alle 10s
-                      </p>
-                    </div>
-                  </div>
-
-                  <button
-                    onClick={() => fetchData()}
-                    className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs rounded-xl transition flex items-center gap-2 border border-slate-700 self-stretch sm:self-auto justify-center"
-                  >
-                    <RefreshCw className="w-4 h-4" />
-                    Jetzt aktualisieren
-                  </button>
-                </div>
-
-                {/* Smart Health Recommendations */}
-                {diagnosticsData?.recommendations &&
-                  diagnosticsData.recommendations.length > 0 && (
-                    <div className="space-y-2">
-                      <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider">
-                        Handlungsempfehlungen & Hinweise
-                      </h4>
-                      <div className="grid grid-cols-1 gap-2.5">
-                        {diagnosticsData.recommendations.map(
-                          (rec: any, idx: number) => (
-                            <div
-                              key={idx}
-                              className={`p-4 rounded-2xl border flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 ${
-                                rec.level === "SUCCESS"
-                                  ? "bg-emerald-950/30 border-emerald-800/40 text-emerald-300"
-                                  : rec.level === "WARNING"
-                                    ? "bg-amber-950/30 border-amber-800/40 text-amber-300"
-                                    : rec.level === "ERROR"
-                                      ? "bg-rose-950/30 border-rose-800/40 text-rose-300"
-                                      : "bg-indigo-950/30 border-indigo-800/40 text-indigo-300"
-                              }`}
-                            >
-                              <div className="flex items-start gap-3">
-                                {rec.level === "SUCCESS" ? (
-                                  <CheckCircle2 className="w-5 h-5 mt-0.5 shrink-0 text-emerald-400" />
-                                ) : rec.level === "ERROR" ? (
-                                  <AlertOctagon className="w-5 h-5 mt-0.5 shrink-0 text-rose-400" />
-                                ) : (
-                                  <AlertTriangle className="w-5 h-5 mt-0.5 shrink-0 text-amber-400" />
-                                )}
-                                <div>
-                                  <div className="font-bold text-sm text-slate-100">
-                                    {rec.title}
-                                  </div>
-                                  <div className="text-xs text-slate-300/90 mt-0.5">
-                                    {rec.message}
-                                  </div>
-                                </div>
-                              </div>
-
-                              {rec.actionTab && (
-                                <button
-                                  onClick={() =>
-                                    navigateToArea(rec.actionTab as Tab)
-                                  }
-                                  className="px-3.5 py-1.5 rounded-xl bg-slate-900/80 hover:bg-slate-900 text-white text-xs font-bold transition flex items-center gap-1.5 border border-slate-700/80 shrink-0"
-                                >
-                                  Öffnen <ArrowRight className="w-3.5 h-3.5" />
-                                </button>
-                              )}
-                            </div>
-                          ),
-                        )}
-                      </div>
-                    </div>
-                  )}
-
-                {/* 4 Detail Grid Tiles */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-start">
-                  {/* 1. Backend & Host */}
-                  <div className="bg-slate-900/70 border border-slate-800 p-5 rounded-2xl space-y-4">
-                    <div className="flex items-center gap-3">
-                      <div className="p-2.5 bg-blue-500/20 text-blue-400 rounded-xl">
-                        <Cpu className="w-5 h-5" />
-                      </div>
-                      <div>
-                        <h4 className="font-bold text-slate-100">
-                          Backend & Host-System
-                        </h4>
-                        <span className="text-xs text-slate-400">
-                          Node.js Runtime & Speicherauslastung
-                        </span>
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-2 text-xs">
-                      <div className="bg-slate-800/50 p-3 rounded-xl">
-                        <span className="text-slate-400 block mb-1">
-                          Betriebsbereit seit (Uptime)
-                        </span>
-                        <span className="text-slate-200 font-bold font-mono">
-                          {diagnosticsData
-                            ? formatUptime(
-                                diagnosticsData.backend.uptimeSeconds,
-                              )
-                            : "-"}
-                        </span>
-                      </div>
-                      <div className="bg-slate-800/50 p-3 rounded-xl">
-                        <span className="text-slate-400 block mb-1">
-                          Node & App Version
-                        </span>
-                        <span className="text-slate-200 font-bold font-mono">
-                          {diagnosticsData?.backend.nodeVersion} (v
-                          {diagnosticsData?.backend.appVersion})
-                        </span>
-                      </div>
-                      <div className="bg-slate-800/50 p-3 rounded-xl">
-                        <span className="text-slate-400 block mb-1">
-                          RAM Belegung (RSS)
-                        </span>
-                        <span className="text-slate-200 font-bold font-mono">
-                          {diagnosticsData?.backend.memory.rssMb} MB
-                        </span>
-                      </div>
-                      <div className="bg-slate-800/50 p-3 rounded-xl">
-                        <span className="text-slate-400 block mb-1">
-                          Node.js Heap
-                        </span>
-                        <span className="text-slate-200 font-bold font-mono">
-                          {diagnosticsData?.backend.memory.heapUsedMb} MB /{" "}
-                          {diagnosticsData?.backend.memory.heapTotalMb} MB
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* 2. Database (PostgreSQL) */}
-                  <div className="bg-slate-900/70 border border-slate-800 p-5 rounded-2xl space-y-4">
-                    <div className="flex items-center gap-3">
-                      <div className="p-2.5 bg-emerald-500/20 text-emerald-400 rounded-xl">
-                        <Database className="w-5 h-5" />
-                      </div>
-                      <div>
-                        <h4 className="font-bold text-slate-100">
-                          PostgreSQL Datenbank
-                        </h4>
-                        <span className="text-xs text-slate-400">
-                          Verbindungsstatus & Tabellenumfang
-                        </span>
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-2 text-xs">
-                      <div className="bg-slate-800/50 p-3 rounded-xl">
-                        <span className="text-slate-400 block mb-1">
-                          Status & Ping-Latenz
-                        </span>
-                        <span className="text-emerald-400 font-bold font-mono flex items-center gap-1.5">
-                          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
-                          ONLINE ({diagnosticsData?.database.latencyMs} ms)
-                        </span>
-                      </div>
-                      <div className="bg-slate-800/50 p-3 rounded-xl">
-                        <span className="text-slate-400 block mb-1">
-                          Bestellungen erfasst
-                        </span>
-                        <span className="text-slate-200 font-bold font-mono">
-                          {diagnosticsData?.database.counts.orders || 0}
-                        </span>
-                      </div>
-                      <div className="bg-slate-800/50 p-3 rounded-xl">
-                        <span className="text-slate-400 block mb-1">
-                          Produkte / Artikel
-                        </span>
-                        <span className="text-slate-200 font-bold font-mono">
-                          {diagnosticsData?.database.counts.products || 0}
-                        </span>
-                      </div>
-                      <div className="bg-slate-800/50 p-3 rounded-xl">
-                        <span className="text-slate-400 block mb-1">
-                          Mitarbeiter & Benutzer
-                        </span>
-                        <span className="text-slate-200 font-bold font-mono">
-                          {diagnosticsData?.database.counts.users || 0}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* 3. Printers & Queue */}
-                  <div className="bg-slate-900/70 border border-slate-800 p-5 rounded-2xl space-y-4">
-                    <div className="flex justify-between items-start">
-                      <div className="flex items-center gap-3">
-                        <div className="p-2.5 bg-indigo-500/20 text-indigo-400 rounded-xl">
-                          <Printer className="w-5 h-5" />
-                        </div>
-                        <div>
-                          <h4 className="font-bold text-slate-100">
-                            Drucker & Warteschlange
-                          </h4>
-                          <span className="text-xs text-slate-400 block">
-                            {diagnosticsData?.printers.active || 0} von{" "}
-                            {diagnosticsData?.printers.total || 0} Druckern
-                            aktiv
-                          </span>
-                          <span className="text-[11px] text-slate-500 block">
-                            Stand:{" "}
-                            {diagnosticsLastFetchedAt
-                              ? diagnosticsLastFetchedAt.toLocaleTimeString(
-                                  "de-AT",
-                                )
-                              : "–"}{" "}
-                            Uhr
-                          </span>
-                        </div>
-                      </div>
-
-                      {diagnosticsData?.printers.queue.failed > 0 && (
-                        <button
-                          disabled={isRetryingJobs}
-                          onClick={handleRetryFailedJobs}
-                          className="px-3 py-1.5 bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold rounded-xl transition flex items-center gap-1.5 shrink-0"
-                        >
-                          <RotateCcw className="w-3.5 h-3.5" />
-                          {isRetryingJobs
-                            ? "Wiederhole..."
-                            : "Fehlgeschlagene wiederholen"}
-                        </button>
-                      )}
-                    </div>
-
-                    {diagnosticsData?.printers.cupsHostReachable === false && (
-                      <div
-                        role="alert"
-                        className="bg-rose-500/10 border border-rose-500/30 text-rose-300 rounded-xl px-4 py-3 text-sm flex gap-2 items-start"
-                      >
-                        <AlertOctagon className="w-4 h-4 shrink-0 mt-0.5" />
-                        <span>
-                          CUPS-Dienst auf dem Host ist nicht erreichbar
-                          (Portprüfung, Port 631). Angezeigte Werte sind der
-                          zuletzt bekannte Stand
-                          {diagnosticsData?.printers.cupsCheckedAt
-                            ? `: ${new Date(
-                                diagnosticsData.printers.cupsCheckedAt,
-                              ).toLocaleTimeString("de-AT", {
-                                hour: "2-digit",
-                                minute: "2-digit",
-                              })} Uhr.`
-                            : "."}
-                        </span>
-                      </div>
-                    )}
-
-                    {!isLoading && diagnosticsPollFailed && (
-                      <div
-                        role="alert"
-                        className="bg-rose-500/10 border border-rose-500/30 text-rose-300 rounded-xl px-4 py-3 text-sm flex gap-2 items-start"
-                      >
-                        <RefreshCw className="w-4 h-4 shrink-0 mt-0.5" />
-                        <span>
-                          Diagnosedaten konnten nicht aktualisiert werden.
-                          Letzter erfolgreicher Abruf:{" "}
-                          {diagnosticsLastFetchedAt
-                            ? diagnosticsLastFetchedAt.toLocaleTimeString(
-                                "de-AT",
-                              )
-                            : "unbekannt"}{" "}
-                          Uhr.
-                        </span>
-                      </div>
-                    )}
-
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
-                      <div className="bg-slate-800/50 p-3 rounded-xl">
-                        <span className="text-slate-400 block mb-1">
-                          Wartend (Pending)
-                        </span>
-                        <span className="text-amber-300 font-bold font-mono">
-                          {diagnosticsData?.printers.queue.pending || 0}
-                        </span>
-                      </div>
-                      <div className="bg-slate-800/50 p-3 rounded-xl">
-                        <span className="text-slate-400 block mb-1">
-                          Gedruckt
-                        </span>
-                        <span className="text-emerald-400 font-bold font-mono">
-                          {diagnosticsData?.printers.queue.printed || 0}
-                        </span>
-                      </div>
-                      <div className="bg-slate-800/50 p-3 rounded-xl">
-                        <span className="text-slate-400 block mb-1">
-                          Fehlgeschlagen
-                        </span>
-                        <span
-                          className={`font-bold font-mono ${diagnosticsData?.printers.queue.failed > 0 ? "text-rose-400 font-extrabold" : "text-slate-500"}`}
-                        >
-                          {diagnosticsData?.printers.queue.failed || 0}
-                        </span>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => navigateToArea("printers")}
-                        className="bg-slate-800/50 hover:bg-slate-800 p-3 rounded-xl text-left transition"
-                      >
-                        <span className="text-slate-400 block mb-1">
-                          Unklar
-                        </span>
-                        <span className="text-indigo-300 font-bold font-mono">
-                          {diagnosticsData?.printers.queue.unclear || 0}
-                        </span>
-                      </button>
-                    </div>
-
-                    {diagnosticsData?.printers.list &&
-                      diagnosticsData.printers.list.length > 0 && (
-                        <div className="border-t border-slate-800 pt-1">
-                          {diagnosticsData.printers.list.map((printer: any) => {
-                            const state = getPrinterDiagState(
-                              printer,
-                              printersById,
-                            );
-                            const StateIcon = state.Icon;
-                            const showCupsBadge =
-                              printer.type === "CUPS_IPP" &&
-                              diagnosticsData?.printers.cupsHostReachable ===
-                                false;
-                            return (
-                              <div
-                                key={printer.id}
-                                className="flex flex-col sm:flex-row sm:items-start gap-1 sm:gap-3 py-2.5 border-b border-slate-800/60 last:border-b-0"
-                              >
-                                <div className="flex items-center gap-2 sm:w-40 shrink-0">
-                                  <StateIcon
-                                    className={`w-4 h-4 shrink-0 ${state.colorClass}`}
-                                  />
-                                  <span className="text-slate-200 font-bold text-xs truncate">
-                                    {printer.name}
-                                  </span>
-                                </div>
-                                <div
-                                  className={`flex-1 min-w-0 text-xs sm:max-w-sm md:max-w-md ${state.colorClass}`}
-                                >
-                                  {state.text}
-                                </div>
-                                {showCupsBadge && (
-                                  <span
-                                    title="TCP-Portprüfung gegen Port 631 – kein Nachweis, dass der Druckdienst selbst funktioniert."
-                                    className="text-[11px] font-bold text-rose-400 sm:ml-auto shrink-0"
-                                  >
-                                    CUPS-Dienst: nicht erreichbar
-                                  </span>
-                                )}
-                              </div>
-                            );
-                          })}
-                        </div>
-                      )}
-                  </div>
-
-                  {/* 4. Backup & Storage */}
-                  <div className="bg-slate-900/70 border border-slate-800 p-5 rounded-2xl space-y-4">
-                    <div className="flex justify-between items-start">
-                      <div className="flex items-center gap-3">
-                        <div className="p-2.5 bg-emerald-500/20 text-emerald-400 rounded-xl">
-                          <HardDrive className="w-5 h-5" />
-                        </div>
-                        <div>
-                          <h4 className="font-bold text-slate-100">
-                            Datensicherung & Snapshots
-                          </h4>
-                          <span className="text-xs text-slate-400">
-                            {diagnosticsData?.backup.totalBackups || 0}{" "}
-                            Sicherungen vorhanden
-                          </span>
-                        </div>
-                      </div>
-
-                      <button
-                        onClick={() => navigateToArea("backups")}
-                        className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold rounded-xl transition flex items-center gap-1"
-                      >
-                        Backups <ArrowRight className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-
-                    <div className="bg-slate-800/50 p-3 rounded-xl text-xs space-y-1">
-                      {diagnosticsData?.backup.latestBackup ? (
-                        <>
-                          <div className="text-slate-400">Letztes Backup:</div>
-                          <div className="text-slate-200 font-bold">
-                            {new Date(
-                              diagnosticsData.backup.latestBackup.createdAt,
-                            ).toLocaleString("de-AT")}
-                          </div>
-                          <div className="font-mono text-slate-500 text-[11px]">
-                            {diagnosticsData.backup.latestBackup.filename} (
-                            {(
-                              diagnosticsData.backup.latestBackup.sizeBytes /
-                              1024
-                            ).toFixed(1)}{" "}
-                            kB)
-                          </div>
-                        </>
-                      ) : (
-                        <div className="text-amber-400 font-medium py-1">
-                          Noch kein Backup vorhanden.
-                        </div>
-                      )}
-                    </div>
-
-                    {diagnosticsData?.backup.storage && (
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
-                        <div className="bg-slate-800/50 p-3 rounded-xl">
-                          <div className="text-slate-400">Freier Speicher</div>
-                          <div
-                            className={`font-bold ${
-                              diagnosticsData.backup.storage.creationAllowed
-                                ? "text-emerald-400"
-                                : "text-rose-400"
-                            }`}
-                          >
-                            {formatStorageBytes(
-                              diagnosticsData.backup.storage.freeBytes,
-                            )}
-                          </div>
-                          <div className="text-slate-500 text-[11px]">
-                            Rücklage:{" "}
-                            {formatStorageBytes(
-                              diagnosticsData.backup.storage.retention
-                                ?.minFreeBytes,
-                            )}
-                          </div>
-                        </div>
-                        <div className="bg-slate-800/50 p-3 rounded-xl">
-                          <div className="text-slate-400">Backup-Bestand</div>
-                          <div className="text-slate-200 font-bold">
-                            {formatStorageBytes(
-                              diagnosticsData.backup.storage.backupBytes,
-                            )}
-                          </div>
-                          <div className="text-slate-500 text-[11px]">
-                            {diagnosticsData.backup.storage.backupCount}{" "}
-                            geprüfte oder sichtbare Sicherungen
-                          </div>
-                        </div>
-                        <div className="sm:col-span-2 bg-slate-800/50 p-3 rounded-xl text-slate-400">
-                          Letzte Wiederherstellungsprüfung:{" "}
-                          <span className="text-slate-200 font-medium">
-                            {diagnosticsData.backup.storage.latestRestoredBackup
-                              ? new Date(
-                                  diagnosticsData.backup.storage.latestRestoredBackup.createdAt,
-                                ).toLocaleString("de-AT")
-                              : "noch nicht durchgeführt"}
-                          </span>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
+              <AdminDiagnosticsView
+                diagnosticsData={diagnosticsData}
+                pollingError={
+                  diagnosticsPollFailed
+                    ? "Diagnosedaten konnten nicht aktualisiert werden."
+                    : null
+                }
+                lastUpdated={diagnosticsLastFetchedAt}
+                isRetryingFailedJobs={isRetryingJobs}
+                onRefresh={() => void fetchData()}
+                onRetryFailedJobs={handleRetryFailedJobs}
+                onNavigateToArea={(tab) => navigateToArea(tab as Tab)}
+              />
             ) : activeTab === "events" ? (
               <AdminEventsView
                 events={data as EventItem[]}
@@ -1740,682 +1143,60 @@ export const AdminDashboardController = ({
                 isRefreshing={isLoading}
               />
             ) : activeTab === "printers" ? (
-              /* Printers Table */
-              <div className="space-y-6">
-                {/* Unklare Druckaufträge (Konzept 64, Abschnitt 2.2) */}
-                {unresolvedJobs.length === 0 ? (
-                  <div className="text-sm text-slate-500 flex items-center gap-2 py-2">
-                    <CheckCircle2 className="w-4 h-4" />
-                    Keine unklaren Druckaufträge.
-                  </div>
-                ) : (
-                  <div className="bg-amber-500/5 border border-amber-500/30 rounded-2xl p-5 space-y-4">
-                    <div className="flex items-center gap-2 text-amber-300 font-bold">
-                      <AlertTriangle className="w-5 h-5" />
-                      Unklare Druckaufträge ({unresolvedJobs.length})
-                    </div>
-                    <p className="text-xs text-slate-400">
-                      Diese Aufträge brauchen eine Entscheidung, bevor sie aus
-                      der Warteschlange verschwinden. Bitte am Drucker
-                      nachsehen.
-                    </p>
-                    <div className="space-y-3">
-                      {unresolvedJobs.map((job: any) => {
-                        const feedback = justResolvedIds[job.id];
-                        return (
-                          <div
-                            key={job.id}
-                            className="bg-slate-900/70 border border-slate-800 rounded-xl p-4 space-y-3"
-                          >
-                            {feedback ? (
-                              <div
-                                role="status"
-                                className={`text-sm font-bold rounded-xl px-3 py-2 border ${
-                                  feedback.tone === "ok"
-                                    ? "bg-emerald-500/15 text-emerald-300 border-emerald-500/30"
-                                    : feedback.tone === "reprint"
-                                      ? "bg-indigo-500/15 text-indigo-300 border-indigo-500/30"
-                                      : "bg-slate-800 text-slate-300 border-slate-700"
-                                }`}
-                              >
-                                {feedback.text}
-                              </div>
-                            ) : (
-                              <>
-                                <div>
-                                  <div className="text-sm font-bold text-slate-100">
-                                    {describeJobType(job)} · Bestellung #
-                                    {job.content?.orderNumber ?? "?"} ·{" "}
-                                    {job.printerName}
-                                  </div>
-                                  <div className="text-xs text-slate-500 mt-0.5">
-                                    vor {formatMinutesAgoLong(job.unresolvedAt)}{" "}
-                                    ({formatClockTime(job.unresolvedAt)} Uhr)
-                                  </div>
-                                </div>
-                                <p className="text-sm text-slate-300 sm:max-w-prose">
-                                  {describeUnresolvedReason(job)}
-                                </p>
-                                <details className="text-xs text-slate-500">
-                                  <summary className="cursor-pointer select-none">
-                                    Details
-                                  </summary>
-                                  <div className="mt-1 space-y-0.5 font-mono">
-                                    <div>
-                                      Versuche: {job.attemptCount ?? "–"}
-                                    </div>
-                                    <div>
-                                      Failover: {job.failoverCount ?? "–"}
-                                    </div>
-                                    {job.cupsJobState && (
-                                      <div>CUPS-Status: {job.cupsJobState}</div>
-                                    )}
-                                  </div>
-                                </details>
-                                <div className="flex flex-col sm:flex-row sm:items-center gap-2 pt-2 border-t border-slate-800">
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      openResolveDialog(
-                                        job,
-                                        "CONFIRMED_PRINTED",
-                                      )
-                                    }
-                                    className="w-full sm:w-auto px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-100 text-sm font-bold border border-slate-700 flex items-center justify-center gap-2"
-                                  >
-                                    <CheckCircle2 className="w-4 h-4" />
-                                    Als gedruckt bestätigen
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      openResolveDialog(job, "REPRINTED")
-                                    }
-                                    className="w-full sm:w-auto px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-100 text-sm font-bold border border-slate-700 flex items-center justify-center gap-2"
-                                  >
-                                    <RotateCcw className="w-4 h-4" />
-                                    Erneut drucken
-                                  </button>
-                                  {canDiscardPrintJobs && (
-                                    <button
-                                      type="button"
-                                      onClick={() =>
-                                        openResolveDialog(job, "DISCARDED")
-                                      }
-                                      className="sm:ml-auto text-xs font-bold text-rose-400 hover:text-rose-300 underline underline-offset-2 self-start sm:self-auto pl-1 py-1"
-                                    >
-                                      Verwerfen
-                                    </button>
-                                  )}
-                                </div>
-                              </>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-
-                <div className="flex justify-between items-center text-sm text-slate-400 pb-2 border-b border-slate-800">
-                  <span>
-                    Konfigurierte Beleg- und Küchenbondrucker (ESC/POS &
-                    Konsole)
-                  </span>
-                  <span>
-                    Aktive Drucker: {data.filter((p: any) => p.isActive).length}
-                  </span>
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {data.map((printer: any) => (
-                    <div
-                      key={printer.id}
-                      className="bg-slate-900/70 border border-slate-800 p-5 rounded-2xl space-y-3"
-                    >
-                      <div className="flex justify-between items-start">
-                        <div className="flex items-center gap-3">
-                          <div className="p-2.5 bg-indigo-500/20 text-indigo-400 rounded-xl">
-                            <Printer className="w-6 h-6" />
-                          </div>
-                          <div>
-                            <h4 className="text-lg font-bold text-slate-100">
-                              {printer.name}
-                            </h4>
-                            <span className="text-xs text-slate-400 font-mono block">
-                              Typ: {printer.type}{" "}
-                              {printer.ipAddress
-                                ? `(${printer.ipAddress}:${printer.port || 9100})`
-                                : ""}
-                            </span>
-                            <span className="text-xs text-slate-500 font-mono block">
-                              {printer.paperWidth || 80} mm ·{" "}
-                              {printer.codepage || "CP858"} · Schnitt:{" "}
-                              {printer.cutMode || "PARTIAL"} ·{" "}
-                              {printer.copies || 1}x ·{" "}
-                              {printer.timeoutMs || 5000} ms
-                            </span>
-                          </div>
-                        </div>
-                        <span
-                          className={`text-xs px-2.5 py-1 rounded-full font-bold ${printer.isActive ? "bg-emerald-500/20 text-emerald-400 border border-emerald-500/30" : "bg-slate-800 text-slate-500"}`}
-                        >
-                          {printer.isActive ? "Bereit" : "Inaktiv"}
-                        </span>
-                      </div>
-
-                      {printerTests[printer.id] && (
-                        <div
-                          role="status"
-                          className={`text-xs font-bold rounded-xl px-3 py-2 border ${
-                            printerTests[printer.id].state === "ok"
-                              ? "bg-emerald-500/15 text-emerald-300 border-emerald-500/30"
-                              : printerTests[printer.id].state === "error"
-                                ? "bg-rose-500/15 text-rose-300 border-rose-500/30"
-                                : "bg-slate-800 text-slate-300 border-slate-700"
-                          }`}
-                        >
-                          {printerTests[printer.id].message}
-                        </div>
-                      )}
-
-                      <div className="pt-2 flex justify-between items-center border-t border-slate-800">
-                        <button
-                          onClick={() => handleTestPrint(printer.id)}
-                          disabled={
-                            printerTests[printer.id]?.state === "running"
-                          }
-                          className="px-3 py-1.5 rounded-xl bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 text-xs font-bold transition flex items-center gap-1.5 border border-indigo-500/30 disabled:opacity-50 disabled:cursor-not-allowed"
-                        >
-                          <Printer className="w-3.5 h-3.5" />
-                          {printerTests[printer.id]?.state === "running"
-                            ? "Testbon läuft …"
-                            : "Testbon drucken"}
-                        </button>
-                        <div className="flex gap-2">
-                          <button
-                            onClick={() => handleOpenModal(printer)}
-                            className="p-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-slate-300 transition-colors"
-                            title="Bearbeiten"
-                          >
-                            <Edit2 className="w-4 h-4" />
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                  {data.length === 0 && (
-                    <div className="col-span-2 text-center py-12 text-slate-500">
-                      Keine Drucker konfiguriert.
-                    </div>
-                  )}
-                </div>
-              </div>
+              <AdminPrintersView
+                printers={data}
+                unresolvedJobs={unresolvedJobs}
+                printerTests={printerTests}
+                canDiscardPrintJobs={canDiscardPrintJobs}
+                justResolvedIds={justResolvedIds}
+                isRefreshing={isLoading}
+                onRefresh={() => void fetchData()}
+                onOpenCreate={() => void handleOpenModal()}
+                onEdit={(item) => void handleOpenModal(item)}
+                onDelete={(id) => void handleDelete(id)}
+                onTestPrint={(id) => void handleTestPrint(id)}
+                onOpenResolveDialog={(job, resolution) =>
+                  openResolveDialog(job, resolution)
+                }
+              />
             ) : activeTab === "backups" ? (
-              /* Backups & Data Protection */
-              <div className="space-y-6">
-                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-slate-900/80 border border-slate-800 p-5 rounded-2xl">
-                  <div className="flex items-center gap-3">
-                    <div className="p-3 bg-emerald-500/20 text-emerald-400 rounded-2xl border border-emerald-500/30">
-                      <ShieldCheck className="w-6 h-6" />
-                    </div>
-                    <div>
-                      <h3 className="text-lg font-bold text-white">
-                        Automatische & Manuelle Datensicherung
-                      </h3>
-                      <p className="text-xs text-slate-400 mt-0.5">
-                        Stündliche PostgreSQL-Sicherung unabhängig vom
-                        Veranstaltungsstatus. Custom-Dump und Manifest werden
-                        mit SHA-256 und pg_restore geprüft.
-                      </p>
-                    </div>
-                  </div>
-
-                  <button
-                    disabled={isBackingUp}
-                    onClick={handleCreateBackup}
-                    className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-bold text-sm rounded-xl shadow-lg shadow-emerald-600/30 transition flex items-center gap-2 shrink-0"
-                  >
-                    <HardDrive className="w-4 h-4" />
-                    {isBackingUp
-                      ? "Sicherung läuft..."
-                      : "Jetzt sichern (Manuelles Backup)"}
-                  </button>
-                </div>
-
-                {restoreOperation && (
-                  <section className="rounded-2xl border border-amber-500/40 bg-amber-500/10 p-5">
-                    <div className="flex items-start gap-3">
-                      <AlertTriangle className="mt-0.5 h-6 w-6 shrink-0 text-amber-300" />
-                      <div className="min-w-0 flex-1">
-                        <h3 className="font-black text-amber-100">
-                          Wiederherstellung wartet auf Abnahme
-                        </h3>
-                        <p className="mt-1 break-all text-sm text-amber-100/80">
-                          {restoreOperation.backupFilename} · Phase{" "}
-                          {restoreOperation.phase}
-                        </p>
-                        <p className="mt-1 text-sm text-slate-300">
-                          {restoreOperation.activeCashierSessions} offene
-                          Kassensitzung(en) wurden protokolliert. Die
-                          Rückfalldatenbank bleibt bis zu deiner Entscheidung
-                          erhalten.
-                        </p>
-                        <label
-                          htmlFor="restore-operation-confirmation"
-                          className="mt-4 block text-sm font-bold text-slate-200"
-                        >
-                          Sicherungszeitpunkt für die Entscheidung exakt
-                          eingeben
-                        </label>
-                        <code className="mt-1 block break-all text-xs text-amber-200">
-                          {restoreOperation.backupCreatedAt}
-                        </code>
-                        <input
-                          id="restore-operation-confirmation"
-                          value={restoreOperationConfirmation}
-                          onChange={(event) =>
-                            setRestoreOperationConfirmation(event.target.value)
-                          }
-                          autoComplete="off"
-                          spellCheck={false}
-                          className="mt-2 min-h-11 w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 font-mono text-sm text-white focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-400/30"
-                        />
-                        <div className="mt-4 flex flex-col gap-2 sm:flex-row">
-                          {restoreOperation.rollbackAvailable && (
-                            <button
-                              type="button"
-                              onClick={() => handleRestoreOperation("rollback")}
-                              disabled={
-                                restoreOperationBusy ||
-                                restoreOperationConfirmation !==
-                                  restoreOperation.backupCreatedAt
-                              }
-                              className="min-h-11 rounded-xl border border-rose-500/40 bg-rose-500/20 px-4 py-2 font-bold text-rose-200 hover:bg-rose-500/30 disabled:cursor-not-allowed disabled:opacity-40"
-                            >
-                              Wiederherstellung rückgängig machen
-                            </button>
-                          )}
-                          {restoreOperation.acceptanceAvailable && (
-                            <button
-                              type="button"
-                              onClick={() => handleRestoreOperation("accept")}
-                              disabled={
-                                restoreOperationBusy ||
-                                restoreOperationConfirmation !==
-                                  restoreOperation.backupCreatedAt
-                              }
-                              className="min-h-11 rounded-xl bg-emerald-600 px-4 py-2 font-black text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-40"
-                            >
-                              {restoreOperation.phase === "ROLLBACK_COMPLETED"
-                                ? "Rücknahme abnehmen und Wartung beenden"
-                                : "Wiederherstellung abnehmen und Wartung beenden"}
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  </section>
-                )}
-
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left">
-                    <thead>
-                      <tr className="text-slate-400 border-b border-slate-700/50 text-xs uppercase font-semibold">
-                        <th className="pb-3">Backup-Datei</th>
-                        <th className="pb-3">Erstellt am</th>
-                        <th className="pb-3">Größe</th>
-                        <th className="pb-3">Umfang</th>
-                        <th className="pb-3">Integrität (SHA256)</th>
-                        <th className="pb-3 text-right">Aktionen</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-700/50 text-sm">
-                      {data.map((b: BackupItem, index: number) => (
-                        <tr
-                          key={b.filename || `backup-${index}`}
-                          className="hover:bg-slate-800/30 transition-colors"
-                        >
-                          <td className="py-4 font-mono font-medium text-indigo-300">
-                            <div>{b.filename}</div>
-                            <div className="mt-1 font-sans text-[11px] text-slate-500">
-                              {b.format === "POSTGRES_CUSTOM"
-                                ? "PostgreSQL Custom-Dump"
-                                : b.format === "LEGACY_JSON"
-                                  ? "Altbestand (JSON)"
-                                  : "Beschädigt oder unvollständig"}
-                              {b.trigger && b.trigger !== "LEGACY"
-                                ? ` · ${b.trigger}`
-                                : ""}
-                            </div>
-                          </td>
-                          <td className="py-4 text-slate-300">
-                            {new Date(b.createdAt).toLocaleString("de-AT")}
-                          </td>
-                          <td className="py-4 text-slate-400">
-                            {(b.sizeBytes / 1024).toFixed(1)} kB
-                          </td>
-                          <td className="py-4 text-xs text-slate-400">
-                            {b.counts ? (
-                              <span>
-                                {b.counts.Order || b.counts.orders || 0}{" "}
-                                Bestellungen,{" "}
-                                {b.counts.Product || b.counts.products || 0}{" "}
-                                Artikel
-                              </span>
-                            ) : (
-                              "-"
-                            )}
-                          </td>
-                          <td
-                            className="py-4 font-mono text-xs text-slate-500"
-                            title={b.checksumSha256}
-                          >
-                            <div>
-                              {b.verification === "RESTORE_VERIFIED"
-                                ? "Wiederherstellungsgeprüft"
-                                : b.verification === "STRUCTURE_VERIFIED"
-                                  ? "Strukturgeprüft"
-                                  : b.verification === "LEGACY"
-                                    ? "Legacy-Prüfsumme"
-                                    : "Nicht verwendbar"}
-                            </div>
-                            {b.checksumSha256 && (
-                              <div title={b.checksumSha256}>
-                                {b.checksumSha256.slice(0, 12)}...
-                              </div>
-                            )}
-                          </td>
-                          <td className="py-4 text-right">
-                            <div className="flex justify-end gap-2">
-                              {(b.downloadFiles || []).map((downloadFile) => (
-                                <button
-                                  key={downloadFile}
-                                  onClick={() =>
-                                    handleDownloadBackup(downloadFile)
-                                  }
-                                  className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 rounded-lg text-slate-300 transition text-xs font-bold flex items-center gap-1.5 border border-slate-700"
-                                  title={`${downloadFile} herunterladen`}
-                                >
-                                  <Download className="w-3.5 h-3.5" />
-                                  {downloadFile.endsWith(".manifest.json")
-                                    ? "Manifest"
-                                    : downloadFile.endsWith(".dump")
-                                      ? "Dump"
-                                      : "Download"}
-                                </button>
-                              ))}
-                              {b.restoreVerificationAvailable && (
-                                <button
-                                  onClick={() =>
-                                    handleVerifyRestore(b.filename)
-                                  }
-                                  disabled={verifyingBackup !== null}
-                                  className="px-3 py-1.5 bg-sky-500/20 hover:bg-sky-500/30 text-sky-300 rounded-lg transition text-xs font-bold flex items-center gap-1.5 border border-sky-500/30 disabled:opacity-50 disabled:cursor-not-allowed"
-                                  title="Vollständig in einer isolierten Nebendatenbank prüfen; die Festdatenbank bleibt unverändert"
-                                >
-                                  <ShieldCheck className="w-3.5 h-3.5" />
-                                  {verifyingBackup === b.filename
-                                    ? "Prüfung läuft …"
-                                    : "Wiederherstellung prüfen"}
-                                </button>
-                              )}
-                              {b.restoreAvailable &&
-                                b.format === "POSTGRES_CUSTOM" && (
-                                  <button
-                                    onClick={() => openRestorePreparation(b)}
-                                    disabled={
-                                      preparingBackup !== null ||
-                                      verifyingBackup !== null
-                                    }
-                                    className="px-3 py-1.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 rounded-lg transition text-xs font-bold flex items-center gap-1.5 border border-amber-500/30 disabled:opacity-50 disabled:cursor-not-allowed"
-                                    title="Nur im Zustand LOCKED: PRE_RESTORE-Sicherung, isolierte Prüfung, Datenbanktausch und Rückfallebene"
-                                  >
-                                    <RotateCcw className="w-3.5 h-3.5" />
-                                    {preparingBackup === b.filename
-                                      ? "Wiederherstellung läuft …"
-                                      : "Sicher wiederherstellen"}
-                                  </button>
-                                )}
-                              {b.restoreAvailable &&
-                              b.format === "LEGACY_JSON" ? (
-                                <button
-                                  onClick={() =>
-                                    handleRestoreBackup(b.filename)
-                                  }
-                                  className="px-3 py-1.5 bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 rounded-lg transition text-xs font-bold flex items-center gap-1.5 border border-rose-500/30"
-                                  title="Nur im gesperrten Wartungsmodus wiederherstellen"
-                                >
-                                  <RotateCcw className="w-3.5 h-3.5" />
-                                  Legacy wiederherstellen
-                                </button>
-                              ) : !b.restoreAvailable &&
-                                !b.restoreVerificationAvailable &&
-                                !b.restorePreparationAvailable ? (
-                                <span
-                                  className="max-w-52 text-left text-[11px] leading-snug text-slate-500"
-                                  title={
-                                    b.restoreUnavailableReason || undefined
-                                  }
-                                >
-                                  {b.restorePreparationUnavailableReason ||
-                                    b.restoreVerificationUnavailableReason ||
-                                    b.restoreUnavailableReason ||
-                                    "Wiederherstellung nicht verfügbar"}
-                                </span>
-                              ) : null}
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
-                      {data.length === 0 && (
-                        <tr>
-                          <td
-                            colSpan={6}
-                            className="text-center py-12 text-slate-500"
-                          >
-                            Noch keine Datensicherungen vorhanden. Erstelle
-                            jetzt ein manuelles Backup.
-                          </td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
+              <AdminBackupsView
+                backups={data}
+                restoreOperation={restoreOperation}
+                restoreOperationConfirmation={restoreOperationConfirmation}
+                isBackingUp={isBackingUp}
+                isRestoring={preparingBackup !== null}
+                isRollingBack={restoreOperationBusy}
+                isAccepting={restoreOperationBusy}
+                isRefreshing={isLoading}
+                onRefresh={() => void fetchData()}
+                onCreateBackup={handleCreateBackup}
+                onVerifyBackup={(b) => void handleVerifyRestore(b.filename)}
+                onPrepareRestore={(b) => openRestorePreparation(b)}
+                onDownloadBackup={(b, file) =>
+                  void handleDownloadBackup(file || b.downloadFiles?.[0] || b.filename)
+                }
+                onRollbackRestore={() =>
+                  void handleRestoreOperation("rollback")
+                }
+                onAcceptRestore={() => void handleRestoreOperation("accept")}
+                onSetRestoreOperationConfirmation={
+                  setRestoreOperationConfirmation
+                }
+                onOpenDirectRestore={(filename) =>
+                  void handleRestoreBackup(filename)
+                }
+              />
             ) : activeTab === "maintenance" ? (
-              /* Wartungsmodus (Issue #67) - eigenständige Komponente, holt und
-             ändert ihren Zustand selbst über GET/POST /maintenance/*, statt
-             sich in den generischen Listen-Ladepfad (fetchData/data) dieser
-             Datei einzuklinken, der für paginierte Ressourcenlisten gebaut
-             ist. */
-              <MaintenancePanel />
+              <AdminMaintenanceView />
             ) : activeTab === "audit" ? (
-              /* Audit-Log & Security */
-              <div className="space-y-6">
-                {/* KPI Summary Cards */}
-                {auditStats && (
-                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-                    <div className="bg-slate-900/80 border border-slate-800 p-4 rounded-2xl">
-                      <span className="text-xs text-slate-400 font-medium">
-                        Gesamt-Aktionen
-                      </span>
-                      <div className="text-2xl font-bold text-white mt-1">
-                        {auditStats.totalCount}
-                      </div>
-                    </div>
-                    <div className="bg-slate-900/80 border border-slate-800 p-4 rounded-2xl">
-                      <span className="text-xs text-slate-400 font-medium">
-                        Heute
-                      </span>
-                      <div className="text-2xl font-bold text-indigo-400 mt-1">
-                        {auditStats.todayCount}
-                      </div>
-                    </div>
-                    <div className="bg-slate-900/80 border border-slate-800 p-4 rounded-2xl">
-                      <span className="text-xs text-slate-400 font-medium">
-                        Stornierungen
-                      </span>
-                      <div className="text-2xl font-bold text-rose-400 mt-1">
-                        {auditStats.cancellationsCount}
-                      </div>
-                    </div>
-                    <div className="bg-slate-900/80 border border-slate-800 p-4 rounded-2xl">
-                      <span className="text-xs text-slate-400 font-medium">
-                        Preisänderungen
-                      </span>
-                      <div className="text-2xl font-bold text-amber-400 mt-1">
-                        {auditStats.priceChangesCount}
-                      </div>
-                    </div>
-                    <div className="bg-slate-900/80 border border-slate-800 p-4 rounded-2xl">
-                      <span className="text-xs text-slate-400 font-medium">
-                        Login-Fehlversuche
-                      </span>
-                      <div className="text-2xl font-bold text-red-500 mt-1">
-                        {auditStats.failedLoginsCount}
-                      </div>
-                    </div>
-                    <div className="bg-slate-900/80 border border-slate-800 p-4 rounded-2xl">
-                      <span className="text-xs text-slate-400 font-medium">
-                        RKSV-Bestätigungen
-                      </span>
-                      <div className="text-2xl font-bold text-purple-400 mt-1">
-                        {auditStats.rksvConfirmationsCount}
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {/* Filter Bar & Export */}
-                <div className="flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-3 bg-slate-900/80 border border-slate-800 p-4 rounded-2xl">
-                  <div className="flex flex-wrap items-center gap-3 flex-1">
-                    <div className="relative flex-1 min-w-[200px]">
-                      <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
-                      <input
-                        type="text"
-                        value={auditSearch}
-                        onChange={(e) => setAuditSearch(e.target.value)}
-                        placeholder="Benutzer, Aktion oder Detail durchsuchen..."
-                        className="w-full bg-slate-800 border border-slate-700 rounded-xl pl-9 pr-4 py-2 text-sm text-white placeholder-slate-500"
-                      />
-                    </div>
-
-                    <select
-                      value={auditFilterAction}
-                      onChange={(e) => setAuditFilterAction(e.target.value)}
-                      className="bg-slate-800 border border-slate-700 rounded-xl px-4 py-2 text-sm text-white font-medium"
-                    >
-                      <option value="">Alle Aktionen</option>
-                      <option value="LOGIN">Anmeldung (Login)</option>
-                      <option value="FAILED_LOGIN">
-                        Fehlgeschlagene Logins
-                      </option>
-                      <option value="CANCEL_ORDER">Bestellstorno</option>
-                      <option value="CANCEL_ORDER_ITEM">Positionstorno</option>
-                      <option value="PRICE_CHANGED">Preisänderung</option>
-                      <option value="PAYMENT_RECEIVED">Zahlung</option>
-                      <option value="ACTIVATE_EVENT_RKSV">
-                        RKSV-Bestätigung
-                      </option>
-                      <option value="CREATE_BACKUP">Datensicherung</option>
-                    </select>
-                  </div>
-
-                  <button
-                    onClick={handleExportAuditCsv}
-                    className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs rounded-xl shadow-md shadow-indigo-600/30 transition flex items-center gap-2 shrink-0 justify-center"
-                  >
-                    <FileSpreadsheet className="w-4 h-4" />
-                    Audit-Log als CSV exportieren
-                  </button>
-                </div>
-
-                {/* Audit Log Table */}
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left">
-                    <thead>
-                      <tr className="text-slate-400 border-b border-slate-700/50 text-xs uppercase font-semibold">
-                        <th className="pb-3">Zeitpunkt</th>
-                        <th className="pb-3">Aktion</th>
-                        <th className="pb-3">Benutzer</th>
-                        <th className="pb-3">Entität</th>
-                        <th className="pb-3">Details & Begründung</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-700/50 text-sm">
-                      {data.map((log: AuditLogItem, index: number) => (
-                        <tr
-                          key={log.id || `${log.createdAt}-${index}`}
-                          className="hover:bg-slate-800/30 transition-colors"
-                        >
-                          <td className="py-3.5 whitespace-nowrap text-slate-300 font-mono text-xs">
-                            {new Date(log.createdAt).toLocaleString("de-AT")}
-                          </td>
-                          <td className="py-3.5">
-                            {getActionBadge(log.action)}
-                          </td>
-                          <td className="py-3.5 text-slate-200">
-                            {log.user ? (
-                              <div className="flex items-center gap-2">
-                                <span className="font-semibold">
-                                  {log.user.username}
-                                </span>
-                                <span className="text-[10px] bg-slate-800 px-1.5 py-0.5 rounded text-slate-400">
-                                  {log.user.role}
-                                </span>
-                              </div>
-                            ) : (
-                              <span className="text-slate-500 italic">
-                                System
-                              </span>
-                            )}
-                          </td>
-                          <td className="py-3.5 font-mono text-xs text-slate-400">
-                            {log.entityType}
-                          </td>
-                          <td className="py-3.5 text-xs text-slate-300 font-mono max-w-md truncate">
-                            {log.details ? (
-                              <span
-                                title={JSON.stringify(log.details, null, 2)}
-                              >
-                                {log.details.reason ? (
-                                  <span className="text-rose-300 font-semibold mr-2">
-                                    Grund: „{log.details.reason}“
-                                  </span>
-                                ) : null}
-                                {log.details.previousPrice ? (
-                                  <span className="text-amber-300 font-semibold mr-2">
-                                    €{" "}
-                                    {(log.details.previousPrice / 100).toFixed(
-                                      2,
-                                    )}{" "}
-                                    ➔ €{" "}
-                                    {(log.details.newPrice / 100).toFixed(2)}
-                                  </span>
-                                ) : null}
-                                {JSON.stringify(log.details)}
-                              </span>
-                            ) : (
-                              "-"
-                            )}
-                          </td>
-                        </tr>
-                      ))}
-                      {data.length === 0 && (
-                        <tr>
-                          <td
-                            colSpan={5}
-                            className="text-center py-12 text-slate-500"
-                          >
-                            Keine Audit-Einträge für die gewählten Filter
-                            gefunden.
-                          </td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
+              <AdminAuditView
+                auditLogs={data}
+                auditStats={auditStats}
+                isRefreshing={isLoading}
+                onRefresh={() => void fetchData()}
+                onExportCsv={handleExportAuditCsv}
+              />
             ) : activeTab === "areas" ? (
               <AdminAreasView
                 areas={data}
@@ -3457,6 +2238,7 @@ export const AdminDashboardController = ({
           <div
             role="dialog"
             aria-modal="true"
+            aria-label="Sicher wiederherstellen"
             aria-labelledby="restore-preparation-title"
             className="max-h-[calc(100vh-2rem)] w-full max-w-xl overflow-y-auto rounded-2xl border border-amber-500/30 bg-slate-900 p-5 shadow-2xl sm:p-6"
           >

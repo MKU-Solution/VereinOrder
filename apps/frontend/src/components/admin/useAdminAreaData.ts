@@ -116,8 +116,19 @@ export const useAdminAreaData = (activeArea: AdminAreaId) => {
       }
 
       if (activeArea === "backups") {
-        const operation = await api.get("/backup/restore-operation");
-        setRestoreOperation(operation.data || null);
+        try {
+          const operation = await api.get("/backup/restore-operation");
+          setRestoreOperation(
+            operation.data &&
+              typeof operation.data === "object" &&
+              !Array.isArray(operation.data) &&
+              (operation.data.swapId || operation.data.phase)
+              ? operation.data
+              : null,
+          );
+        } catch {
+          setRestoreOperation(null);
+        }
         setRestoreOperationConfirmation("");
       }
 

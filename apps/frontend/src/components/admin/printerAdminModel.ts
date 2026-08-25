@@ -20,26 +20,38 @@ const PRINTER_ERROR_LABELS: Record<string, string> = {
 const describePrinterError = (code?: string | null): string =>
   code ? (PRINTER_ERROR_LABELS[code] ?? code) : "unbekannter Fehler";
 
-const formatMinutesAgoShort = (value?: string | null): string => {
+const formatMinutesAgoShort = (
+  value?: string | number | Date | null,
+): string => {
   if (!value) return "unbekannter Zeit";
-  const minutes = Math.max(
-    0,
-    Math.floor((Date.now() - new Date(value).getTime()) / 60000),
-  );
+  const ms =
+    typeof value === "number" || typeof value === "string"
+      ? new Date(value).getTime()
+      : value instanceof Date
+        ? value.getTime()
+        : 0;
+  const minutes = Math.max(0, Math.floor((Date.now() - ms) / 60000));
   return minutes < 1 ? "< 1 Min." : `${minutes} Min.`;
 };
 
-export const formatMinutesAgoLong = (value?: string | null): string => {
+export const formatMinutesAgoLong = (
+  value?: string | number | Date | null,
+): string => {
   if (!value) return "unbekannter Zeit";
-  const minutes = Math.max(
-    0,
-    Math.floor((Date.now() - new Date(value).getTime()) / 60000),
-  );
+  const ms =
+    typeof value === "number" || typeof value === "string"
+      ? new Date(value).getTime()
+      : value instanceof Date
+        ? value.getTime()
+        : 0;
+  const minutes = Math.max(0, Math.floor((Date.now() - ms) / 60000));
   if (minutes < 1) return "weniger als einer Minute";
   return `${minutes} ${minutes === 1 ? "Minute" : "Minuten"}`;
 };
 
-export const formatClockTime = (value?: string | null): string =>
+export const formatClockTime = (
+  value?: string | number | Date | null,
+): string =>
   value
     ? new Date(value).toLocaleTimeString("de-AT", {
         hour: "2-digit",
