@@ -1,12 +1,16 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../../lib/api";
-import { EventConfigurationActions } from "./EventConfigurationActions";
 import { AdminAreaState } from "./AdminAreaState";
 import { AdminDashboardShell } from "./AdminDashboardShell";
-import { AdminEntityTable } from "./AdminEntityTable";
-import { MaintenancePanel } from "./MaintenancePanel";
 import { AdminOverviewPage } from "./AdminOverviewPage";
+import { AdminEventsView } from "./AdminEventsView";
+import { AdminAreasView } from "./AdminAreasView";
+import { AdminStationsView } from "./AdminStationsView";
+import { AdminCategoriesView } from "./AdminCategoriesView";
+import { AdminProductsView } from "./AdminProductsView";
+import { AdminUsersView } from "./AdminUsersView";
+import { MaintenancePanel } from "./MaintenancePanel";
 import type { AuditLogItem, BackupItem, EventItem } from "./adminDomainTypes";
 import { backendMessage, formatStorageBytes } from "./adminFormatters";
 import {
@@ -35,13 +39,8 @@ import { useAdminAreaData } from "./useAdminAreaData";
 import { useAuthStore } from "../../store/useAuthStore";
 import {
   Edit2,
-  Trash2,
   ShieldAlert,
   CheckCircle2,
-  Play,
-  Pause,
-  Square,
-  Sparkles,
   AlertTriangle,
   Printer,
   HardDrive,
@@ -148,6 +147,28 @@ export const AdminDashboardController = ({
   });
   const [productCategories, setProductCategories] = useState<any[]>([]);
   const [productStations, setProductStations] = useState<any[]>([]);
+
+  useEffect(() => {
+    if (!eventId) {
+      setProductCategories([]);
+      setProductStations([]);
+      return;
+    }
+    const loadEventMetadata = async () => {
+      try {
+        const [categoriesRes, stationsRes] = await Promise.all([
+          api.get(`/categories?eventId=${eventId}`),
+          api.get(`/stations/admin/all?eventId=${eventId}`),
+        ]);
+        setProductCategories(categoriesRes.data || []);
+        setProductStations(stationsRes.data || []);
+      } catch (err) {
+        console.error("Failed to load event metadata", err);
+      }
+    };
+    void loadEventMetadata();
+  }, [eventId, data]);
+
   // Auswahlgruppen (Issue #75) — Formularzustand im Produktmodal
   const [optionGroups, setOptionGroups] = useState<OptionGroupFormState[]>([]);
   const [optionGroupsValidationAttempted, setOptionGroupsValidationAttempted] =
@@ -1109,52 +1130,6 @@ export const AdminDashboardController = ({
     return parts.join(" ");
   };
 
-  const getStatusBadge = (status: string, rksvConfirmedAt?: string) => {
-    switch (status) {
-      case "ACTIVE":
-        return (
-          <div className="flex flex-col items-start gap-1">
-            <span className="bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 px-2.5 py-1 rounded-full text-xs font-bold flex items-center gap-1.5 shadow-sm shadow-emerald-500/20">
-              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-              Echtbetrieb (Aktiv)
-            </span>
-            {rksvConfirmedAt && (
-              <span className="text-[10px] text-emerald-300/80 font-medium">
-                ✓ RKSV-Ausschluss bestätigt
-              </span>
-            )}
-          </div>
-        );
-      case "TEST_MODE":
-        return (
-          <span className="bg-amber-500/20 text-amber-300 border border-amber-500/30 px-2.5 py-1 rounded-full text-xs font-bold flex items-center gap-1.5">
-            <Sparkles className="w-3.5 h-3.5" />
-            Testmodus (Schulung)
-          </span>
-        );
-      case "PAUSED":
-        return (
-          <span className="bg-slate-700 text-slate-300 px-2.5 py-1 rounded-full text-xs font-bold flex items-center gap-1.5">
-            <Pause className="w-3.5 h-3.5" />
-            Pausiert
-          </span>
-        );
-      case "COMPLETED":
-        return (
-          <span className="bg-indigo-500/20 text-indigo-300 px-2.5 py-1 rounded-full text-xs font-bold flex items-center gap-1.5">
-            <CheckCircle2 className="w-3.5 h-3.5" />
-            Abgeschlossen
-          </span>
-        );
-      default:
-        return (
-          <span className="bg-slate-800 text-slate-400 px-2.5 py-1 rounded-full text-xs font-medium">
-            Entwurf (DRAFT)
-          </span>
-        );
-    }
-  };
-
   const getActionBadge = (action?: string) => {
     if (!action)
       return (
@@ -1235,6 +1210,9 @@ export const AdminDashboardController = ({
         activePage={activePage}
         unresolvedJobCount={unresolvedJobs.length}
         selectedEvent={selectedEvent}
+        events={events}
+        selectedEventId={eventId}
+        onSelectEvent={setEventId}
         connectionStatus={connectionStatus}
         connectionCheckedAt={connectionCheckedAt}
         showOperatingStatus={activePage !== "overview"}
@@ -1748,116 +1726,19 @@ export const AdminDashboardController = ({
                 </div>
               </div>
             ) : activeTab === "events" ? (
-              /* Events Lifecycle Cards */
-              <div className="space-y-4">
-                {data.map((evt: EventItem) => (
-                  <div
-                    key={evt.id}
-                    className="bg-slate-900/60 border border-slate-800/80 p-5 rounded-2xl flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4 hover:border-slate-700 transition"
-                  >
-                    <div className="space-y-2">
-                      <div className="flex items-center gap-3">
-                        <h3 className="text-xl font-bold text-slate-100">
-                          {evt.name}
-                        </h3>
-                        {getStatusBadge(evt.status, evt.rksvConfirmedAt)}
-                      </div>
-                      <div className="flex flex-wrap gap-4 text-xs text-slate-400">
-                        {evt.organizer && <span>🏛️ {evt.organizer}</span>}
-                        {evt.location && <span>📍 {evt.location}</span>}
-                        {evt.startTime && (
-                          <span>
-                            📅 {new Date(evt.startTime).toLocaleDateString()}
-                          </span>
-                        )}
-                      </div>
-                      {evt._count && (
-                        <div className="flex gap-4 text-xs text-slate-500 pt-1">
-                          <span>{evt._count.orders} Bestellungen</span>
-                          <span>•</span>
-                          <span>{evt._count.products} Artikel</span>
-                          <span>•</span>
-                          <span>{evt._count.stations} Stationen</span>
-                          <span>•</span>
-                          <span>{evt._count.areas} Bereiche</span>
-                        </div>
-                      )}
-                    </div>
-
-                    <div className="flex flex-wrap items-center gap-2 pt-2 lg:pt-0 w-full lg:w-auto justify-end">
-                      {/* Status Actions */}
-                      {evt.status !== "ACTIVE" && (
-                        <button
-                          onClick={() => handleOpenActivateModal(evt)}
-                          className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition flex items-center gap-1.5 shadow-md shadow-emerald-600/30"
-                        >
-                          <Play className="w-3.5 h-3.5" />
-                          Scharf schalten (Echtbetrieb)
-                        </button>
-                      )}
-
-                      {evt.status !== "TEST_MODE" &&
-                        evt.status !== "ACTIVE" && (
-                          <button
-                            onClick={() => handleSetTestMode(evt)}
-                            className="px-3 py-2 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 text-xs font-bold transition flex items-center gap-1.5 border border-amber-500/30"
-                          >
-                            <Sparkles className="w-3.5 h-3.5" />
-                            Testmodus
-                          </button>
-                        )}
-
-                      {evt.status === "ACTIVE" && (
-                        <button
-                          onClick={() => handlePauseEvent(evt)}
-                          className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold transition flex items-center gap-1.5"
-                        >
-                          <Pause className="w-3.5 h-3.5" />
-                          Pausieren
-                        </button>
-                      )}
-
-                      {evt.status !== "COMPLETED" &&
-                        evt.status !== "ARCHIVED" && (
-                          <button
-                            onClick={() => handleCompleteEvent(evt)}
-                            className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold transition flex items-center gap-1.5"
-                          >
-                            <Square className="w-3.5 h-3.5" />
-                            Abschließen
-                          </button>
-                        )}
-
-                      <EventConfigurationActions
-                        event={evt}
-                        events={data as EventItem[]}
-                        onDone={() => fetchData()}
-                      />
-
-                      <button
-                        onClick={() => handleOpenModal(evt)}
-                        className="p-2 bg-slate-800 hover:bg-slate-700 rounded-xl text-slate-300 transition-colors inline-flex"
-                        title="Bearbeiten"
-                      >
-                        <Edit2 className="w-4 h-4" />
-                      </button>
-
-                      <button
-                        onClick={() => handleDelete(evt.id)}
-                        className="p-2 bg-rose-500/20 hover:bg-rose-500/40 rounded-xl text-rose-400 transition-colors inline-flex"
-                        title="Löschen"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </div>
-                  </div>
-                ))}
-                {data.length === 0 && (
-                  <div className="text-center py-12 text-slate-500">
-                    Noch keine Veranstaltungen angelegt.
-                  </div>
-                )}
-              </div>
+              <AdminEventsView
+                events={data as EventItem[]}
+                onRefresh={() => void fetchData()}
+                onOpenCreate={() => void handleOpenModal()}
+                onEdit={(evt) => void handleOpenModal(evt)}
+                onDelete={(id) => void handleDelete(id)}
+                onActivate={(evt) => handleOpenActivateModal(evt)}
+                onSetTestMode={(evt) => void handleSetTestMode(evt)}
+                onPause={(evt) => void handlePauseEvent(evt)}
+                onComplete={(evt) => void handleCompleteEvent(evt)}
+                onConfigurationDone={() => void fetchData()}
+                isRefreshing={isLoading}
+              />
             ) : activeTab === "printers" ? (
               /* Printers Table */
               <div className="space-y-6">
@@ -2535,28 +2416,85 @@ export const AdminDashboardController = ({
                   </table>
                 </div>
               </div>
-            ) : (
-              /* Standard Tables (Areas, Stations, Categories, etc.) */
-              <AdminEntityTable
-                items={data}
+            ) : activeTab === "areas" ? (
+              <AdminAreasView
+                areas={data}
+                onRefresh={() => void fetchData()}
+                onOpenCreate={() => void handleOpenModal()}
                 onEdit={(item) => void handleOpenModal(item)}
                 onDelete={(id) => void handleDelete(id)}
+                isRefreshing={isLoading}
               />
-            )}
+            ) : activeTab === "stations" ? (
+              <AdminStationsView
+                stations={data}
+                printersList={printersList}
+                onRefresh={() => void fetchData()}
+                onOpenCreate={() => void handleOpenModal()}
+                onEdit={(item) => void handleOpenModal(item)}
+                onDelete={(id) => void handleDelete(id)}
+                isRefreshing={isLoading}
+              />
+            ) : activeTab === "categories" ? (
+              <AdminCategoriesView
+                categories={data}
+                stationsList={productStations}
+                onRefresh={() => void fetchData()}
+                onOpenCreate={() => void handleOpenModal()}
+                onEdit={(item) => void handleOpenModal(item)}
+                onDelete={(id) => void handleDelete(id)}
+                isRefreshing={isLoading}
+              />
+            ) : activeTab === "products" ? (
+              <AdminProductsView
+                products={data}
+                categoriesList={productCategories}
+                stationsList={productStations}
+                onRefresh={() => void fetchData()}
+                onOpenCreate={() => void handleOpenModal()}
+                onEdit={(item) => void handleOpenModal(item)}
+                onDelete={(id) => void handleDelete(id)}
+                isRefreshing={isLoading}
+              />
+            ) : activeTab === "users" ? (
+              <AdminUsersView
+                users={data}
+                onRefresh={() => void fetchData()}
+                onOpenCreate={() => void handleOpenModal()}
+                onEdit={(item) => void handleOpenModal(item)}
+                onDelete={(id) => void handleDelete(id)}
+                isRefreshing={isLoading}
+              />
+            ) : null}
           </AdminAreaState>
         )}
       </AdminDashboardShell>
 
       {/* RKSV DISCLAIMER & ACTIVATION MODAL */}
       {rksvModalOpen && rksvTargetEvent && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fade-in">
-          <div className="bg-slate-900 border border-slate-700 p-6 sm:p-8 rounded-3xl max-w-xl w-full shadow-2xl space-y-6 animate-scale-up">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fade-in"
+          onKeyDown={(e) =>
+            handleModalEscape(e, () => {
+              if (!isActivating) setRksvModalOpen(false);
+            })
+          }
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="rksv-modal-title"
+            className="bg-slate-900 border border-slate-700 p-6 sm:p-8 rounded-3xl max-w-xl w-full shadow-2xl space-y-6 animate-scale-up"
+          >
             <div className="flex items-start gap-4">
               <div className="p-3 bg-amber-500/20 text-amber-400 rounded-2xl border border-amber-500/30 shrink-0">
                 <ShieldAlert className="w-8 h-8" />
               </div>
               <div>
-                <h3 className="text-xl font-bold text-white">
+                <h3
+                  id="rksv-modal-title"
+                  className="text-xl font-bold text-white"
+                >
                   Rechtlicher Hinweis: RKSV-Konformität
                 </h3>
                 <p className="text-sm text-slate-400 mt-1">
@@ -3143,21 +3081,44 @@ export const AdminDashboardController = ({
 
       {/* EVENT MODAL */}
       {isEventModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
-          <div className="bg-slate-900 border border-slate-800 p-6 rounded-3xl max-w-lg w-full shadow-2xl space-y-4">
-            <h3 className="text-xl font-bold text-white">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm"
+          onKeyDown={(e) =>
+            handleModalEscape(e, () => setIsEventModalOpen(false))
+          }
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="event-modal-title"
+            className="bg-slate-900 border border-slate-800 p-6 rounded-3xl max-w-lg w-full shadow-2xl space-y-4"
+          >
+            <h3 id="event-modal-title" className="text-xl font-bold text-white">
               {editingEvent
                 ? "Veranstaltung bearbeiten"
                 : "Neue Veranstaltung anlegen"}
             </h3>
+            {modalError && (
+              <p
+                role="alert"
+                className="rounded-xl border border-rose-500/50 bg-rose-500/10 px-3 py-2 text-sm text-rose-200"
+              >
+                {modalError}
+              </p>
+            )}
             <form onSubmit={handleSaveModal} className="space-y-4">
               <div>
-                <label className="text-xs font-bold text-slate-400 block mb-1">
+                <label
+                  htmlFor="event-form-name"
+                  className="text-xs font-bold text-slate-400 block mb-1"
+                >
                   Name der Veranstaltung
                 </label>
                 <input
+                  id="event-form-name"
                   type="text"
                   required
+                  autoFocus
                   value={eventFormData.name}
                   onChange={(e) =>
                     setEventFormData({ ...eventFormData, name: e.target.value })
@@ -3168,10 +3129,14 @@ export const AdminDashboardController = ({
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-xs font-bold text-slate-400 block mb-1">
+                  <label
+                    htmlFor="event-form-organizer"
+                    className="text-xs font-bold text-slate-400 block mb-1"
+                  >
                     Veranstalter
                   </label>
                   <input
+                    id="event-form-organizer"
                     type="text"
                     value={eventFormData.organizer}
                     onChange={(e) =>
@@ -3185,10 +3150,14 @@ export const AdminDashboardController = ({
                   />
                 </div>
                 <div>
-                  <label className="text-xs font-bold text-slate-400 block mb-1">
+                  <label
+                    htmlFor="event-form-location"
+                    className="text-xs font-bold text-slate-400 block mb-1"
+                  >
                     Ort
                   </label>
                   <input
+                    id="event-form-location"
                     type="text"
                     value={eventFormData.location}
                     onChange={(e) =>
@@ -3204,10 +3173,14 @@ export const AdminDashboardController = ({
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-xs font-bold text-slate-400 block mb-1">
+                  <label
+                    htmlFor="event-form-start-time"
+                    className="text-xs font-bold text-slate-400 block mb-1"
+                  >
                     Startzeit
                   </label>
                   <input
+                    id="event-form-start-time"
                     type="datetime-local"
                     value={eventFormData.startTime}
                     onChange={(e) =>
@@ -3220,10 +3193,14 @@ export const AdminDashboardController = ({
                   />
                 </div>
                 <div>
-                  <label className="text-xs font-bold text-slate-400 block mb-1">
+                  <label
+                    htmlFor="event-form-end-time"
+                    className="text-xs font-bold text-slate-400 block mb-1"
+                  >
                     Endzeit
                   </label>
                   <input
+                    id="event-form-end-time"
                     type="datetime-local"
                     value={eventFormData.endTime}
                     onChange={(e) =>
@@ -3240,15 +3217,16 @@ export const AdminDashboardController = ({
                 <button
                   type="button"
                   onClick={() => setIsEventModalOpen(false)}
-                  className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold"
+                  className="min-h-11 px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold"
                 >
                   Abbrechen
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold"
+                  disabled={isSavingModal}
+                  className="min-h-11 px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-60 text-white font-bold"
                 >
-                  Speichern
+                  {isSavingModal ? "Speichert …" : "Speichern"}
                 </button>
               </div>
             </form>
