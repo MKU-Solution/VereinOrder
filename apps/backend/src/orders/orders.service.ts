@@ -21,6 +21,7 @@ import {
   DiscardOfflineQueueDto,
   PaymentInputDto,
   QuickSaleServiceDto,
+  SplitPaymentItemDto,
 } from "./dto/orders.dto";
 import { orderRejection } from "./order-rejection";
 
@@ -1836,6 +1837,165 @@ export class OrdersService {
               amountPaid: newPaid,
               totalAmount: order.totalAmount,
               newPaymentStatus,
+            },
+          },
+        });
+      }
+
+      return updatedOrder;
+    });
+  }
+
+  async splitPaymentOrder(
+    orderId: string,
+    items: SplitPaymentItemDto[],
+    payments: PaymentInputDto[],
+    userId: string,
+  ) {
+    if (!items || items.length === 0) {
+      throw new BadRequestException(
+        "Keine Positionen für die Teilzahlung angegeben.",
+      );
+    }
+    if (!payments || payments.length === 0) {
+      throw new BadRequestException("Keine Zahlungen angegeben.");
+    }
+    const newPaid = this.validatePayments(payments);
+
+    return await this.prisma.$transaction(async (prisma) => {
+      const order = await prisma.order.findUnique({
+        where: { id: orderId },
+        include: {
+          items: { include: { product: true } },
+          payments: true,
+          event: true,
+        },
+      });
+
+      if (!order) {
+        throw new NotFoundException(
+          "Diese Bestellung wurde nicht gefunden. Bitte die Ansicht aktualisieren.",
+        );
+      }
+      if (order.lifecycleStatus === "CANCELLED") {
+        throw new BadRequestException(
+          "Eine stornierte Bestellung kann nicht bezahlt werden.",
+        );
+      }
+      if (order.paymentStatus === "PAID") {
+        throw new BadRequestException(
+          "Diese Bestellung ist bereits vollständig bezahlt.",
+        );
+      }
+
+      const orderItemMap = new Map(order.items.map((i) => [i.id, i]));
+      const requestedQuantities = new Map<string, number>();
+
+      for (const item of items) {
+        if (!item.orderItemId || !orderItemMap.has(item.orderItemId)) {
+          throw new BadRequestException(
+            "Mindestens eine ausgewählte Position gehört nicht zu dieser Bestellung.",
+          );
+        }
+        const cur = requestedQuantities.get(item.orderItemId) ?? 0;
+        requestedQuantities.set(item.orderItemId, cur + item.quantity);
+      }
+
+      let expectedSplitTotal = 0;
+      for (const [itemId, qty] of requestedQuantities.entries()) {
+        const orderItem = orderItemMap.get(itemId)!;
+        const unpaidQuantity =
+          orderItem.quantity - (orderItem.paidQuantity ?? 0);
+        if (qty > unpaidQuantity) {
+          throw new BadRequestException(
+            `Die gewählte Menge (${qty}) für "${orderItem.product.name}" übersteigt die offene Restmenge (${unpaidQuantity}).`,
+          );
+        }
+        expectedSplitTotal += orderItem.priceAtTime * qty;
+      }
+
+      if (
+        !Number.isSafeInteger(expectedSplitTotal) ||
+        expectedSplitTotal > 2_147_483_647
+      ) {
+        throw new BadRequestException(
+          "Der berechnete Teilbetrag überschreitet den zulässigen Betragsrahmen.",
+        );
+      }
+
+      if (newPaid !== expectedSplitTotal) {
+        throw new BadRequestException(
+          `Der Zahlungsbetrag (${newPaid} Cent) stimmt nicht mit der Summe der ausgewählten Positionen (${expectedSplitTotal} Cent) überein.`,
+        );
+      }
+
+      const activeSession = userId
+        ? await prisma.cashierSession.findFirst({
+            where: { userId, eventId: order.eventId, status: "ACTIVE" },
+          })
+        : null;
+      const cashierSessionId = activeSession?.id || null;
+
+      // Update paidQuantity for split items
+      for (const [itemId, qty] of requestedQuantities.entries()) {
+        const orderItem = orderItemMap.get(itemId)!;
+        await prisma.orderItem.update({
+          where: { id: itemId },
+          data: { paidQuantity: orderItem.paidQuantity + qty },
+        });
+      }
+
+      // Record payments
+      await prisma.payment.createMany({
+        data: payments.map((p) => ({
+          orderId: order.id,
+          amount: p.amount,
+          method: p.method,
+          status: "COMPLETED",
+          cashierSessionId,
+        })),
+      });
+
+      // Check if all items on the order are now fully paid
+      let allItemsFullyPaid = true;
+      for (const orderItem of order.items) {
+        const additionalPaid = requestedQuantities.get(orderItem.id) ?? 0;
+        const finalItemPaid = (orderItem.paidQuantity ?? 0) + additionalPaid;
+        if (finalItemPaid < orderItem.quantity) {
+          allItemsFullyPaid = false;
+        }
+      }
+
+      const newPaymentStatus = allItemsFullyPaid ? "PAID" : "PARTIALLY_PAID";
+
+      const updatedOrder = await prisma.order.update({
+        where: { id: orderId },
+        data: { paymentStatus: newPaymentStatus },
+        include: { items: { include: { product: true } }, payments: true },
+      });
+
+      if (userId) {
+        await prisma.auditLog.create({
+          data: {
+            action: "ORDER_SPLIT_PAYMENT",
+            entityId: orderId,
+            entityType: "Order",
+            userId,
+            details: {
+              orderNumber: order.orderNumber,
+              tableName: order.tableName,
+              splitItems: Array.from(requestedQuantities.entries()).map(
+                ([id, qty]) => ({
+                  orderItemId: id,
+                  productName: orderItemMap.get(id)?.product?.name,
+                  quantity: qty,
+                  priceAtTime: orderItemMap.get(id)?.priceAtTime,
+                  totalCents: (orderItemMap.get(id)?.priceAtTime ?? 0) * qty,
+                }),
+              ),
+              amountPaid: newPaid,
+              newPaymentStatus,
+              cashierSessionId,
             },
           },
         });

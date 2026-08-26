@@ -6,20 +6,22 @@ import {
   CheckCircle,
   Settings2,
   Printer,
+  SplitSquareHorizontal,
 } from "lucide-react";
 import { CheckoutModal } from "../components/CheckoutModal";
 import { OrderDetailsModal } from "../components/OrderDetailsModal";
+import { OrderSplitModal } from "../components/OrderSplitModal";
 
 export const UnpaidOrders = () => {
   const [orders, setOrders] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [selectedOrder, setSelectedOrder] = useState<any | null>(null);
+  const [splittingOrder, setSplittingOrder] = useState<any | null>(null);
   const [editingOrder, setEditingOrder] = useState<any | null>(null);
 
   const fetchOrders = async () => {
     try {
-      // Temporary hardcode or fetch first available event
       const productsRes = await api.get("/products");
       if (productsRes.data.length > 0) {
         const eId = productsRes.data[0].eventId;
@@ -59,10 +61,23 @@ export const UnpaidOrders = () => {
       await api.post(`/orders/${selectedOrder.id}/payments`, { payments });
       setSelectedOrder(null);
       fetchOrders();
-    } catch (err) {
+    } catch (err: any) {
       console.error("Payment failed", err);
-      alert("Fehler bei der Zahlung!");
+      alert(err.response?.data?.message || "Fehler bei der Zahlung!");
     }
+  };
+
+  const handleSplitPaymentConfirm = async (
+    items: { orderItemId: string; quantity: number }[],
+    payments: { amount: number; method: "CASH" | "CARD" }[],
+  ) => {
+    if (!splittingOrder) return;
+    await api.post(`/orders/${splittingOrder.id}/split-payment`, {
+      items,
+      payments,
+    });
+    setSplittingOrder(null);
+    fetchOrders();
   };
 
   const handleReprintOrder = async (orderId: string) => {
@@ -118,21 +133,31 @@ export const UnpaidOrders = () => {
                   (sum: number, p: any) => sum + p.amount,
                   0,
                 );
-                const remainingAmount = order.totalAmount - totalPaid;
+                const remainingAmount = Math.max(
+                  0,
+                  order.totalAmount - totalPaid,
+                );
+                const isPartiallyPaid =
+                  order.paymentStatus === "PARTIALLY_PAID" || totalPaid > 0;
 
                 return (
                   <div
                     key={order.id}
-                    className="glass p-6 rounded-3xl flex flex-col gap-4"
+                    className="glass p-6 rounded-3xl flex flex-col gap-4 border border-slate-700/50"
                   >
                     <div className="flex justify-between items-start">
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 flex-wrap">
                         <span className="bg-slate-800 text-slate-300 px-3 py-1 rounded-full text-sm font-medium">
                           #{order.orderNumber}
                         </span>
                         <span className="text-xs font-medium text-slate-500 bg-slate-800/50 px-2 py-1 rounded-md">
                           {order.lifecycleStatus}
                         </span>
+                        {isPartiallyPaid && (
+                          <span className="text-xs font-semibold text-amber-300 bg-amber-950/60 border border-amber-700/50 px-2 py-0.5 rounded-full">
+                            Teilweise bezahlt
+                          </span>
+                        )}
                       </div>
                       <div className="flex items-center gap-2">
                         <span className="text-lg font-bold mr-2">
@@ -155,28 +180,55 @@ export const UnpaidOrders = () => {
                       </div>
                     </div>
 
+                    {/* Positions */}
                     <div className="flex-1 space-y-2">
-                      {order.items.map((item: any) => (
-                        <div
-                          key={item.id}
-                          className={`flex justify-between text-sm ${item.status === "CANCELLED" ? "text-slate-600 line-through" : "text-slate-300"}`}
-                        >
-                          <span>
-                            {item.quantity}x {item.product.name}{" "}
-                            {item.variantName ? `(${item.variantName})` : ""}
-                          </span>
-                          <span>
-                            {formatPrice(item.priceAtTime * item.quantity)}
-                          </span>
-                        </div>
-                      ))}
+                      {order.items.map((item: any) => {
+                        const paidQty = item.paidQuantity ?? 0;
+                        const unpaidQty = Math.max(0, item.quantity - paidQty);
+                        const isDone = unpaidQty === 0;
+
+                        return (
+                          <div
+                            key={item.id}
+                            className={`flex justify-between text-sm items-center ${
+                              item.status === "CANCELLED"
+                                ? "text-slate-600 line-through"
+                                : isDone
+                                  ? "text-slate-500"
+                                  : "text-slate-300"
+                            }`}
+                          >
+                            <div className="flex items-center gap-2">
+                              <span>
+                                {item.quantity}x {item.product.name}{" "}
+                                {item.variantName
+                                  ? `(${item.variantName})`
+                                  : ""}
+                              </span>
+                              {paidQty > 0 && !isDone && (
+                                <span className="text-[11px] bg-slate-800 text-amber-300 px-1.5 py-0.5 rounded">
+                                  {paidQty} bezahlt, {unpaidQty} offen
+                                </span>
+                              )}
+                              {isDone && (
+                                <span className="text-[11px] bg-emerald-950/60 text-emerald-400 px-1.5 py-0.5 rounded">
+                                  Bezahlt
+                                </span>
+                              )}
+                            </div>
+                            <span className="font-medium">
+                              {formatPrice(item.priceAtTime * item.quantity)}
+                            </span>
+                          </div>
+                        );
+                      })}
                     </div>
 
                     {totalPaid > 0 && (
-                      <div className="pt-4 border-t border-slate-700/50">
-                        <div className="flex justify-between text-sm text-slate-400 mb-1">
+                      <div className="pt-3 border-t border-slate-700/50 space-y-1">
+                        <div className="flex justify-between text-sm text-slate-400">
                           <span>Bereits bezahlt:</span>
-                          <span className="text-emerald-400 font-medium">
+                          <span className="text-emerald-400 font-semibold">
                             {formatPrice(totalPaid)}
                           </span>
                         </div>
@@ -201,24 +253,39 @@ export const UnpaidOrders = () => {
                       </div>
                     )}
 
-                    <div className="pt-4 border-t border-slate-700/50 flex justify-between items-center">
+                    {/* Footer Actions */}
+                    <div className="pt-4 border-t border-slate-700/50 flex flex-col sm:flex-row justify-between sm:items-center gap-3">
                       <div>
-                        <div className="text-sm text-slate-400">Noch offen</div>
+                        <div className="text-xs text-slate-400 font-medium">
+                          Noch offen
+                        </div>
                         <div
                           className={`text-2xl font-bold ${remainingAmount > 0 ? "text-orange-400" : "text-emerald-400"}`}
                         >
-                          {formatPrice(Math.max(0, remainingAmount))}
+                          {formatPrice(remainingAmount)}
                         </div>
                       </div>
-                      <button
-                        disabled={remainingAmount <= 0}
-                        onClick={() =>
-                          setSelectedOrder({ ...order, remainingAmount })
-                        }
-                        className="bg-indigo-500 hover:bg-indigo-400 disabled:opacity-50 text-white px-4 py-2 rounded-xl font-bold transition-colors"
-                      >
-                        Abkassieren
-                      </button>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          disabled={remainingAmount <= 0}
+                          onClick={() => setSplittingOrder(order)}
+                          className="flex-1 sm:flex-none flex items-center justify-center gap-1.5 bg-slate-800/80 hover:bg-slate-700 text-purple-300 border border-purple-500/30 px-3.5 py-2.5 rounded-xl font-semibold transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                        >
+                          <SplitSquareHorizontal className="w-4 h-4 text-purple-400" />
+                          Splitten
+                        </button>
+                        <button
+                          type="button"
+                          disabled={remainingAmount <= 0}
+                          onClick={() =>
+                            setSelectedOrder({ ...order, remainingAmount })
+                          }
+                          className="flex-1 sm:flex-none bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed text-white px-4 py-2.5 rounded-xl font-bold transition-all shadow-md shadow-indigo-950/30"
+                        >
+                          Voll abkassieren
+                        </button>
+                      </div>
                     </div>
                   </div>
                 );
@@ -240,6 +307,13 @@ export const UnpaidOrders = () => {
         total={selectedOrder ? selectedOrder.remainingAmount : 0}
         onClose={() => setSelectedOrder(null)}
         onConfirm={handlePaymentConfirm}
+      />
+
+      <OrderSplitModal
+        isOpen={splittingOrder !== null}
+        order={splittingOrder}
+        onClose={() => setSplittingOrder(null)}
+        onConfirm={handleSplitPaymentConfirm}
       />
 
       <OrderDetailsModal

@@ -7,6 +7,7 @@ import {
   CreateOrderDto,
   CreateQuickSaleDto,
   CreateStationSaleDto,
+  SplitPaymentDto,
 } from "./orders.dto";
 
 const eventId = "11111111-1111-4111-8111-111111111111";
@@ -123,6 +124,41 @@ describe("Order-Request-DTOs", () => {
     ).resolves.not.toHaveLength(0);
     await expect(
       errorsFor(CancelOrderDto, { reason: "x".repeat(501) }),
+    ).resolves.not.toHaveLength(0);
+  });
+
+  it("validiert SplitPaymentDto für Teilzahlungen", async () => {
+    const validSplit = {
+      items: [
+        {
+          orderItemId: "a0000000-0000-4000-8000-000000000001",
+          quantity: 2,
+        },
+      ],
+      payments: [{ amount: 2500, method: "CASH" }],
+    };
+    await expect(errorsFor(SplitPaymentDto, validSplit)).resolves.toHaveLength(
+      0,
+    );
+
+    // Ungültige Item-Menge
+    await expect(
+      errorsFor(SplitPaymentDto, {
+        ...validSplit,
+        items: [
+          { orderItemId: "a0000000-0000-4000-8000-000000000001", quantity: 0 },
+        ],
+      }),
+    ).resolves.not.toHaveLength(0);
+
+    // Leeres Item-Array
+    await expect(
+      errorsFor(SplitPaymentDto, { ...validSplit, items: [] }),
+    ).resolves.not.toHaveLength(0);
+
+    // Leeres Payment-Array
+    await expect(
+      errorsFor(SplitPaymentDto, { ...validSplit, payments: [] }),
     ).resolves.not.toHaveLength(0);
   });
 });

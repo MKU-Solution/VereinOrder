@@ -23,6 +23,7 @@ import {
   CreateQuickSaleDto,
   CreateStationSaleDto,
   DiscardOfflineQueueDto,
+  SplitPaymentDto,
   UpdatePriorityDto,
 } from "./dto/orders.dto";
 import { OrderSubmissionExceptionFilter } from "./order-submission-exception.filter";
@@ -153,6 +154,22 @@ export class OrdersController {
     const userId = req.user?.userId;
     return this.ordersService.addPaymentsToOrder(
       params.id,
+      body.payments,
+      userId,
+    );
+  }
+
+  @Post(":id/split-payment")
+  @Roles("ADMINISTRATOR", "WAITER", "CASHIER")
+  async splitPayment(
+    @Request() req: AuthenticatedRequest,
+    @Param() params: IdParamDto,
+    @Body() body: SplitPaymentDto,
+  ) {
+    const userId = req.user?.userId;
+    return this.ordersService.splitPaymentOrder(
+      params.id,
+      body.items,
       body.payments,
       userId,
     );
