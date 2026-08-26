@@ -198,3 +198,27 @@ export class UpdatePriorityDto {
   @IsBoolean()
   isPriority: boolean;
 }
+
+export class SplitPaymentItemDto {
+  @IsUUID("4")
+  orderItemId: string;
+
+  @Quantity()
+  quantity: number;
+}
+
+export class SplitPaymentDto {
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(100)
+  @ValidateNested({ each: true })
+  @Type(() => SplitPaymentItemDto)
+  items: SplitPaymentItemDto[];
+
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(50)
+  @ValidateNested({ each: true })
+  @Type(() => PaymentInputDto)
+  payments: PaymentInputDto[];
+}

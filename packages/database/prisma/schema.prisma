@@ -464,10 +464,11 @@ enum OrderItemStatus {
 }
 
 model OrderItem {
-  id          String          @id @default(uuid())
-  quantity    Int
-  priceAtTime Int // in cents, snapshot of product price + variant price + extras
-  status      OrderItemStatus @default(PENDING)
+  id           String          @id @default(uuid())
+  quantity     Int
+  paidQuantity Int             @default(0)
+  priceAtTime  Int // in cents, snapshot of product price + variant price + extras
+  status       OrderItemStatus @default(PENDING)
 
   // Momentaufnahme der Auswahl zum Bestellzeitpunkt. Die drei Spalten bleiben
   // mit Issue #75 unveraendert, damit Berichte, Stornos und der Bondruck
