@@ -33,3 +33,11 @@ export const formatUptime = (seconds: number): string => {
   parts.push(`${s}s`);
   return parts.join(" ");
 };
+
+export const formatCurrency = (cents: number): string => {
+  if (typeof cents !== "number" || !Number.isFinite(cents)) return "€ 0,00";
+  return (cents / 100).toLocaleString("de-AT", {
+    style: "currency",
+    currency: "EUR",
+  });
+};

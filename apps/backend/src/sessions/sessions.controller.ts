@@ -85,6 +85,7 @@ export class SessionsController {
       params.id,
       req.user.userId,
       body.closingBalance,
+      body.offlineQueueWarning,
     );
   }
 }

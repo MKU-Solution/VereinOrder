@@ -270,7 +270,17 @@ export class EventsService {
     });
   }
 
-  async changeStatus(id: string, status: EventStatus, userId: string) {
+  async changeStatus(
+    id: string,
+    status: EventStatus,
+    userId: string,
+    offlineQueueWarning?: {
+      hasOpenOrders: boolean;
+      openCount: number;
+      openTotalCents: number;
+      acknowledged: boolean;
+    },
+  ) {
     return this.prisma.$transaction(async (tx) => {
       const existing = await this.lockEvent(tx, id);
       if (status === "ACTIVE") {
@@ -326,6 +336,16 @@ export class EventsService {
             previousStatus: existing.status,
             newStatus: status,
             testMode: updated.testMode,
+            ...(offlineQueueWarning?.hasOpenOrders
+              ? {
+                  offlineQueueWarning: {
+                    hasOpenOrders: true,
+                    openCount: offlineQueueWarning.openCount,
+                    openTotalCents: offlineQueueWarning.openTotalCents,
+                    acknowledged: offlineQueueWarning.acknowledged,
+                  },
+                }
+              : {}),
           },
         },
       });

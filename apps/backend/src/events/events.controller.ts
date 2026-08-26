@@ -140,7 +140,12 @@ export class EventsController {
     @Body() body: ChangeEventStatusDto,
   ) {
     const userId = req.user?.userId;
-    return this.eventsService.changeStatus(params.id, body.status, userId);
+    return this.eventsService.changeStatus(
+      params.id,
+      body.status,
+      userId,
+      body.offlineQueueWarning,
+    );
   }
 
   @Post(":id/clean-test-data")

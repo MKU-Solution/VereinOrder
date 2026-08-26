@@ -133,4 +133,29 @@ describe("AdminEventsView", () => {
     fireEvent.click(createBtn);
     expect(onOpenCreate).toHaveBeenCalled();
   });
+
+  it("löst onComplete beim Klick auf Abschließen aus", () => {
+    const onComplete = vi.fn();
+
+    render(
+      <AdminEventsView
+        events={mockEvents}
+        onRefresh={vi.fn()}
+        onOpenCreate={vi.fn()}
+        onEdit={vi.fn()}
+        onDelete={vi.fn()}
+        onActivate={vi.fn()}
+        onSetTestMode={vi.fn()}
+        onPause={vi.fn()}
+        onComplete={onComplete}
+        onConfigurationDone={vi.fn()}
+      />,
+    );
+
+    const completeBtns = screen.getAllByRole("button", {
+      name: /Abschließen/i,
+    });
+    fireEvent.click(completeBtns[0]);
+    expect(onComplete).toHaveBeenCalledWith(mockEvents[0]);
+  });
 });

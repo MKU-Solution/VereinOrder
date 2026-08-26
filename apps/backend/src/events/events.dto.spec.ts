@@ -1,5 +1,9 @@
 import { createApiValidationPipe } from "../common/validation/api-validation";
-import { CopyAssortmentDto, UpdateEventDto } from "./events.dto";
+import {
+  ChangeEventStatusDto,
+  CopyAssortmentDto,
+  UpdateEventDto,
+} from "./events.dto";
 
 describe("Veranstaltungs-DTOs", () => {
   const pipe = createApiValidationPipe();
@@ -23,6 +27,40 @@ describe("Veranstaltungs-DTOs", () => {
           stationMappings: { "keine-uuid": "auch-keine-uuid" },
         },
         { type: "body", metatype: CopyAssortmentDto },
+      ),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({ statusCode: 400 }),
+    });
+  });
+
+  it("akzeptiert und validiert ChangeEventStatusDto mit offlineQueueWarning", async () => {
+    const valid = await pipe.transform(
+      {
+        status: "COMPLETED",
+        offlineQueueWarning: {
+          hasOpenOrders: true,
+          openCount: 5,
+          openTotalCents: 12000,
+          acknowledged: true,
+        },
+      },
+      { type: "body", metatype: ChangeEventStatusDto },
+    );
+    expect(valid.status).toBe("COMPLETED");
+    expect(valid.offlineQueueWarning?.openCount).toBe(5);
+
+    await expect(
+      pipe.transform(
+        {
+          status: "COMPLETED",
+          offlineQueueWarning: {
+            hasOpenOrders: true,
+            openCount: -2,
+            openTotalCents: 12000,
+            acknowledged: true,
+          },
+        },
+        { type: "body", metatype: ChangeEventStatusDto },
       ),
     ).rejects.toMatchObject({
       response: expect.objectContaining({ statusCode: 400 }),

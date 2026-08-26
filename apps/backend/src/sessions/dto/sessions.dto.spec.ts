@@ -1,3 +1,4 @@
+import "reflect-metadata";
 import { plainToInstance } from "class-transformer";
 import { validate } from "class-validator";
 import { CloseSessionDto, StartSessionDto } from "./sessions.dto";
@@ -31,5 +32,29 @@ describe("Session-Request-DTOs", () => {
         forbidNonWhitelisted: true,
       }),
     ).not.toHaveLength(0);
+  });
+
+  it("validiert offlineQueueWarning beim Schließen", async () => {
+    const validClose = plainToInstance(CloseSessionDto, {
+      closingBalance: 5000,
+      offlineQueueWarning: {
+        hasOpenOrders: true,
+        openCount: 2,
+        openTotalCents: 3500,
+        acknowledged: true,
+      },
+    });
+    expect(await validate(validClose)).toHaveLength(0);
+
+    const invalidClose = plainToInstance(CloseSessionDto, {
+      closingBalance: 5000,
+      offlineQueueWarning: {
+        hasOpenOrders: true,
+        openCount: -1,
+        openTotalCents: 3500,
+        acknowledged: "yes",
+      },
+    });
+    expect(await validate(invalidClose)).not.toHaveLength(0);
   });
 });
