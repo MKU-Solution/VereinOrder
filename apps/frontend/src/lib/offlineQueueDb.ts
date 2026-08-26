@@ -29,12 +29,45 @@ export const CONFIRMED_RETENTION_MS = 24 * 60 * 60 * 1000;
 /** Obergrenze offener Einträge (Entscheidung 11.7). */
 export const MAX_OPEN_QUEUE_ENTRIES = 200;
 
-const OPEN_STATES: OfflineOrderState[] = [
+export const OPEN_STATES: OfflineOrderState[] = [
   "LOCAL_PENDING",
   "SENDING",
   "CONFLICT",
   "FAILED",
 ];
+
+export interface OpenOfflineQueueSummary {
+  count: number;
+  totalCents: number;
+}
+
+export function computeOfflineOrderRecordTotalCents(
+  record: OfflineOrderRecord,
+): number {
+  if (
+    typeof record.totalAtCapture === "number" &&
+    Number.isFinite(record.totalAtCapture)
+  ) {
+    return Math.max(0, record.totalAtCapture);
+  }
+  if (Array.isArray(record.payments) && record.payments.length > 0) {
+    const paymentSum = record.payments.reduce(
+      (sum, p) => sum + (p.amount || 0),
+      0,
+    );
+    if (paymentSum > 0) return paymentSum;
+  }
+  if (Array.isArray(record.items) && record.items.length > 0) {
+    return record.items.reduce((sum, item) => {
+      const unit =
+        typeof item.unitPriceAtCapture === "number"
+          ? item.unitPriceAtCapture
+          : 0;
+      return sum + unit * (item.quantity || 1);
+    }, 0);
+  }
+  return 0;
+}
 
 interface OfflineQueueDBSchema extends DBSchema {
   [STORE_NAME]: {
@@ -309,4 +342,49 @@ export async function cleanupConfirmedOfflineOrderRecords(
   }
   await tx.done;
   return removed;
+}
+
+/**
+ * Ermittelt Anzahl und Gesamtwert aller offenen Vormerkungen für eine
+ * Kassensitzung auf diesem Gerät (Issue #97).
+ */
+export async function getOpenOfflineQueueSummaryForSession(
+  db: OfflineQueueDB,
+  cashierSessionId: string,
+): Promise<OpenOfflineQueueSummary> {
+  const all = await getAllOfflineOrderRecordsByCreatedAt(db);
+  const openForSession = all.filter(
+    (r) =>
+      OPEN_STATES.includes(r.state) && r.cashierSessionId === cashierSessionId,
+  );
+  const totalCents = openForSession.reduce(
+    (sum, r) => sum + computeOfflineOrderRecordTotalCents(r),
+    0,
+  );
+  return {
+    count: openForSession.length,
+    totalCents,
+  };
+}
+
+/**
+ * Ermittelt Anzahl und Gesamtwert aller offenen Vormerkungen für eine
+ * Veranstaltung auf diesem Gerät (Issue #97).
+ */
+export async function getOpenOfflineQueueSummaryForEvent(
+  db: OfflineQueueDB,
+  eventId: string,
+): Promise<OpenOfflineQueueSummary> {
+  const all = await getAllOfflineOrderRecordsByCreatedAt(db);
+  const openForEvent = all.filter(
+    (r) => OPEN_STATES.includes(r.state) && r.eventId === eventId,
+  );
+  const totalCents = openForEvent.reduce(
+    (sum, r) => sum + computeOfflineOrderRecordTotalCents(r),
+    0,
+  );
+  return {
+    count: openForEvent.length,
+    totalCents,
+  };
 }

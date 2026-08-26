@@ -3,11 +3,14 @@ import { IDBFactory } from "fake-indexeddb";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   cleanupConfirmedOfflineOrderRecords,
+  computeOfflineOrderRecordTotalCents,
   countOpenOfflineOrderRecords,
   getAllOfflineOrderRecordsByCreatedAt,
   getLocalPendingOrderedByCreatedAt,
   getOfflineOrderRecord,
   getOfflineQueueDB,
+  getOpenOfflineQueueSummaryForEvent,
+  getOpenOfflineQueueSummaryForSession,
   migrateLegacyV1Record,
   putOfflineOrderRecord,
   recoverInterruptedSendingRecords,
@@ -311,5 +314,137 @@ describe("Obergrenze der Warteschlange (Entscheidung 11.7)", () => {
     }
 
     expect(await countOpenOfflineOrderRecords(db)).toBe(4);
+  });
+});
+
+describe("Offene Vormerkungen für Sitzungsschluss und Veranstaltungsabschluss (Issue #97)", () => {
+  it("berechnet den Betrag eines Datensatzes aus totalAtCapture, Zahlungen oder Positionen", () => {
+    expect(
+      computeOfflineOrderRecordTotalCents(
+        freshRecord({ totalAtCapture: 1250 }),
+      ),
+    ).toBe(1250);
+
+    expect(
+      computeOfflineOrderRecordTotalCents(
+        freshRecord({
+          totalAtCapture: null,
+          payments: [{ amount: 800, method: "CASH" }],
+        }),
+      ),
+    ).toBe(800);
+
+    expect(
+      computeOfflineOrderRecordTotalCents(
+        freshRecord({
+          totalAtCapture: null,
+          payments: [],
+          items: [
+            {
+              productId: "p1",
+              quantity: 3,
+              optionIds: [],
+              productName: "Spritzer",
+              unitPriceAtCapture: 300,
+            },
+          ],
+        }),
+      ),
+    ).toBe(900);
+  });
+
+  it("liefert Anzahl und Gesamtwert für eine Kassensitzung", async () => {
+    const db = await getOfflineQueueDB();
+    await putOfflineOrderRecord(
+      db,
+      freshRecord({
+        idempotencyKey: "session-1-order-1",
+        cashierSessionId: "session-123",
+        state: "LOCAL_PENDING",
+        totalAtCapture: 1500,
+      }),
+    );
+    await putOfflineOrderRecord(
+      db,
+      freshRecord({
+        idempotencyKey: "session-1-order-2",
+        cashierSessionId: "session-123",
+        state: "CONFLICT",
+        totalAtCapture: 2000,
+      }),
+    );
+    await putOfflineOrderRecord(
+      db,
+      freshRecord({
+        idempotencyKey: "session-1-confirmed",
+        cashierSessionId: "session-123",
+        state: "CONFIRMED",
+        totalAtCapture: 5000,
+      }),
+    );
+    await putOfflineOrderRecord(
+      db,
+      freshRecord({
+        idempotencyKey: "other-session-order",
+        cashierSessionId: "session-456",
+        state: "LOCAL_PENDING",
+        totalAtCapture: 3000,
+      }),
+    );
+
+    const summary = await getOpenOfflineQueueSummaryForSession(
+      db,
+      "session-123",
+    );
+    expect(summary).toEqual({
+      count: 2,
+      totalCents: 3500,
+    });
+  });
+
+  it("liefert Anzahl und Gesamtwert für eine Veranstaltung", async () => {
+    const db = await getOfflineQueueDB();
+    await putOfflineOrderRecord(
+      db,
+      freshRecord({
+        idempotencyKey: "event-1-order-1",
+        eventId: "event-abc",
+        state: "LOCAL_PENDING",
+        totalAtCapture: 1200,
+      }),
+    );
+    await putOfflineOrderRecord(
+      db,
+      freshRecord({
+        idempotencyKey: "event-1-order-2",
+        eventId: "event-abc",
+        state: "FAILED",
+        totalAtCapture: 2500,
+      }),
+    );
+    await putOfflineOrderRecord(
+      db,
+      freshRecord({
+        idempotencyKey: "event-1-confirmed",
+        eventId: "event-abc",
+        state: "CONFIRMED",
+        totalAtCapture: 4000,
+      }),
+    );
+    await putOfflineOrderRecord(
+      db,
+      freshRecord({
+        idempotencyKey: "other-event-order",
+        eventId: "event-xyz",
+        state: "LOCAL_PENDING",
+        totalAtCapture: 1000,
+      }),
+    );
+
+    const summary = await getOpenOfflineQueueSummaryForEvent(db, "event-abc");
+    expect(summary).toEqual({
+      count: 2,
+      totalCents: 3700,
+    });
   });
 });

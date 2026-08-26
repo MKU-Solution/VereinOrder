@@ -1,14 +1,17 @@
 import { EventStatus } from "@vereinorder/database";
-import { Transform } from "class-transformer";
+import { Transform, Type } from "class-transformer";
 import {
   IsBoolean,
   IsDateString,
   IsEnum,
+  IsInt,
   IsObject,
   IsOptional,
   IsUUID,
+  Min,
   registerDecorator,
   ValidateIf,
+  ValidateNested,
 } from "class-validator";
 import { TrimmedText } from "../common/validation/validation-decorators";
 
@@ -123,9 +126,31 @@ export class ActivateEventDto {
   disclaimerVersion?: string;
 }
 
+export class EventOfflineQueueWarningDto {
+  @IsBoolean()
+  hasOpenOrders: boolean;
+
+  @IsInt()
+  @Min(0)
+  openCount: number;
+
+  @IsInt()
+  @Min(0)
+  openTotalCents: number;
+
+  @IsBoolean()
+  acknowledged: boolean;
+}
+
 export class ChangeEventStatusDto {
   @IsEnum(EventStatus)
   status: EventStatus;
+
+  @IsOptional()
+  @IsObject()
+  @ValidateNested()
+  @Type(() => EventOfflineQueueWarningDto)
+  offlineQueueWarning?: EventOfflineQueueWarningDto;
 }
 
 export class CleanTestDataDto {

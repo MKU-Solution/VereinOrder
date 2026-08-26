@@ -9,7 +9,13 @@ import {
   Activity,
   Play,
   CheckCircle2,
+  AlertTriangle,
 } from "lucide-react";
+import {
+  getOfflineQueueDB,
+  getOpenOfflineQueueSummaryForSession,
+  type OpenOfflineQueueSummary,
+} from "../lib/offlineQueueDb";
 
 interface SessionSummary {
   id: string;
@@ -54,6 +60,9 @@ export const CashierDashboard = () => {
   const [startingBalanceInput, setStartingBalanceInput] = useState("");
   const [closingBalanceInput, setClosingBalanceInput] = useState("");
   const [showCloseModal, setShowCloseModal] = useState(false);
+  const [openQueueSummary, setOpenQueueSummary] =
+    useState<OpenOfflineQueueSummary | null>(null);
+  const [acknowledgedOpenQueue, setAcknowledgedOpenQueue] = useState(false);
 
   const fetchSession = useCallback(async () => {
     if (!eventId) return;
@@ -120,6 +129,26 @@ export const CashierDashboard = () => {
     }
   };
 
+  const handleOpenCloseModal = async () => {
+    if (!activeSession) return;
+    setAcknowledgedOpenQueue(false);
+    try {
+      const db = await getOfflineQueueDB();
+      const openSummary = await getOpenOfflineQueueSummaryForSession(
+        db,
+        activeSession.id,
+      );
+      setOpenQueueSummary(openSummary);
+    } catch (err) {
+      console.error(
+        "Failed to query open offline queue summary for session",
+        err,
+      );
+      setOpenQueueSummary({ count: 0, totalCents: 0 });
+    }
+    setShowCloseModal(true);
+  };
+
   const handleCloseSession = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!activeSession) return;
@@ -127,9 +156,29 @@ export const CashierDashboard = () => {
     const amount = parseEuroToCents(closingBalanceInput);
     if (amount === null) return alert("Ungültiger Betrag");
 
+    if (
+      openQueueSummary &&
+      openQueueSummary.count > 0 &&
+      !acknowledgedOpenQueue
+    ) {
+      return alert(
+        "Bitte bestätige die Kenntnisnahme der offenen Vormerkungen vor dem Abschluss.",
+      );
+    }
+
     try {
       await api.patch(`/sessions/${activeSession.id}/close`, {
         closingBalance: amount,
+        ...(openQueueSummary && openQueueSummary.count > 0
+          ? {
+              offlineQueueWarning: {
+                hasOpenOrders: true,
+                openCount: openQueueSummary.count,
+                openTotalCents: openQueueSummary.totalCents,
+                acknowledged: true,
+              },
+            }
+          : {}),
       });
       setShowCloseModal(false);
       setClosingBalanceInput("");
@@ -169,12 +218,12 @@ export const CashierDashboard = () => {
             Veranstaltung
             <select
               value={eventId}
-              onChange={(event) => setEventId(event.target.value)}
-              className="mt-1 block min-h-11 rounded-xl border border-slate-700 bg-slate-900 px-3 text-sm font-bold normal-case tracking-normal text-white"
+              onChange={(e) => setEventId(e.target.value)}
+              className="mt-1 block rounded-xl border border-slate-800 bg-slate-900 px-3 py-2 text-sm text-slate-200 focus:border-indigo-500 focus:outline-none"
             >
-              {events.map((event) => (
-                <option key={event.id} value={event.id}>
-                  {event.name}
+              {events.map((evt) => (
+                <option key={evt.id} value={evt.id}>
+                  {evt.name} {evt.testMode ? "(Testmodus)" : ""}
                 </option>
               ))}
             </select>
@@ -183,20 +232,19 @@ export const CashierDashboard = () => {
       </div>
 
       {!activeSession && (
-        <div className="bg-slate-900 rounded-2xl p-8 border border-slate-800 text-center">
-          <Activity className="w-12 h-12 text-slate-500 mx-auto mb-4" />
-          <h2 className="text-xl font-medium text-slate-200 mb-2">
-            Keine aktive Kassensitzung
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6">
+          <h2 className="text-xl font-bold text-slate-100 mb-2">
+            Kassensitzung starten
           </h2>
-          <p className="text-slate-400 mb-6 max-w-md mx-auto">
-            Bevor du bar abkassieren kannst, solltest du eine Kassensitzung
-            eröffnen und dein Wechselgeld eintragen.
+          <p className="text-slate-400 mb-6">
+            Bitte gib den Wechselgeldbetrag (Anfangsbestand) ein, um die Kassa
+            zu öffnen.
           </p>
 
-          <form onSubmit={handleStartSession} className="max-w-xs mx-auto">
-            <div className="mb-4 text-left">
-              <label className="block text-sm font-medium text-slate-400 mb-2">
-                Wechselgeld / Startkapital (€)
+          <form onSubmit={handleStartSession} className="max-w-sm">
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-slate-300 mb-2">
+                Anfangsbestand in Bar (€)
               </label>
               <input
                 type="number"
@@ -206,7 +254,7 @@ export const CashierDashboard = () => {
                 value={startingBalanceInput}
                 onChange={(e) => setStartingBalanceInput(e.target.value)}
                 className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-slate-200 focus:outline-none focus:border-indigo-500 text-lg"
-                placeholder="z.B. 50.00"
+                placeholder="z.B. 100.00"
               />
             </div>
             <button
@@ -222,42 +270,76 @@ export const CashierDashboard = () => {
 
       {activeSession && summary && (
         <div className="space-y-6">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6">
-              <div className="flex items-center gap-3 mb-2">
-                <Banknote className="w-5 h-5 text-emerald-400" />
-                <h3 className="text-slate-400 font-medium">
-                  Erwarteter Kassenstand (Bar)
-                </h3>
+              <div className="flex items-center gap-3 text-slate-400 mb-2">
+                <Wallet className="w-5 h-5 text-indigo-400" />
+                <span className="text-sm font-medium">Anfangsbestand</span>
               </div>
-              <div className="text-4xl font-bold text-slate-100">
-                {formatCurrency(summary.expectedCash)}
-              </div>
-              <div className="mt-4 text-sm text-slate-500 flex justify-between">
-                <span>Startkapital</span>
-                <span>{formatCurrency(summary.startingBalance)}</span>
-              </div>
-              <div className="text-sm text-slate-500 flex justify-between mt-1">
-                <span>Bar-Umsätze</span>
-                <span className="text-emerald-400">
-                  +{formatCurrency(summary.cashSales)}
-                </span>
+              <div className="text-2xl font-bold text-slate-100">
+                {formatCurrency(summary.startingBalance)}
               </div>
             </div>
 
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6">
-              <div className="flex items-center gap-3 mb-2">
-                <CreditCard className="w-5 h-5 text-blue-400" />
-                <h3 className="text-slate-400 font-medium">Karten-Umsätze</h3>
+              <div className="flex items-center gap-3 text-slate-400 mb-2">
+                <Banknote className="w-5 h-5 text-emerald-400" />
+                <span className="text-sm font-medium">Bargeld-Umsatz</span>
               </div>
-              <div className="text-4xl font-bold text-slate-100">
-                {formatCurrency(summary.cardSales)}
+              <div className="text-2xl font-bold text-emerald-400">
+                +{formatCurrency(summary.cashSales)}
+              </div>
+            </div>
+
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6">
+              <div className="flex items-center gap-3 text-slate-400 mb-2">
+                <CreditCard className="w-5 h-5 text-blue-400" />
+                <span className="text-sm font-medium">Karte / Sonstiges</span>
+              </div>
+              <div className="text-2xl font-bold text-slate-100">
+                {formatCurrency(summary.cardSales + summary.otherSales)}
+              </div>
+            </div>
+
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6">
+              <div className="flex items-center gap-3 text-slate-400 mb-2">
+                <Activity className="w-5 h-5 text-purple-400" />
+                <span className="text-sm font-medium">Soll-Kassenstand</span>
+              </div>
+              <div className="text-2xl font-bold text-purple-400">
+                {formatCurrency(summary.expectedCash)}
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6">
+            <h3 className="text-lg font-bold text-slate-100 mb-4">
+              Sitzungsdetails
+            </h3>
+            <div className="space-y-3">
+              <div className="flex justify-between py-2 border-b border-slate-800 text-sm">
+                <span className="text-slate-400">Gestartet am:</span>
+                <span className="text-slate-200">
+                  {new Date(summary.startTime).toLocaleString("de-AT")}
+                </span>
+              </div>
+              <div className="flex justify-between py-2 border-b border-slate-800 text-sm">
+                <span className="text-slate-400">Bar-Umsätze:</span>
+                <span className="text-slate-200 font-medium">
+                  {formatCurrency(summary.cashSales)}
+                </span>
+              </div>
+              <div className="flex justify-between py-2 border-b border-slate-800 text-sm">
+                <span className="text-slate-400">Kartenzahlungen:</span>
+                <span className="text-slate-200 font-medium">
+                  {formatCurrency(summary.cardSales)}
+                </span>
               </div>
               {summary.otherSales > 0 && (
-                <div className="mt-4 text-sm text-slate-500 flex justify-between">
-                  <span>Gutscheine / Sonstiges</span>
-                  <span className="text-purple-400">
-                    +{formatCurrency(summary.otherSales)}
+                <div className="flex justify-between py-2 border-b border-slate-800 text-sm">
+                  <span className="text-slate-400">Gutscheine / Sonstige:</span>
+                  <span className="text-slate-200 font-medium">
+                    {formatCurrency(summary.otherSales)}
                   </span>
                 </div>
               )}
@@ -274,7 +356,7 @@ export const CashierDashboard = () => {
               </p>
             </div>
             <button
-              onClick={() => setShowCloseModal(true)}
+              onClick={handleOpenCloseModal}
               className="w-full sm:w-auto bg-slate-800 hover:bg-slate-700 text-white font-medium px-6 py-3 rounded-xl transition flex items-center justify-center gap-2"
             >
               <CheckCircle2 className="w-5 h-5" />
@@ -295,6 +377,51 @@ export const CashierDashboard = () => {
             </div>
 
             <form onSubmit={handleCloseSession} className="p-6">
+              {openQueueSummary && openQueueSummary.count > 0 && (
+                <div
+                  data-testid="cashier-session-offline-warning"
+                  className="mb-6 rounded-xl border border-amber-500/40 bg-amber-500/10 p-4 text-amber-200"
+                >
+                  <div className="flex items-start gap-3">
+                    <AlertTriangle className="mt-0.5 h-5 w-5 flex-shrink-0 text-amber-400" />
+                    <div className="space-y-2 text-sm">
+                      <p className="font-semibold text-amber-300">
+                        Achtung: {openQueueSummary.count} offene Vormerkung
+                        {openQueueSummary.count === 1 ? "" : "en"} (
+                        {formatCurrency(openQueueSummary.totalCents)}) auf
+                        diesem Gerät!
+                      </p>
+                      <p className="text-xs text-amber-200/90 leading-relaxed">
+                        Auf diesem Gerät liegen noch nicht an den Server
+                        übertragene Vormerkungen. Bitte stelle die
+                        Netzwerkverbindung her, damit sie gesendet werden
+                        können, oder prüfe das Offline-Warteschlangen-Panel.
+                      </p>
+                      <p className="text-xs text-amber-300/80 italic">
+                        Hinweis: Es werden ausschließlich die offenen
+                        Vormerkungen auf diesem Gerät geprüft. Nach dem
+                        Sitzungsschluss können diese Vormerkungen nicht mehr
+                        dieser Kassensitzung zugeordnet werden.
+                      </p>
+                      <label className="flex items-start gap-2 pt-2 cursor-pointer select-none text-xs font-medium text-amber-100">
+                        <input
+                          type="checkbox"
+                          checked={acknowledgedOpenQueue}
+                          onChange={(e) =>
+                            setAcknowledgedOpenQueue(e.target.checked)
+                          }
+                          className="mt-0.5 rounded border-amber-400 text-indigo-600 focus:ring-amber-400"
+                        />
+                        <span>
+                          Ich habe die offenen Vormerkungen zur Kenntnis
+                          genommen und möchte die Sitzung trotzdem abschließen.
+                        </span>
+                      </label>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               <div className="mb-6">
                 <div className="flex justify-between text-sm mb-1">
                   <span className="text-slate-400">
@@ -363,7 +490,18 @@ export const CashierDashboard = () => {
                 </button>
                 <button
                   type="submit"
-                  className="flex-1 px-4 py-3 rounded-xl font-medium bg-indigo-600 text-white hover:bg-indigo-700 transition"
+                  disabled={Boolean(
+                    openQueueSummary &&
+                      openQueueSummary.count > 0 &&
+                      !acknowledgedOpenQueue,
+                  )}
+                  className={`flex-1 px-4 py-3 rounded-xl font-medium text-white transition ${
+                    openQueueSummary &&
+                    openQueueSummary.count > 0 &&
+                    !acknowledgedOpenQueue
+                      ? "bg-slate-700 text-slate-400 cursor-not-allowed opacity-60"
+                      : "bg-indigo-600 hover:bg-indigo-700"
+                  }`}
                 >
                   Abschließen
                 </button>

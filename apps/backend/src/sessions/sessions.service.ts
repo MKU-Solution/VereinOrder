@@ -163,7 +163,17 @@ export class SessionsService {
     };
   }
 
-  async closeSession(id: string, userId: string, closingBalance: number) {
+  async closeSession(
+    id: string,
+    userId: string,
+    closingBalance: number,
+    offlineQueueWarning?: {
+      hasOpenOrders: boolean;
+      openCount: number;
+      openTotalCents: number;
+      acknowledged: boolean;
+    },
+  ) {
     if (
       !Number.isInteger(closingBalance) ||
       closingBalance < 0 ||
@@ -222,6 +232,16 @@ export class SessionsService {
             expectedCash,
             closingBalance,
             difference: closingBalance - expectedCash,
+            ...(offlineQueueWarning?.hasOpenOrders
+              ? {
+                  offlineQueueWarning: {
+                    hasOpenOrders: true,
+                    openCount: offlineQueueWarning.openCount,
+                    openTotalCents: offlineQueueWarning.openTotalCents,
+                    acknowledged: offlineQueueWarning.acknowledged,
+                  },
+                }
+              : {}),
           },
         },
       });

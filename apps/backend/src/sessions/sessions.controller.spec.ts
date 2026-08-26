@@ -48,6 +48,32 @@ describe("SessionsController – Identität und Rollen", () => {
       "session-1",
       "cashier-1",
       7500,
+      undefined,
+    );
+  });
+
+  it("reicht offlineQueueWarning beim Schließen an den Service weiter", async () => {
+    const request = { user: { userId: "cashier-1", role: "CASHIER" } };
+    const warning = {
+      hasOpenOrders: true,
+      openCount: 3,
+      openTotalCents: 4500,
+      acknowledged: true,
+    };
+    await controller.closeSession(
+      request,
+      { id: "session-1" },
+      {
+        closingBalance: 7500,
+        offlineQueueWarning: warning,
+      },
+    );
+
+    expect(service.closeSession).toHaveBeenCalledWith(
+      "session-1",
+      "cashier-1",
+      7500,
+      warning,
     );
   });
 

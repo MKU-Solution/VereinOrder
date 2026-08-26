@@ -36,6 +36,12 @@ import {
 import { useAdminAreaData } from "./useAdminAreaData";
 import { useAuthStore } from "../../store/useAuthStore";
 import { ShieldAlert, AlertTriangle } from "lucide-react";
+import { AdminEventCompleteModal } from "./AdminEventCompleteModal";
+import {
+  getOfflineQueueDB,
+  getOpenOfflineQueueSummaryForEvent,
+  type OpenOfflineQueueSummary,
+} from "../../lib/offlineQueueDb";
 
 type Tab = AdminAreaId;
 
@@ -81,6 +87,12 @@ export const AdminDashboardController = ({
   const [restoreQueuesConfirmed, setRestoreQueuesConfirmed] = useState(false);
   const [restoreOperationBusy, setRestoreOperationBusy] = useState(false);
   const [isRetryingJobs, setIsRetryingJobs] = useState(false);
+  const [eventToComplete, setEventToComplete] = useState<EventItem | null>(
+    null,
+  );
+  const [eventCompleteSummary, setEventCompleteSummary] =
+    useState<OpenOfflineQueueSummary>({ count: 0, totalCents: 0 });
+  const [isCompletingEvent, setIsCompletingEvent] = useState(false);
 
   // Generic Modal State (for Areas / Simple Items)
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -1066,17 +1078,44 @@ export const AdminDashboardController = ({
   };
 
   const handleCompleteEvent = async (evt: EventItem) => {
-    if (
-      !confirm(
-        `Möchtest du "${evt.name}" wirklich abschließen? Es können danach keine neuen Bestellungen mehr erfasst werden.`,
-      )
-    )
-      return;
     try {
-      await api.patch(`/events/${evt.id}/status`, { status: "COMPLETED" });
+      const db = await getOfflineQueueDB();
+      const summary = await getOpenOfflineQueueSummaryForEvent(db, evt.id);
+      setEventCompleteSummary(summary);
+    } catch (err) {
+      console.error(
+        "Failed to query open offline queue summary for event",
+        err,
+      );
+      setEventCompleteSummary({ count: 0, totalCents: 0 });
+    }
+    setEventToComplete(evt);
+  };
+
+  const handleConfirmCompleteEvent = async (confirmedWithWarning: boolean) => {
+    if (!eventToComplete) return;
+    setIsCompletingEvent(true);
+    try {
+      await api.patch(`/events/${eventToComplete.id}/status`, {
+        status: "COMPLETED",
+        ...(confirmedWithWarning && eventCompleteSummary.count > 0
+          ? {
+              offlineQueueWarning: {
+                hasOpenOrders: true,
+                openCount: eventCompleteSummary.count,
+                openTotalCents: eventCompleteSummary.totalCents,
+                acknowledged: true,
+              },
+            }
+          : {}),
+      });
+      setEventToComplete(null);
       fetchData();
     } catch (err) {
       console.error("Failed to complete event", err);
+      alert("Fehler beim Abschließen der Veranstaltung.");
+    } finally {
+      setIsCompletingEvent(false);
     }
   };
 
@@ -1174,7 +1213,9 @@ export const AdminDashboardController = ({
                 onVerifyBackup={(b) => void handleVerifyRestore(b.filename)}
                 onPrepareRestore={(b) => openRestorePreparation(b)}
                 onDownloadBackup={(b, file) =>
-                  void handleDownloadBackup(file || b.downloadFiles?.[0] || b.filename)
+                  void handleDownloadBackup(
+                    file || b.downloadFiles?.[0] || b.filename,
+                  )
                 }
                 onRollbackRestore={() =>
                   void handleRestoreOperation("rollback")
@@ -1341,6 +1382,19 @@ export const AdminDashboardController = ({
             </div>
           </div>
         </div>
+      )}
+
+      {/* EVENT COMPLETE WARNING MODAL (Issue #97) */}
+      {eventToComplete && (
+        <AdminEventCompleteModal
+          event={eventToComplete}
+          openQueueSummary={eventCompleteSummary}
+          isSubmitting={isCompletingEvent}
+          onClose={() => {
+            if (!isCompletingEvent) setEventToComplete(null);
+          }}
+          onConfirm={handleConfirmCompleteEvent}
+        />
       )}
 
       {/* PRINTER MODAL */}
