@@ -395,4 +395,112 @@ describe("ProductOptionsModal – Änderungsfall einer Warenkorbzeile (Issue #82
       screen.getByRole("button", { name: "Weiter zu: Beilage" }),
     ).toBeInTheDocument();
   });
+
+  it("erzwingt bei Pflicht-Mehrfachauswahl mit minSelect=2 die Mindestanzahl und benennt die fehlende Anzahl präzise (Issue #94)", () => {
+    const multiMinProduct = {
+      id: "product-plate",
+      name: "Grillteller",
+      price: 1200,
+      optionGroups: [
+        {
+          id: "group-beilagen",
+          name: "Beilagen",
+          selectionType: "MULTIPLE",
+          isRequired: true,
+          minSelect: 2,
+          maxSelect: 3,
+          priceMode: "SURCHARGE",
+          quickSaleTiles: false,
+          sortOrder: 0,
+          options: [
+            {
+              id: "opt-pommes",
+              name: "Pommes",
+              priceEffect: 0,
+              isActive: true,
+              sortOrder: 0,
+            },
+            {
+              id: "opt-reis",
+              name: "Djuvec-Reis",
+              priceEffect: 0,
+              isActive: true,
+              sortOrder: 1,
+            },
+            {
+              id: "opt-salat",
+              name: "Krautsalat",
+              priceEffect: 50,
+              isActive: true,
+              sortOrder: 2,
+            },
+            {
+              id: "opt-brot",
+              name: "Fladenbrot",
+              priceEffect: 50,
+              isActive: true,
+              sortOrder: 3,
+            },
+          ],
+        },
+      ],
+    };
+
+    const onAdd = vi.fn();
+    render(
+      <ProductOptionsModal
+        product={multiMinProduct}
+        isOpen={true}
+        onClose={vi.fn()}
+        onAdd={onAdd}
+      />,
+    );
+
+    // Initial: 0 von 2 gewählt -> Button blockiert, Status benennt 2 fehlende Antworten
+    expect(
+      screen.getByText("Noch 2 Antworten bei „Beilagen“ wählen"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Weiter zu: Beilagen" }),
+    ).toBeInTheDocument();
+
+    // 1 gewählt -> Status benennt 1 fehlende Antwort, Button blockiert weiterhin
+    fireEvent.click(optionButton("Pommes"));
+    expect(
+      screen.getByText("Noch 1 Antwort bei „Beilagen“ wählen"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Weiter zu: Beilagen" }),
+    ).toBeInTheDocument();
+
+    // Klick auf "Weiter zu: Beilagen" löst kein onAdd aus
+    fireEvent.click(
+      screen.getByRole("button", { name: "Weiter zu: Beilagen" }),
+    );
+    expect(onAdd).not.toHaveBeenCalled();
+
+    // 2. Beilage wählen -> Mindestanzahl erreicht!
+    fireEvent.click(optionButton("Djuvec-Reis"));
+    expect(
+      screen.getByText("Alle Pflichtangaben ausgewählt"),
+    ).toBeInTheDocument();
+
+    const addButton = screen.getByRole("button", { name: /Hinzufügen/ });
+    expect(addButton).toBeInTheDocument();
+
+    // 3. Beilage wählen (innerhalb von maxSelect: 3)
+    fireEvent.click(optionButton("Krautsalat"));
+    expect(optionButton("Krautsalat")).toHaveClass("border-emerald-500");
+
+    // 4. Beilage versuchen (übersteigt maxSelect: 3) -> darf nicht gewählt werden
+    fireEvent.click(optionButton("Fladenbrot"));
+    expect(optionButton("Fladenbrot")).not.toHaveClass("border-emerald-500");
+    expect(screen.getByText("Maximal 3 ausgewählt.")).toBeInTheDocument();
+
+    // Hinzufügen mit den 3 gewählten Optionen
+    fireEvent.click(screen.getByRole("button", { name: /Hinzufügen/ }));
+    expect(onAdd).toHaveBeenCalledTimes(1);
+    const [, selectedOptions] = onAdd.mock.calls[0];
+    expect(selectedOptions).toHaveLength(3);
+  });
 });
