@@ -141,12 +141,20 @@ export const ProductOptionsModal = ({
       .filter((x): x is SelectedProductOption => x !== null),
   );
 
-  const statusText =
-    missingRequiredGroups.length === 0
-      ? "Alle Pflichtangaben ausgewählt"
-      : missingRequiredGroups.length === 1
-        ? `Noch 1 Pflichtangabe offen: ${missingRequiredGroups[0].name}`
-        : `Noch ${missingRequiredGroups.length} Pflichtangaben offen: ${missingRequiredGroups.map((g) => g.name).join(", ")}`;
+  let statusText = "Alle Pflichtangaben ausgewählt";
+  if (missingRequiredGroups.length === 1) {
+    const g = missingRequiredGroups[0];
+    const min = g.minSelect ?? (g.isRequired ? 1 : 0);
+    const selCount = (selections[g.id] || []).length;
+    const remaining = min - selCount;
+    if (min > 1) {
+      statusText = `Noch ${remaining} Antwort${remaining === 1 ? "" : "en"} bei „${g.name}“ wählen`;
+    } else {
+      statusText = `Noch 1 Pflichtangabe offen: ${g.name}`;
+    }
+  } else if (missingRequiredGroups.length > 1) {
+    statusText = `Noch ${missingRequiredGroups.length} Pflichtangaben offen: ${missingRequiredGroups.map((g) => g.name).join(", ")}`;
+  }
 
   // Sprechender Hauptknopf: im Änderungsfall "Übernehmen" statt
   // "Hinzufügen" (Issue #82), die Pflichtprüfung bleibt identisch.
@@ -288,7 +296,15 @@ export const ProductOptionsModal = ({
                         : "text-slate-300 bg-slate-700/40 border-slate-600"
                     }`}
                   >
-                    {group.isRequired ? "Pflicht" : "Freiwillig"}
+                    {group.isRequired
+                      ? group.minSelect > 1
+                        ? `Pflicht · mind. ${group.minSelect}${group.maxSelect ? `, max. ${group.maxSelect}` : ""}`
+                        : group.maxSelect && group.selectionType === "MULTIPLE"
+                          ? `Pflicht · max. ${group.maxSelect}`
+                          : "Pflicht"
+                      : group.maxSelect && group.selectionType === "MULTIPLE"
+                        ? `Freiwillig · max. ${group.maxSelect}`
+                        : "Freiwillig"}
                   </span>
                 </div>
 
@@ -304,7 +320,9 @@ export const ProductOptionsModal = ({
                     role="alert"
                   >
                     <AlertTriangle className="w-4 h-4 shrink-0" />
-                    Bitte eine Option auswählen.
+                    {group.minSelect > 1
+                      ? `Bitte mindestens ${group.minSelect} Optionen auswählen.`
+                      : "Bitte eine Option auswählen."}
                   </div>
                 )}
 

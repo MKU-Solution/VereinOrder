@@ -32,6 +32,8 @@ export type OptionGroupFormState = {
   name: string;
   selectionType: "SINGLE" | "MULTIPLE";
   isRequired: boolean;
+  minSelect?: number;
+  maxSelect?: number | null;
   priceMode: "ABSOLUTE" | "SURCHARGE";
   quickSaleTiles: boolean;
   options: OptionFormState[];
@@ -58,9 +60,50 @@ const canBeAbsoluteOrQuickSale = (group: OptionGroupFormState): boolean =>
 const clampGroupToConstraints = (
   group: OptionGroupFormState,
 ): OptionGroupFormState => {
-  if (canBeAbsoluteOrQuickSale(group)) return group;
-  if (group.priceMode === "SURCHARGE" && !group.quickSaleTiles) return group;
-  return { ...group, priceMode: "SURCHARGE", quickSaleTiles: false };
+  const next = { ...group };
+  const activeCount = next.options.filter((o) => o.isActive !== false).length;
+
+  if (next.selectionType === "SINGLE") {
+    next.minSelect = next.isRequired ? 1 : 0;
+    next.maxSelect = 1;
+    if (!canBeAbsoluteOrQuickSale(next)) {
+      next.priceMode = "SURCHARGE";
+      next.quickSaleTiles = false;
+    }
+  } else {
+    // MULTIPLE
+    next.priceMode = "SURCHARGE";
+    next.quickSaleTiles = false;
+
+    if (!next.isRequired) {
+      next.minSelect = 0;
+    } else {
+      const currentMin = next.minSelect ?? 1;
+      next.minSelect = Math.max(1, currentMin);
+    }
+
+    if (next.maxSelect != null) {
+      if (next.maxSelect < (next.minSelect ?? 0)) {
+        next.maxSelect = next.minSelect ?? 1;
+      }
+      if (activeCount > 0 && next.maxSelect > activeCount) {
+        next.maxSelect = activeCount;
+      }
+    }
+
+    if (
+      next.isRequired &&
+      activeCount > 0 &&
+      (next.minSelect ?? 1) > activeCount
+    ) {
+      next.minSelect = activeCount;
+      if (next.maxSelect != null && next.maxSelect < next.minSelect) {
+        next.maxSelect = next.minSelect;
+      }
+    }
+  }
+
+  return next;
 };
 
 // eslint-disable-next-line react-refresh/only-export-components -- Formular-Helfer werden von AdminDashboard.tsx importiert, nicht nur hier gerendert.
@@ -69,6 +112,8 @@ export const newOptionGroup = (): OptionGroupFormState => ({
   name: "",
   selectionType: "SINGLE",
   isRequired: true,
+  minSelect: 1,
+  maxSelect: 1,
   priceMode: "SURCHARGE",
   quickSaleTiles: false,
   options: [],
@@ -91,13 +136,28 @@ export const loadOptionGroupsFromProduct = (
   const groups = Array.isArray(product?.optionGroups)
     ? product.optionGroups
     : [];
-  return groups.map(
-    (g: any): OptionGroupFormState => ({
+  return groups.map((g: any): OptionGroupFormState => {
+    const isRequired = !!g.isRequired;
+    const isSingle = g.selectionType !== "MULTIPLE";
+    const minSelect = Number.isInteger(g.minSelect)
+      ? g.minSelect
+      : isRequired
+        ? 1
+        : 0;
+    const maxSelect = isSingle
+      ? 1
+      : Number.isInteger(g.maxSelect)
+        ? g.maxSelect
+        : null;
+
+    return {
       clientId: newClientId(),
       id: g.id,
       name: g.name || "",
-      selectionType: g.selectionType === "MULTIPLE" ? "MULTIPLE" : "SINGLE",
-      isRequired: !!g.isRequired,
+      selectionType: isSingle ? "SINGLE" : "MULTIPLE",
+      isRequired,
+      minSelect,
+      maxSelect,
       priceMode: g.priceMode === "ABSOLUTE" ? "ABSOLUTE" : "SURCHARGE",
       quickSaleTiles: !!g.quickSaleTiles,
       options: Array.isArray(g.options)
@@ -115,8 +175,8 @@ export const loadOptionGroupsFromProduct = (
             };
           })
         : [],
-    }),
-  );
+    };
+  });
 };
 
 /**
@@ -127,30 +187,46 @@ export const loadOptionGroupsFromProduct = (
  */
 // eslint-disable-next-line react-refresh/only-export-components -- Formular-Helfer werden von AdminDashboard.tsx importiert, nicht nur hier gerendert.
 export const buildOptionGroupsPayload = (groups: OptionGroupFormState[]) =>
-  groups.map((g, groupIndex) => ({
-    ...(g.id ? { id: g.id } : {}),
-    name: g.name.trim(),
-    selectionType: g.selectionType,
-    isRequired: g.isRequired,
-    minSelect: g.isRequired ? 1 : 0,
-    maxSelect: g.selectionType === "SINGLE" ? 1 : null,
-    priceMode: g.priceMode,
-    quickSaleTiles: g.quickSaleTiles,
-    sortOrder: groupIndex,
-    options: g.options.map((o, optionIndex) => {
-      const euro = Number(o.euro) || 0;
-      const cent = Number(o.cent) || 0;
-      const magnitude = euro * 100 + cent;
-      return {
-        ...(o.id ? { id: o.id } : {}),
-        name: o.name.trim(),
-        priceEffect:
-          g.priceMode === "SURCHARGE" && o.negative ? -magnitude : magnitude,
-        isActive: o.isActive,
-        sortOrder: optionIndex,
-      };
-    }),
-  }));
+  groups.map((g, groupIndex) => {
+    const isSingle = g.selectionType === "SINGLE";
+    const minSelect = isSingle
+      ? g.isRequired
+        ? 1
+        : 0
+      : g.isRequired
+        ? Math.max(1, g.minSelect ?? 1)
+        : 0;
+    const maxSelect = isSingle
+      ? 1
+      : g.maxSelect != null && g.maxSelect >= (g.isRequired ? minSelect : 1)
+        ? g.maxSelect
+        : null;
+
+    return {
+      ...(g.id ? { id: g.id } : {}),
+      name: g.name.trim(),
+      selectionType: g.selectionType,
+      isRequired: g.isRequired,
+      minSelect,
+      maxSelect,
+      priceMode: g.priceMode,
+      quickSaleTiles: g.quickSaleTiles,
+      sortOrder: groupIndex,
+      options: g.options.map((o, optionIndex) => {
+        const euro = Number(o.euro) || 0;
+        const cent = Number(o.cent) || 0;
+        const magnitude = euro * 100 + cent;
+        return {
+          ...(o.id ? { id: o.id } : {}),
+          name: o.name.trim(),
+          priceEffect:
+            g.priceMode === "SURCHARGE" && o.negative ? -magnitude : magnitude,
+          isActive: o.isActive,
+          sortOrder: optionIndex,
+        };
+      }),
+    };
+  });
 
 /** Gruppen ohne jede Antwort — an der Kasse unbrauchbar, blockiert das Speichern (Entscheidung 4). */
 // eslint-disable-next-line react-refresh/only-export-components -- Formular-Helfer werden von AdminDashboard.tsx importiert, nicht nur hier gerendert.
@@ -580,6 +656,140 @@ export function ProductOptionGroupsEditor({
                 </ToggleButton>
               </div>
             </div>
+
+            {g.selectionType === "MULTIPLE" && (
+              <div className="rounded-xl border border-slate-700/80 bg-slate-900/60 p-3 space-y-3">
+                <p className="text-xs font-bold text-slate-300">
+                  Auswahlgrenzen bei Mehrfachauswahl
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label
+                      htmlFor={`group-min-select-${g.clientId}`}
+                      className="text-xs font-semibold text-slate-400 block mb-1"
+                    >
+                      Mindestanzahl{" "}
+                      {g.isRequired ? "(mind. 1)" : "(Freiwillig: 0)"}
+                    </label>
+                    {g.isRequired ? (
+                      <input
+                        id={`group-min-select-${g.clientId}`}
+                        type="number"
+                        min={1}
+                        max={
+                          g.maxSelect ??
+                          Math.max(
+                            1,
+                            g.options.filter((o) => o.isActive !== false)
+                              .length,
+                          )
+                        }
+                        disabled={disabled}
+                        value={g.minSelect ?? 1}
+                        onChange={(e) => {
+                          const parsed = parseInt(e.target.value, 10);
+                          const val = Math.max(1, isNaN(parsed) ? 1 : parsed);
+                          const activeCount = g.options.filter(
+                            (o) => o.isActive !== false,
+                          ).length;
+                          const clamped =
+                            activeCount > 0 ? Math.min(val, activeCount) : val;
+                          let nextMax = g.maxSelect;
+                          if (nextMax != null && nextMax < clamped) {
+                            nextMax = clamped;
+                          }
+                          updateGroup(g.clientId, {
+                            minSelect: clamped,
+                            maxSelect: nextMax,
+                          });
+                        }}
+                        className="w-full min-h-11 bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-white text-sm"
+                      />
+                    ) : (
+                      <input
+                        id={`group-min-select-${g.clientId}`}
+                        type="number"
+                        disabled
+                        value={0}
+                        className="w-full min-h-11 bg-slate-800/50 border border-slate-700/50 rounded-xl px-3 py-2 text-slate-400 text-sm cursor-not-allowed"
+                      />
+                    )}
+                    <p className="text-xs text-slate-500 mt-1">
+                      {g.isRequired
+                        ? "Wie viele Antworten an der Kasse mindestens gewählt werden müssen."
+                        : "Bei freiwilligen Gruppen ist die Mindestanzahl immer 0."}
+                    </p>
+                  </div>
+
+                  <div>
+                    <label
+                      htmlFor={`group-max-select-mode-${g.clientId}`}
+                      className="text-xs font-semibold text-slate-400 block mb-1"
+                    >
+                      Höchstanzahl
+                    </label>
+                    <div className="flex items-center gap-2">
+                      <select
+                        id={`group-max-select-mode-${g.clientId}`}
+                        disabled={disabled}
+                        value={g.maxSelect != null ? "LIMITED" : "UNLIMITED"}
+                        onChange={(e) => {
+                          if (e.target.value === "UNLIMITED") {
+                            updateGroup(g.clientId, { maxSelect: null });
+                          } else {
+                            const min = g.isRequired ? (g.minSelect ?? 1) : 1;
+                            updateGroup(g.clientId, {
+                              maxSelect: Math.max(1, min),
+                            });
+                          }
+                        }}
+                        className="min-h-11 bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-white text-sm"
+                      >
+                        <option value="UNLIMITED">Keine Obergrenze</option>
+                        <option value="LIMITED">Begrenzen auf</option>
+                      </select>
+                      {g.maxSelect != null && (
+                        <input
+                          id={`group-max-select-${g.clientId}`}
+                          type="number"
+                          min={g.isRequired ? (g.minSelect ?? 1) : 1}
+                          max={Math.max(
+                            1,
+                            g.options.filter((o) => o.isActive !== false)
+                              .length,
+                          )}
+                          disabled={disabled}
+                          aria-label="Höchstanzahl der Antworten"
+                          value={g.maxSelect}
+                          onChange={(e) => {
+                            const min = g.isRequired ? (g.minSelect ?? 1) : 1;
+                            const parsed = parseInt(e.target.value, 10);
+                            const val = Math.max(
+                              min,
+                              isNaN(parsed) ? min : parsed,
+                            );
+                            const activeCount = g.options.filter(
+                              (o) => o.isActive !== false,
+                            ).length;
+                            const clamped =
+                              activeCount > 0
+                                ? Math.min(val, activeCount)
+                                : val;
+                            updateGroup(g.clientId, { maxSelect: clamped });
+                          }}
+                          className="w-20 min-h-11 bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-white text-sm"
+                        />
+                      )}
+                    </div>
+                    <p className="text-xs text-slate-500 mt-1">
+                      {g.maxSelect != null
+                        ? `Maximal ${g.maxSelect} Antwort${g.maxSelect === 1 ? "" : "en"} auswählbar.`
+                        : "Beliebig viele Antworten auswählbar."}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
 
             <div>
               <label
