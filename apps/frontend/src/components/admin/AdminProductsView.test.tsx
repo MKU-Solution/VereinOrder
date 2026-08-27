@@ -59,7 +59,8 @@ describe("AdminProductsView", () => {
     expect(screen.getAllByText("€ 4,50").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Bratwurst").length).toBeGreaterThan(0);
     expect(screen.getAllByText("€ 6,00").length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/1 Gruppe|1 Option/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Getränke").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("1 Option").length).toBeGreaterThan(0);
 
     const catFilter = screen.getByRole("combobox", {
       name: "Kategorie filtern",
@@ -68,5 +69,33 @@ describe("AdminProductsView", () => {
 
     expect(screen.getAllByText("Bier 0,5l").length).toBeGreaterThan(0);
     expect(screen.queryByText("Bratwurst")).not.toBeInTheDocument();
+  });
+
+  it("zeigt Pfandwert bei Produkten mit deposit > 0 an", () => {
+    const productsWithDeposit = [
+      {
+        id: "prod-3",
+        name: "Mineralwasser Glas",
+        price: 300,
+        deposit: 100,
+        categoryId: "cat-1",
+        targetStationId: null,
+        sortOrder: 1,
+      },
+    ];
+
+    render(
+      <AdminProductsView
+        products={productsWithDeposit}
+        categoriesList={mockCategories}
+        stationsList={mockStations}
+        onRefresh={vi.fn()}
+        onOpenCreate={vi.fn()}
+        onEdit={vi.fn()}
+        onDelete={vi.fn()}
+      />,
+    );
+
+    expect(screen.getAllByText("+ € 1,00 Pfand").length).toBeGreaterThan(0);
   });
 });

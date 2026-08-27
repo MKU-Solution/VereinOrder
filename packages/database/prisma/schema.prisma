@@ -135,6 +135,7 @@ model ProductCategory {
   id        String @id @default(uuid())
   name      String
   sortOrder Int    @default(0)
+  deposit   Int    @default(0) // in cents, Vorgabe fuer Produkte ohne eigenen Pfandbetrag
   eventId   String
   event     Event  @relation(fields: [eventId], references: [id], onDelete: Cascade)
 
@@ -169,6 +170,7 @@ model Product {
   shortName    String?
   description  String?
   price        Int // in cents
+  deposit      Int                 @default(0) // in cents, Pfand je Einheit
   taxRate      Int                 @default(2000) // 20.00% = 2000
   color        String?
   sortOrder    Int                 @default(0)
@@ -326,17 +328,18 @@ enum OrderPaymentStatus {
 }
 
 model Order {
-  id                String                 @id @default(uuid())
-  orderNumber       Int                    @default(autoincrement())
-  totalAmount       Int // in cents
-  lifecycleStatus   OrderLifecycleStatus   @default(SUBMITTED)
-  paymentStatus     OrderPaymentStatus     @default(OPEN)
-  fulfillmentStatus OrderFulfillmentStatus @default(PENDING)
-  isPriority        Boolean                @default(false)
-  idempotencyKey    String?                @unique
-  tableName         String?
-  areaId            String?
-  area              Area?                  @relation(fields: [areaId], references: [id], onDelete: SetNull)
+  id                 String                 @id @default(uuid())
+  orderNumber        Int                    @default(autoincrement())
+  totalAmount        Int // in cents
+  depositRefundTotal Int                    @default(0) // in cents, verrechnetes Pfand
+  lifecycleStatus    OrderLifecycleStatus   @default(SUBMITTED)
+  paymentStatus      OrderPaymentStatus     @default(OPEN)
+  fulfillmentStatus  OrderFulfillmentStatus @default(PENDING)
+  isPriority         Boolean                @default(false)
+  idempotencyKey     String?                @unique
+  tableName          String?
+  areaId             String?
+  area               Area?                  @relation(fields: [areaId], references: [id], onDelete: SetNull)
 
   userId String
   user   User   @relation("OrderCreator", fields: [userId], references: [id])
@@ -464,11 +467,12 @@ enum OrderItemStatus {
 }
 
 model OrderItem {
-  id           String          @id @default(uuid())
-  quantity     Int
-  paidQuantity Int             @default(0)
-  priceAtTime  Int // in cents, snapshot of product price + variant price + extras
-  status       OrderItemStatus @default(PENDING)
+  id            String          @id @default(uuid())
+  quantity      Int
+  paidQuantity  Int             @default(0)
+  priceAtTime   Int // in cents, snapshot of product price + variant price + extras
+  depositAtTime Int             @default(0) // in cents, snapshot of product deposit per unit
+  status        OrderItemStatus @default(PENDING)
 
   // Momentaufnahme der Auswahl zum Bestellzeitpunkt. Die drei Spalten bleiben
   // mit Issue #75 unveraendert, damit Berichte, Stornos und der Bondruck

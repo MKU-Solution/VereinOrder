@@ -108,6 +108,8 @@ export const AdminDashboardController = ({
     // Zielstation der Kategorie (Issue #84) - gilt für alle Produkte der
     // Kategorie ohne eigene Ausnahme. Nur für activeTab === "categories".
     targetStationId?: string;
+    depositEuro: string;
+    depositCent: string;
   }>({
     name: "",
     shortName: "",
@@ -117,6 +119,8 @@ export const AdminDashboardController = ({
     pin: "",
     isActive: true,
     targetStationId: "",
+    depositEuro: "0",
+    depositCent: "00",
   });
   const [modalError, setModalError] = useState("");
   const [isSavingModal, setIsSavingModal] = useState(false);
@@ -130,6 +134,8 @@ export const AdminDashboardController = ({
     name: "",
     euro: "",
     cent: "",
+    depositEuro: "0",
+    depositCent: "00",
     categoryId: "",
     targetStationId: "",
     sortOrder: "0",
@@ -333,10 +339,13 @@ export const AdminDashboardController = ({
       setModalError("");
       setEditingProduct(item || null);
       const price = Number.isInteger(item?.price) ? item.price : 0;
+      const deposit = Number.isInteger(item?.deposit) ? item.deposit : 0;
       setProductFormData({
         name: item?.name || "",
         euro: String(Math.floor(price / 100)),
         cent: String(Math.abs(price % 100)).padStart(2, "0"),
+        depositEuro: String(Math.floor(deposit / 100)),
+        depositCent: String(Math.abs(deposit % 100)).padStart(2, "0"),
         categoryId: item?.categoryId || "",
         targetStationId: item?.targetStationId || "",
         sortOrder: String(item?.sortOrder ?? 0),
@@ -373,6 +382,11 @@ export const AdminDashboardController = ({
         pin: "",
         isActive: true,
         targetStationId: item?.targetStationId || "",
+        depositEuro: String(Math.floor((item?.deposit ?? 0) / 100)),
+        depositCent: String(Math.abs((item?.deposit ?? 0) % 100)).padStart(
+          2,
+          "0",
+        ),
       });
       setIsModalOpen(true);
       if (!eventId) {
@@ -403,6 +417,8 @@ export const AdminDashboardController = ({
           pin: "",
           isActive: item.isActive ?? true,
           targetStationId: "",
+          depositEuro: "0",
+          depositCent: "00",
         });
       } else {
         setEditingItem(null);
@@ -415,6 +431,8 @@ export const AdminDashboardController = ({
           pin: "",
           isActive: true,
           targetStationId: "",
+          depositEuro: "0",
+          depositCent: "00",
         });
       }
       setIsModalOpen(true);
@@ -522,10 +540,30 @@ export const AdminDashboardController = ({
             await api.post(endpoint, { ...payload, eventId });
           }
         } else if (activeTab === "categories") {
+          const depositEuroInput = formData.depositEuro.trim() || "0";
+          const depositCentInput = formData.depositCent.trim() || "0";
+          const depositEuro = Number(depositEuroInput);
+          const depositCent = Number(depositCentInput);
+          if (
+            !/^\d+$/.test(depositEuroInput) ||
+            !/^\d+$/.test(depositCentInput) ||
+            !Number.isSafeInteger(depositEuro) ||
+            !Number.isSafeInteger(depositCent) ||
+            depositEuro < 0 ||
+            depositCent < 0 ||
+            depositCent > 99 ||
+            depositEuro * 100 + depositCent > 2_147_483_647
+          ) {
+            setModalError(
+              "Pfand: Euro muss eine nichtnegative ganze Zahl und Cent ein Wert von 0 bis 99 sein.",
+            );
+            return;
+          }
           const payload = {
             name: formData.name,
             sortOrder: formData.sortOrder,
             targetStationId: formData.targetStationId || null,
+            deposit: depositEuro * 100 + depositCent,
           };
           if (editingItem) {
             await api.patch(`${endpoint}/${editingItem.id}`, payload);
@@ -643,6 +681,26 @@ export const AdminDashboardController = ({
       setModalError("Die Sortierung muss eine ganze Zahl sein.");
       return;
     }
+    const depositEuroInput = productFormData.depositEuro?.trim() || "0";
+    const depositCentInput = productFormData.depositCent?.trim() || "0";
+    const depositEuro = Number(depositEuroInput);
+    const depositCent = Number(depositCentInput);
+    if (
+      !/^\d+$/.test(depositEuroInput) ||
+      !/^\d+$/.test(depositCentInput) ||
+      !Number.isSafeInteger(depositEuro) ||
+      depositEuro < 0 ||
+      !Number.isSafeInteger(depositCent) ||
+      depositCent < 0 ||
+      depositCent > 99
+    ) {
+      setModalError(
+        "Pfand: Euro muss eine nichtnegative ganze Zahl und Cent ein Wert von 0 bis 99 sein.",
+      );
+      return;
+    }
+    const deposit = depositEuro * 100 + depositCent;
+
     const price = euro * 100 + cent;
     if (!Number.isSafeInteger(price) || price > 2_147_483_647) {
       setModalError(
@@ -675,6 +733,7 @@ export const AdminDashboardController = ({
       const payload = {
         name,
         price,
+        deposit,
         categoryId: productFormData.categoryId,
         targetStationId: productFormData.targetStationId || null,
         sortOrder,
@@ -2172,6 +2231,55 @@ export const AdminDashboardController = ({
                   />
                 </div>
               </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label
+                    htmlFor="product-deposit-euro"
+                    className="text-xs font-bold text-slate-400 block mb-1"
+                  >
+                    Pfand in Euro (optional)
+                  </label>
+                  <input
+                    id="product-deposit-euro"
+                    type="number"
+                    min="0"
+                    step="1"
+                    inputMode="numeric"
+                    value={productFormData.depositEuro}
+                    onChange={(e) =>
+                      setProductFormData({
+                        ...productFormData,
+                        depositEuro: e.target.value,
+                      })
+                    }
+                    className="w-full min-h-11 bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 text-white"
+                  />
+                </div>
+                <div>
+                  <label
+                    htmlFor="product-deposit-cent"
+                    className="text-xs font-bold text-slate-400 block mb-1"
+                  >
+                    Pfand in Cent
+                  </label>
+                  <input
+                    id="product-deposit-cent"
+                    type="number"
+                    min="0"
+                    max="99"
+                    step="1"
+                    inputMode="numeric"
+                    value={productFormData.depositCent}
+                    onChange={(e) =>
+                      setProductFormData({
+                        ...productFormData,
+                        depositCent: e.target.value,
+                      })
+                    }
+                    className="w-full min-h-11 bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 text-white"
+                  />
+                </div>
+              </div>
               <div>
                 <label
                   htmlFor="product-category"
@@ -2504,6 +2612,46 @@ export const AdminDashboardController = ({
                     keine eigene abweichende Station hat. Ohne Auswahl leiten
                     Bons dieser Kategorie an die zentrale Ausgabe.
                   </p>
+                  <fieldset className="mt-4">
+                    <legend className="text-xs font-bold text-slate-400 mb-1">
+                      Pfandvorgabe der Kategorie
+                    </legend>
+                    <div className="grid grid-cols-2 gap-3">
+                      <label className="text-xs text-slate-400">
+                        Euro
+                        <input
+                          inputMode="numeric"
+                          value={formData.depositEuro}
+                          onChange={(event) =>
+                            setFormData({
+                              ...formData,
+                              depositEuro: event.target.value,
+                            })
+                          }
+                          className="mt-1 min-h-11 w-full rounded-xl border border-slate-700 bg-slate-800 px-4 py-2.5 font-mono text-white"
+                          aria-label="Kategoriepfand in Euro"
+                        />
+                      </label>
+                      <label className="text-xs text-slate-400">
+                        Cent
+                        <input
+                          inputMode="numeric"
+                          value={formData.depositCent}
+                          onChange={(event) =>
+                            setFormData({
+                              ...formData,
+                              depositCent: event.target.value,
+                            })
+                          }
+                          className="mt-1 min-h-11 w-full rounded-xl border border-slate-700 bg-slate-800 px-4 py-2.5 font-mono text-white"
+                          aria-label="Kategoriepfand in Cent"
+                        />
+                      </label>
+                    </div>
+                    <p className="mt-1 text-xs text-slate-500">
+                      Wird bei Produkten ohne eigenen Pfandbetrag verwendet.
+                    </p>
+                  </fieldset>
                 </div>
               )}
 

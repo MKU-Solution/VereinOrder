@@ -19,7 +19,10 @@ export class ReportsService {
           ...whereEvent,
           lifecycleStatus: { not: "CANCELLED" },
         },
-        include: { payments: true },
+        include: {
+          payments: true,
+          items: { where: { status: { not: "CANCELLED" } } },
+        },
       }),
       this.prisma.payment.findMany({
         where: {
@@ -39,26 +42,44 @@ export class ReportsService {
 
     let totalAmount = 0;
     let openAmount = 0;
+    let depositCollected = 0;
+    let depositRefunded = 0;
+    let netProductSales = 0;
 
     for (const order of orders) {
       totalAmount += order.totalAmount;
+      depositRefunded += order.depositRefundTotal || 0;
+      for (const item of order.items || []) {
+        const paidQuantity =
+          order.paymentStatus === "PAID"
+            ? item.quantity
+            : Math.min(item.paidQuantity ?? 0, item.quantity);
+        depositCollected += (item.depositAtTime || 0) * paidQuantity;
+        netProductSales += item.priceAtTime * paidQuantity;
+      }
       const orderPaid = order.payments.reduce(
-        (sum, p) => (p.status === "COMPLETED" ? sum + p.amount : sum),
+        (sum, p) =>
+          p.status === "COMPLETED" && p.method !== "REFUND"
+            ? sum + p.amount
+            : sum,
         0,
       );
       if (orderPaid < order.totalAmount) {
         openAmount += order.totalAmount - orderPaid;
       }
     }
+    const depositNet = depositCollected - depositRefunded;
 
     let cashRevenue = 0;
     let cardRevenue = 0;
     let voucherRevenue = 0;
+    let depositPayouts = 0;
 
     for (const payment of payments) {
       if (payment.method === "CASH") cashRevenue += payment.amount;
       else if (payment.method === "CARD") cardRevenue += payment.amount;
       else if (payment.method === "VOUCHER") voucherRevenue += payment.amount;
+      else if (payment.method === "REFUND") depositPayouts += payment.amount;
     }
 
     const cancelledAmount = cancelledOrders.reduce(
@@ -73,6 +94,11 @@ export class ReportsService {
       cashRevenue,
       cardRevenue,
       voucherRevenue,
+      depositCollected,
+      depositRefunded,
+      depositNet,
+      depositPayouts,
+      netProductSales,
       cancelledCount: cancelledOrders.length,
       cancelledAmount,
     };
@@ -260,18 +286,20 @@ export class ReportsService {
     return sessions.map((session) => {
       let cashSales = 0;
       let cardSales = 0;
+      let cashPayouts = 0;
 
       for (const p of session.payments) {
         if (p.status === "COMPLETED") {
           if (p.method === "CASH") cashSales += p.amount;
           else if (p.method === "CARD") cardSales += p.amount;
+          else if (p.method === "REFUND") cashPayouts += p.amount;
         } else if (p.status === "REFUNDED") {
           if (p.method === "CASH") cashSales -= p.amount;
           else if (p.method === "CARD") cardSales -= p.amount;
         }
       }
 
-      const expectedCash = session.startingBalance + cashSales;
+      const expectedCash = session.startingBalance + cashSales - cashPayouts;
       const difference =
         session.closingBalance !== null && session.closingBalance !== undefined
           ? session.closingBalance - expectedCash
@@ -286,6 +314,7 @@ export class ReportsService {
         startingBalance: session.startingBalance,
         cashSales,
         cardSales,
+        cashPayouts,
         expectedCash,
         closingBalance: session.closingBalance,
         difference,

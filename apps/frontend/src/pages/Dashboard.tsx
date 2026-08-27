@@ -20,6 +20,7 @@ import {
   type OfflineOrderItemInput,
 } from "../lib/offlineSync";
 import { MAINTENANCE_ENDED_EVENT } from "../lib/maintenance";
+import { resolveProductDeposit } from "../lib/productDeposit";
 
 const formatPrice = (cents: number) => `€ ${(cents / 100).toFixed(2)}`;
 
@@ -79,6 +80,7 @@ const CATALOG_RETRY_MAX_MS = 30_000;
 // den kleinsten Antwortpreis mit dem Zusatz "ab" (Entscheidung 2 der
 // Projektleitung). Ohne solche Gruppe bleibt die Kachel unverändert.
 const getTilePriceLabel = (product: any) => {
+  const deposit = resolveProductDeposit(product);
   const absoluteGroup = (product.optionGroups || []).find(
     (g: any) => g.priceMode === "ABSOLUTE",
   );
@@ -88,10 +90,10 @@ const getTilePriceLabel = (product: any) => {
     );
     if (activeOptions.length > 0) {
       const min = Math.min(...activeOptions.map((o: any) => o.priceEffect));
-      return `ab ${formatPrice(min)}`;
+      return `ab ${formatPrice(min + deposit)}`;
     }
   }
-  return formatPrice(product.price);
+  return formatPrice(product.price + deposit);
 };
 
 // Sub-Komponente für Swipe-to-Delete/Reduce
@@ -223,10 +225,16 @@ export const CartItem = ({
               className="w-full min-h-[44px] flex flex-col items-start justify-center text-left truncate rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-1"
               aria-label={`Auswahl von ${item.product.shortName || item.product.name} ändern`}
             >
-              <span className="flex items-center gap-1.5">
+              <span className="flex items-center gap-1.5 flex-wrap">
                 <span className="text-lg font-semibold text-slate-800">
                   {item.product.shortName || item.product.name}
                 </span>
+                {Number.isInteger(item.product.deposit) &&
+                  item.product.deposit > 0 && (
+                    <span className="text-xs font-semibold text-amber-800 bg-amber-100 border border-amber-300 px-1.5 py-0.5 rounded">
+                      inkl. {formatPrice(item.product.deposit)} Pfand
+                    </span>
+                  )}
                 {isOutOfStock && (
                   <span className="bg-rose-600 text-white text-xs px-1.5 py-0.5 rounded font-bold uppercase">
                     Ausverkauft
@@ -241,10 +249,16 @@ export const CartItem = ({
             </button>
           ) : (
             <>
-              <div className="flex items-center gap-1.5">
+              <div className="flex items-center gap-1.5 flex-wrap">
                 <span className="text-lg font-semibold text-slate-800">
                   {item.product.shortName || item.product.name}
                 </span>
+                {Number.isInteger(item.product.deposit) &&
+                  item.product.deposit > 0 && (
+                    <span className="text-xs font-semibold text-amber-800 bg-amber-100 border border-amber-300 px-1.5 py-0.5 rounded">
+                      inkl. {formatPrice(item.product.deposit)} Pfand
+                    </span>
+                  )}
                 {isOutOfStock && (
                   <span className="bg-rose-600 text-white text-xs px-1.5 py-0.5 rounded font-bold uppercase">
                     Ausverkauft
@@ -346,8 +360,57 @@ export const Dashboard = () => {
     removeItem,
     deleteItem,
     clearCart,
+    depositRefundCount,
+    depositRefundUnitPrice,
+    setDepositRefundCount,
+    setDepositRefundUnitPrice,
     total,
   } = useCartStore();
+
+  const depositRefundValues = useMemo(
+    () =>
+      [
+        ...new Set(
+          products
+            .map((product) => resolveProductDeposit(product))
+            .filter(
+              (deposit): deposit is number =>
+                Number.isInteger(deposit) && (deposit ?? 0) > 0,
+            ),
+        ),
+      ].sort((left, right) => left - right),
+    [products],
+  );
+  const cartGrossTotal = items.reduce(
+    (sum, item) => sum + item.finalPrice * item.quantity,
+    0,
+  );
+
+  useEffect(() => {
+    if (depositRefundValues.includes(depositRefundUnitPrice)) return;
+    setDepositRefundUnitPrice(depositRefundValues[0] ?? 0);
+    setDepositRefundCount(0);
+  }, [
+    depositRefundUnitPrice,
+    depositRefundValues,
+    setDepositRefundCount,
+    setDepositRefundUnitPrice,
+  ]);
+
+  useEffect(() => {
+    if (depositRefundUnitPrice <= 0) return;
+    const maximumRefundCount = Math.floor(
+      cartGrossTotal / depositRefundUnitPrice,
+    );
+    if (depositRefundCount > maximumRefundCount) {
+      setDepositRefundCount(maximumRefundCount);
+    }
+  }, [
+    cartGrossTotal,
+    depositRefundCount,
+    depositRefundUnitPrice,
+    setDepositRefundCount,
+  ]);
 
   // Merkt einen erneuten Versuch mit wachsendem Abstand vor, solange der
   // Katalog leer geblieben ist (Issue #90). Wird von fetchProducts unten nur
@@ -677,6 +740,7 @@ export const Dashboard = () => {
       }));
 
       const eventId = items[0].product.eventId;
+      const depositRefundTotal = depositRefundCount * depositRefundUnitPrice;
 
       await api.post("/orders", {
         eventId,
@@ -685,6 +749,8 @@ export const Dashboard = () => {
         idempotencyKey,
         tableName: nameToUse,
         areaId: areaToUse,
+        depositRefundTotal:
+          depositRefundTotal > 0 ? depositRefundTotal : undefined,
       });
 
       setSuccessMsg("Gesendet!");
@@ -841,6 +907,77 @@ export const Dashboard = () => {
                 onEditOptions={handleEditOptions}
               />
             ))}
+            {/* Pfandrückgabe Zeile im Warenkorb (Issue #137) */}
+            <div className="p-3 bg-amber-50/90 flex items-center justify-between border-t border-amber-200">
+              <div>
+                <div className="text-sm font-bold text-amber-950">
+                  Pfandrückgabe (Gläser/Geschirr)
+                </div>
+                {depositRefundValues.length > 0 ? (
+                  <label className="text-xs text-amber-700">
+                    Pfandwert
+                    <select
+                      value={depositRefundUnitPrice}
+                      onChange={(event) => {
+                        setDepositRefundUnitPrice(Number(event.target.value));
+                        setDepositRefundCount(0);
+                      }}
+                      className="ml-1 min-h-9 rounded-lg border border-amber-300 bg-white px-2 font-mono font-bold text-amber-950"
+                      aria-label="Pfandwert für Rückgabe"
+                    >
+                      {depositRefundValues.map((value) => (
+                        <option key={value} value={value}>
+                          {formatPrice(value)} je Stück
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                ) : (
+                  <div className="text-xs text-amber-700">
+                    Kein Pfandwert im Sortiment hinterlegt
+                  </div>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() =>
+                    setDepositRefundCount(Math.max(0, depositRefundCount - 1))
+                  }
+                  disabled={
+                    depositRefundCount <= 0 || depositRefundUnitPrice <= 0
+                  }
+                  className="w-10 h-10 rounded-xl bg-amber-200 text-amber-900 font-bold flex items-center justify-center disabled:opacity-30 disabled:cursor-not-allowed hover:bg-amber-300 active:scale-95 transition-all"
+                  aria-label="Pfandrückgabe verringern"
+                >
+                  <Minus className="w-5 h-5" />
+                </button>
+                <span
+                  className="w-8 text-center font-bold text-amber-950 font-mono text-base"
+                  aria-label={`${depositRefundCount} Pfandstücke zurück`}
+                >
+                  {depositRefundCount}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setDepositRefundCount(depositRefundCount + 1)}
+                  disabled={
+                    depositRefundUnitPrice <= 0 ||
+                    (depositRefundCount + 1) * depositRefundUnitPrice >
+                      cartGrossTotal
+                  }
+                  className="w-10 h-10 rounded-xl bg-amber-200 text-amber-900 font-bold flex items-center justify-center disabled:opacity-30 disabled:cursor-not-allowed hover:bg-amber-300 active:scale-95 transition-all"
+                  aria-label="Pfandrückgabe erhöhen"
+                >
+                  +
+                </button>
+                {depositRefundCount > 0 && (
+                  <span className="text-sm font-bold text-rose-600 font-mono ml-1">
+                    - {formatPrice(depositRefundCount * depositRefundUnitPrice)}
+                  </span>
+                )}
+              </div>
+            </div>
           </div>
         )}
       </div>

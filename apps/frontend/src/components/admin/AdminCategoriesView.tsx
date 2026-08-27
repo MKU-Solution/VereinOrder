@@ -111,6 +111,7 @@ export const AdminCategoriesView = ({
                 <thead>
                   <tr className="border-b border-slate-700/80 bg-slate-800/60 text-xs font-bold uppercase tracking-wider text-slate-400">
                     <th className="px-5 py-3.5">Kategorie</th>
+                    <th className="px-4 py-3.5">Pfandvorgabe</th>
                     <th className="px-4 py-3.5">Vorgegebene Zielstation</th>
                     <th className="px-4 py-3.5">Sortierung</th>
                     <th className="px-5 py-3.5 text-right">Aktionen</th>
@@ -135,6 +136,11 @@ export const AdminCategoriesView = ({
                             />
                             <span>{cat.name}</span>
                           </div>
+                        </td>
+                        <td className="px-4 py-4 text-xs font-mono text-amber-200">
+                          {Number.isInteger(cat.deposit) && cat.deposit > 0
+                            ? `${(cat.deposit / 100).toFixed(2).replace(".", ",")} €`
+                            : "Kein Pfand"}
                         </td>
                         <td className="px-4 py-4 text-xs text-slate-300">
                           {targetStation ? (
@@ -206,6 +212,11 @@ export const AdminCategoriesView = ({
                         <h3 className="break-words font-bold text-slate-50">
                           {cat.name}
                         </h3>
+                      </div>
+                      <div className="mt-1.5 text-xs font-mono text-amber-200">
+                        {Number.isInteger(cat.deposit) && cat.deposit > 0
+                          ? `Pfandvorgabe: ${(cat.deposit / 100).toFixed(2).replace(".", ",")} €`
+                          : "Keine Pfandvorgabe"}
                       </div>
                     </div>
 

@@ -18,6 +18,7 @@ import {
   type QuickSaleProduct,
   type QuickSaleTile,
 } from "../lib/quickSaleTiles";
+import { resolveProductDeposit } from "../lib/productDeposit";
 
 interface QuickSaleContext {
   id: string;
@@ -68,6 +69,8 @@ export const QuickSaleDashboard = () => {
   const [selectedQuantity, setSelectedQuantity] =
     useState<(typeof quantityOptions)[number]>(1);
   const [cart, setCart] = useState<CartLine[]>([]);
+  const [depositRefundCount, setDepositRefundCount] = useState(0);
+  const [depositRefundUnitPrice, setDepositRefundUnitPrice] = useState(0);
   const [tenderedInput, setTenderedInput] = useState("");
   const [idempotencyKey, setIdempotencyKey] = useState(() =>
     crypto.randomUUID(),
@@ -141,6 +144,25 @@ export const QuickSaleDashboard = () => {
 
   const context =
     contexts.find((event) => event.id === selectedEventId) || null;
+  const depositRefundValues = useMemo(
+    () =>
+      [
+        ...new Set(
+          (context?.products || [])
+            .map((product) => resolveProductDeposit(product))
+            .filter(
+              (deposit): deposit is number =>
+                Number.isInteger(deposit) && (deposit ?? 0) > 0,
+            ),
+        ),
+      ].sort((left, right) => left - right),
+    [context],
+  );
+  useEffect(() => {
+    if (depositRefundValues.includes(depositRefundUnitPrice)) return;
+    setDepositRefundUnitPrice(depositRefundValues[0] ?? 0);
+    setDepositRefundCount(0);
+  }, [depositRefundUnitPrice, depositRefundValues]);
   const categories = useMemo(
     () => [
       "Alle",
@@ -165,8 +187,13 @@ export const QuickSaleDashboard = () => {
       ? options
       : options.filter((option) => option.category === selectedCategory);
   const totalQuantity = cart.reduce((sum, line) => sum + line.quantity, 0);
-  const total = cart.reduce((sum, line) => sum + line.price * line.quantity, 0);
-  const tenderedAmount = parseEuroToCents(tenderedInput);
+  const itemsTotal = cart.reduce(
+    (sum, line) => sum + line.price * line.quantity,
+    0,
+  );
+  const depositRefundTotal = depositRefundCount * depositRefundUnitPrice;
+  const total = Math.max(0, itemsTotal - depositRefundTotal);
+  const tenderedAmount = total === 0 ? 0 : parseEuroToCents(tenderedInput);
   const changeAmount =
     tenderedAmount !== null && tenderedAmount >= total
       ? tenderedAmount - total
@@ -225,14 +252,21 @@ export const QuickSaleDashboard = () => {
 
   const resetSale = () => {
     setCart([]);
+    setDepositRefundCount(0);
     setTenderedInput("");
     setIdempotencyKey(crypto.randomUUID());
   };
 
   const submitSale = async (paymentMethod: "CASH" | "CARD") => {
-    if (!context?.activeSession || cart.length === 0 || submitting) return;
+    if (
+      !context?.activeSession ||
+      (cart.length === 0 && depositRefundCount === 0) ||
+      submitting
+    )
+      return;
     if (
       paymentMethod === "CASH" &&
+      total > 0 &&
       (tenderedAmount === null || tenderedAmount < total)
     ) {
       setError(
@@ -253,7 +287,10 @@ export const QuickSaleDashboard = () => {
           optionIds: line.optionIds.length > 0 ? line.optionIds : undefined,
         })),
         paymentMethod,
-        tenderedAmount: paymentMethod === "CASH" ? tenderedAmount : undefined,
+        tenderedAmount:
+          paymentMethod === "CASH" ? (tenderedAmount ?? 0) : undefined,
+        depositRefundTotal:
+          depositRefundTotal > 0 ? depositRefundTotal : undefined,
       });
       setResult(response.data);
       setCardConfirmationOpen(false);
@@ -564,6 +601,73 @@ export const QuickSaleDashboard = () => {
                 )}
               </div>
 
+              {/* Pfandrückgabe-Steuerung (Issue #137) */}
+              <div className="border-t border-dashed border-slate-300 py-3 bg-amber-50/60 rounded-xl px-2 my-2 flex items-center justify-between gap-2">
+                <div>
+                  <p className="text-xs font-black text-amber-950">
+                    Pfandrückgabe
+                  </p>
+                  {depositRefundValues.length > 0 ? (
+                    <label className="mt-1 block text-[10px] font-bold text-amber-700">
+                      Pfandwert
+                      <select
+                        value={depositRefundUnitPrice}
+                        onChange={(event) => {
+                          setDepositRefundUnitPrice(Number(event.target.value));
+                          setDepositRefundCount(0);
+                        }}
+                        className="ml-1 min-h-9 rounded-lg border border-amber-300 bg-white px-2 font-mono text-xs font-black text-amber-950"
+                        aria-label="Pfandwert für Rückgabe"
+                      >
+                        {depositRefundValues.map((value) => (
+                          <option key={value} value={value}>
+                            {formatCurrency(value)} / Stk.
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  ) : (
+                    <p className="text-[10px] font-bold text-amber-700">
+                      Noch kein Pfandwert im Sortiment hinterlegt
+                    </p>
+                  )}
+                </div>
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setDepositRefundCount(Math.max(0, depositRefundCount - 1))
+                    }
+                    disabled={
+                      depositRefundCount <= 0 || depositRefundUnitPrice <= 0
+                    }
+                    className="min-h-10 min-w-9 rounded-lg border border-amber-300 bg-amber-200 text-amber-950 font-bold hover:bg-amber-300 disabled:opacity-40"
+                    aria-label="Pfandrückgabe reduzieren"
+                  >
+                    <Minus className="mx-auto h-4 w-4" />
+                  </button>
+                  <span className="min-w-8 text-center font-mono text-sm font-black text-amber-950">
+                    {depositRefundCount}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setDepositRefundCount(depositRefundCount + 1)
+                    }
+                    disabled={depositRefundUnitPrice <= 0}
+                    className="min-h-10 min-w-9 rounded-lg border border-amber-300 bg-amber-200 text-amber-950 font-bold hover:bg-amber-300 disabled:opacity-40"
+                    aria-label="Pfandrückgabe erhöhen"
+                  >
+                    <Plus className="mx-auto h-4 w-4" />
+                  </button>
+                  {depositRefundCount > 0 && (
+                    <span className="font-mono text-sm font-black text-rose-600 ml-1">
+                      - {formatCurrency(depositRefundTotal)}
+                    </span>
+                  )}
+                </div>
+              </div>
+
               <div className="border-y-2 border-dashed border-slate-400 py-3">
                 <div className="flex items-end justify-between gap-3">
                   <span className="text-sm font-black uppercase tracking-wider">
@@ -645,17 +749,23 @@ export const QuickSaleDashboard = () => {
                   <button
                     type="button"
                     disabled={
-                      cart.length === 0 || submitting || changeAmount === null
+                      (cart.length === 0 && depositRefundCount === 0) ||
+                      submitting ||
+                      (total > 0 && changeAmount === null)
                     }
                     onClick={() => void submitSale("CASH")}
                     className="inline-flex min-h-14 w-full items-center justify-center gap-3 rounded-2xl bg-emerald-600 px-4 text-lg font-black text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-45 focus-visible:ring-2 focus-visible:ring-emerald-400"
                   >
                     <Banknote className="h-5 w-5" aria-hidden="true" />{" "}
-                    {submitting ? "Wird gebucht …" : "Bar kassieren"}
+                    {submitting
+                      ? "Wird gebucht …"
+                      : total === 0 && depositRefundCount > 0
+                        ? `Pfand bar auszahlen (${formatCurrency(depositRefundTotal)})`
+                        : "Bar kassieren"}
                   </button>
                   <button
                     type="button"
-                    disabled={cart.length === 0 || submitting}
+                    disabled={cart.length === 0 || submitting || total === 0}
                     onClick={() => setCardConfirmationOpen(true)}
                     className="inline-flex min-h-14 w-full items-center justify-center gap-3 rounded-2xl bg-blue-700 px-4 text-lg font-black text-white hover:bg-blue-800 disabled:cursor-not-allowed disabled:opacity-45 focus-visible:ring-2 focus-visible:ring-blue-400"
                   >

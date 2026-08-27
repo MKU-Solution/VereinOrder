@@ -1,3 +1,5 @@
+import { resolveProductDeposit } from "./productDeposit";
+
 // Kachelableitung der Ein-Tipp-Kassen (Issue #66, Stationskasse).
 //
 // Herausgezogen aus QuickSaleDashboard.tsx (vormals der `options`-useMemo-Block).
@@ -37,9 +39,15 @@ export interface QuickSaleProduct {
   name: string;
   shortName?: string | null;
   price: number;
+  deposit?: number;
   color?: string | null;
   availability: "AVAILABLE" | "LOW_STOCK" | "OUT_OF_STOCK";
-  category?: { id: string; name: string; sortOrder: number } | null;
+  category?: {
+    id: string;
+    name: string;
+    sortOrder: number;
+    deposit?: number;
+  } | null;
   optionGroups: QuickSaleOptionGroup[];
 }
 
@@ -51,6 +59,7 @@ export interface QuickSaleTile {
   detail?: string;
   hint?: string;
   price: number;
+  deposit?: number;
   color?: string | null;
   availability: QuickSaleProduct["availability"];
   category: string;
@@ -74,6 +83,7 @@ export interface QuickSaleTile {
  *   Kachelpreis unbestimmt und das Produkt wird nicht angeboten.
  * - Preisbildung der Kachelgruppe: `ABSOLUTE` ersetzt den Grundpreis durch
  *   den Optionspreis, `SURCHARGE` addiert ihn auf den Produktpreis.
+ * - Pfandbetrag (`product.deposit`) wird automatisch addiert (Issue #137).
  */
 export function deriveQuickSaleTiles(
   products: QuickSaleProduct[],
@@ -81,6 +91,7 @@ export function deriveQuickSaleTiles(
   return products.flatMap((product) => {
     const category = product.category?.name || "Ohne Kategorie";
     const groups = product.optionGroups || [];
+    const productDeposit = resolveProductDeposit(product);
 
     // Die Auffächerung in Kacheln hängt ausschließlich an der Gruppe mit
     // quickSaleTiles === true, nie an priceMode oder der Anzahl der Gruppen.
@@ -119,7 +130,7 @@ export function deriveQuickSaleTiles(
         (o) => o.isActive !== false,
       );
       return activeTileOptions.map((option) => {
-        const price =
+        const basePrice =
           tileGroup.priceMode === "ABSOLUTE"
             ? option.priceEffect
             : product.price + option.priceEffect;
@@ -130,7 +141,8 @@ export function deriveQuickSaleTiles(
           label: product.shortName || product.name,
           detail: option.name,
           hint: defaultHint,
-          price,
+          price: basePrice + productDeposit,
+          deposit: productDeposit > 0 ? productDeposit : undefined,
           color: product.color,
           availability: product.availability,
           category,
@@ -145,7 +157,8 @@ export function deriveQuickSaleTiles(
         optionIds: defaultOptionIds,
         label: product.shortName || product.name,
         hint: defaultHint,
-        price: product.price,
+        price: product.price + productDeposit,
+        deposit: productDeposit > 0 ? productDeposit : undefined,
         color: product.color,
         availability: product.availability,
         category,

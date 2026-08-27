@@ -124,7 +124,15 @@ export class SessionsService {
   async getSummary(id: string, userId: string) {
     const session = await this.prisma.cashierSession.findUnique({
       where: { id },
-      include: { payments: true },
+      include: {
+        payments: true,
+        orders: {
+          where: { lifecycleStatus: { not: "CANCELLED" } },
+          include: {
+            items: { where: { status: { not: "CANCELLED" } } },
+          },
+        },
+      },
     });
 
     if (!session) throw new NotFoundException("Session not found");
@@ -134,11 +142,13 @@ export class SessionsService {
     let cashSales = 0;
     let cardSales = 0;
     let otherSales = 0;
+    let cashPayouts = 0;
 
     for (const p of session.payments) {
       if (p.status === "COMPLETED") {
         if (p.method === "CASH") cashSales += p.amount;
         else if (p.method === "CARD") cardSales += p.amount;
+        else if (p.method === "REFUND") cashPayouts += p.amount;
         else otherSales += p.amount;
       } else if (p.status === "REFUNDED") {
         if (p.method === "CASH") cashSales -= p.amount;
@@ -147,7 +157,22 @@ export class SessionsService {
       }
     }
 
-    const expectedCash = session.startingBalance + cashSales;
+    let depositCollected = 0;
+    let depositRefunded = 0;
+
+    for (const order of session.orders || []) {
+      depositRefunded += order.depositRefundTotal || 0;
+      for (const item of order.items || []) {
+        const paidQuantity =
+          order.paymentStatus === "PAID"
+            ? item.quantity
+            : Math.min(item.paidQuantity ?? 0, item.quantity);
+        depositCollected += (item.depositAtTime || 0) * paidQuantity;
+      }
+    }
+    const depositNet = depositCollected - depositRefunded;
+
+    const expectedCash = session.startingBalance + cashSales - cashPayouts;
 
     return {
       id: session.id,
@@ -156,7 +181,11 @@ export class SessionsService {
       cashSales,
       cardSales,
       otherSales,
+      cashPayouts,
       expectedCash,
+      depositCollected,
+      depositRefunded,
+      depositNet,
       startTime: session.startTime,
       closingBalance: session.closingBalance,
       endTime: session.endTime,
@@ -213,7 +242,10 @@ export class SessionsService {
       const cashSales = payments
         .filter((payment) => payment.method === "CASH")
         .reduce((sum, payment) => sum + payment.amount, 0);
-      const expectedCash = session.startingBalance + cashSales;
+      const cashPayouts = payments
+        .filter((payment) => payment.method === "REFUND")
+        .reduce((sum, payment) => sum + payment.amount, 0);
+      const expectedCash = session.startingBalance + cashSales - cashPayouts;
       const endTime = new Date();
       const updated = await prisma.cashierSession.update({
         where: { id },
@@ -229,6 +261,7 @@ export class SessionsService {
             eventId: session.eventId,
             startingBalance: session.startingBalance,
             cashSales,
+            cashPayouts,
             expectedCash,
             closingBalance,
             difference: closingBalance - expectedCash,

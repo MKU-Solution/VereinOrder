@@ -107,8 +107,13 @@ export class OrdersService {
   /** Zweite Verteidigung hinter den Request-DTOs für direkte Serviceaufrufe. */
   private validateItems(
     items: { productId: string; quantity: number; optionIds?: string[] }[],
+    allowEmpty = false,
   ): number {
-    if (!Array.isArray(items) || items.length === 0 || items.length > 50) {
+    if (
+      !Array.isArray(items) ||
+      (!allowEmpty && items.length === 0) ||
+      items.length > 50
+    ) {
       throw new BadRequestException(
         orderRejection(
           ORDER_REJECTION_CODES.VALIDATION,
@@ -148,6 +153,36 @@ export class OrdersService {
       );
     }
     return totalQuantity;
+  }
+
+  /** Validiert Pfandrückgaben auch bei direkten Serviceaufrufen. */
+  private validateDepositRefundTotal(value: number | undefined): number {
+    const refundTotal = value ?? 0;
+    if (
+      !Number.isInteger(refundTotal) ||
+      refundTotal < 0 ||
+      refundTotal > 2_147_483_647
+    ) {
+      throw new BadRequestException(
+        orderRejection(
+          ORDER_REJECTION_CODES.VALIDATION,
+          "Die Pfandrückgabe muss ein nicht negativer ganzzahliger Centbetrag sein.",
+        ),
+      );
+    }
+    return refundTotal;
+  }
+
+  /** Produktpfand überschreibt die Vorgabe der Kategorie, 0 erbt sie. */
+  private resolveDeposit(product: {
+    deposit?: number | null;
+    category?: { deposit?: number | null } | null;
+  }): number {
+    return product.deposit && product.deposit > 0
+      ? product.deposit
+      : product.category?.deposit && product.category.deposit > 0
+        ? product.category.deposit
+        : 0;
   }
 
   /** Validiert Centbeträge und ihre Summe, bevor irgendeine Zahlung entsteht. */
@@ -216,6 +251,7 @@ export class OrdersService {
               name: true,
               shortName: true,
               price: true,
+              deposit: true,
               color: true,
               sortOrder: true,
               availability: true,
@@ -242,6 +278,7 @@ export class OrdersService {
                   id: true,
                   name: true,
                   sortOrder: true,
+                  deposit: true,
                   targetStationId: true,
                 },
               },
@@ -522,7 +559,12 @@ export class OrdersService {
     });
     if (!existingOrder) return null;
 
-    const payment = existingOrder.payments[0];
+    const payment = existingOrder.payments.find(
+      (entry) => entry.method === dto.paymentMethod,
+    );
+    const refundPayment = existingOrder.payments.find(
+      (entry) => entry.method === "REFUND",
+    );
     // Idempotenzschluessel nach docs/development/produktoptionen-schnittstelle.md
     // ("Idempotenz des Schnellverkaufs"): alle gewaehlten Antwortkennungen
     // gehen aufsteigend sortiert ein, sonst gelten zwei verschiedene
@@ -546,19 +588,36 @@ export class OrdersService {
         return `${item.productId}:${item.quantity}:${optionIds.join(",")}`;
       })
       .sort();
+    const storedGrossAmount = existingOrder.items.reduce(
+      (sum, item) =>
+        sum +
+        ((item.priceAtTime ?? 0) + (item.depositAtTime ?? 0)) * item.quantity,
+      0,
+    );
+    const expectedRefundPayout =
+      existingOrder.totalAmount > 0
+        ? 0
+        : Math.max(
+            0,
+            (existingOrder.depositRefundTotal ?? 0) - storedGrossAmount,
+          );
+    const expectedPaymentCount = expectedRefundPayout > 0 ? 2 : 1;
     const sameTenderedAmount =
       dto.paymentMethod === "CASH"
-        ? payment?.tenderedAmount === dto.tenderedAmount
+        ? (payment?.tenderedAmount ?? 0) === (dto.tenderedAmount ?? 0)
         : dto.tenderedAmount === undefined ||
           dto.tenderedAmount === existingOrder.totalAmount;
     if (
       existingOrder.userId !== userId ||
       existingOrder.eventId !== dto.eventId ||
       !existingOrder.cashierSessionId ||
-      existingOrder.vouchers.length === 0 ||
-      existingOrder.payments.length !== 1 ||
+      (existingOrder.items.length > 0 && existingOrder.vouchers.length === 0) ||
+      existingOrder.payments.length !== expectedPaymentCount ||
       payment?.method !== dto.paymentMethod ||
+      (refundPayment?.amount ?? 0) !== expectedRefundPayout ||
       !sameTenderedAmount ||
+      (existingOrder.depositRefundTotal ?? 0) !==
+        (dto.depositRefundTotal ?? 0) ||
       requestedItems.length !== storedItems.length ||
       requestedItems.some((item, index) => item !== storedItems[index]) ||
       // Issue #66, Stationskasse: beide Seiten werden normalisiert
@@ -604,7 +663,10 @@ export class OrdersService {
     ) {
       throw new BadRequestException("A valid idempotencyKey is required");
     }
-    this.validateItems(dto.items);
+    const depositRefundTotal = this.validateDepositRefundTotal(
+      dto.depositRefundTotal,
+    );
+    this.validateItems(dto.items, depositRefundTotal > 0);
     if (!["CASH", "CARD"].includes(dto.paymentMethod)) {
       throw new BadRequestException(
         "Only CASH and CARD are supported for quick sales",
@@ -726,7 +788,7 @@ export class OrdersService {
           where: { id: { in: productIds }, eventId: dto.eventId },
           include: {
             optionGroups: { include: { options: true } },
-            category: { select: { targetStationId: true } },
+            category: { select: { targetStationId: true, deposit: true } },
           },
         });
         const productsById = new Map(
@@ -765,21 +827,36 @@ export class OrdersService {
 
           const { priceAtTime, variantId, variantName, extras } =
             this.resolveOrderItemPricing(product, item.optionIds ?? []);
-          totalAmount += priceAtTime * item.quantity;
+          const depositAtTime = this.resolveDeposit(product);
+          totalAmount += (priceAtTime + depositAtTime) * item.quantity;
 
           return {
             productId: product.id,
             quantity: item.quantity,
+            paidQuantity: item.quantity,
             priceAtTime,
+            depositAtTime,
             status: "PENDING" as const,
             variantId,
             variantName,
             extras: extras.length > 0 ? (extras as any) : undefined,
           };
         });
+        const grossAmount = totalAmount;
+        const depositRefundPayout = Math.max(
+          0,
+          depositRefundTotal - grossAmount,
+        );
+        totalAmount = Math.max(0, grossAmount - depositRefundTotal);
+        if (depositRefundPayout > 0 && dto.paymentMethod !== "CASH") {
+          throw new BadRequestException(
+            "Eine Pfandauszahlung ist ausschließlich als Barvorgang zulässig.",
+          );
+        }
         if (
           !Number.isSafeInteger(totalAmount) ||
-          totalAmount <= 0 ||
+          !Number.isSafeInteger(depositRefundPayout) ||
+          (totalAmount === 0 && depositRefundTotal === 0) ||
           totalAmount > 2_147_483_647
         ) {
           throw new BadRequestException(
@@ -790,7 +867,7 @@ export class OrdersService {
         let tenderedAmount: number;
         let changeAmount = 0;
         if (dto.paymentMethod === "CASH") {
-          tenderedAmount = dto.tenderedAmount as number;
+          tenderedAmount = dto.tenderedAmount ?? 0;
           if (
             !Number.isInteger(tenderedAmount) ||
             tenderedAmount < totalAmount ||
@@ -832,6 +909,7 @@ export class OrdersService {
         const order = await prisma.order.create({
           data: {
             totalAmount,
+            depositRefundTotal,
             lifecycleStatus: "SUBMITTED",
             paymentStatus: "PAID",
             fulfillmentStatus: "PENDING",
@@ -846,15 +924,35 @@ export class OrdersService {
             stationId: dto.stationId ?? null,
             items: { create: orderItemsData },
             payments: {
-              create: {
-                amount: totalAmount,
-                method: dto.paymentMethod,
-                status: "COMPLETED",
-                cashierSessionId,
-                tenderedAmount:
-                  dto.paymentMethod === "CASH" ? tenderedAmount : null,
-                changeAmount,
-              },
+              create:
+                depositRefundPayout > 0
+                  ? [
+                      {
+                        amount: totalAmount,
+                        method: dto.paymentMethod,
+                        status: "COMPLETED",
+                        cashierSessionId,
+                        tenderedAmount,
+                        changeAmount,
+                      },
+                      {
+                        amount: depositRefundPayout,
+                        method: "REFUND",
+                        status: "COMPLETED",
+                        cashierSessionId,
+                        tenderedAmount: null,
+                        changeAmount: 0,
+                      },
+                    ]
+                  : {
+                      amount: totalAmount,
+                      method: dto.paymentMethod,
+                      status: "COMPLETED",
+                      cashierSessionId,
+                      tenderedAmount:
+                        dto.paymentMethod === "CASH" ? tenderedAmount : null,
+                      changeAmount,
+                    },
             },
           },
           include: {
@@ -894,7 +992,10 @@ export class OrdersService {
         }
 
         await this.dispatchPrintJobs(prisma, order, user, {
-          receiptTitle: "INTERNER ZAHLUNGSNACHWEIS",
+          receiptTitle:
+            order.items.length === 0
+              ? "PFANDRÜCKGABE"
+              : "INTERNER ZAHLUNGSNACHWEIS",
           tenderedAmount,
           changeAmount,
           vouchers,
@@ -916,6 +1017,8 @@ export class OrdersService {
               cashierSessionId,
               paymentMethod: dto.paymentMethod,
               totalAmount,
+              depositRefundTotal,
+              depositRefundPayout,
               tenderedAmount,
               changeAmount,
               vouchersIssued: vouchers.length,
@@ -1083,7 +1186,11 @@ export class OrdersService {
     // 2. Create Customer/Cashier RECEIPT
     if (defaultPrinter && defaultPrinter.isActive) {
       const totalPaid =
-        order.payments?.reduce((sum: number, p: any) => sum + p.amount, 0) || 0;
+        order.payments?.reduce(
+          (sum: number, p: any) =>
+            p.method === "REFUND" ? sum : sum + p.amount,
+          0,
+        ) || 0;
       const changeAmount =
         options.changeAmount ?? Math.max(0, totalPaid - order.totalAmount);
 
@@ -1101,13 +1208,15 @@ export class OrdersService {
             waiterName: user?.name || user?.username || "Kellner",
             createdAt: order.createdAt,
             items: order.items.map((i: any) => ({
-              productName: i.product.name,
+              productName: i.product?.name || "Artikel",
               quantity: i.quantity,
               price: i.priceAtTime,
+              deposit: i.depositAtTime || 0,
               variantName: i.variantName,
               extras: i.extras,
-              totalPrice: i.priceAtTime * i.quantity,
+              totalPrice: (i.priceAtTime + (i.depositAtTime || 0)) * i.quantity,
             })),
+            depositRefundTotal: order.depositRefundTotal || 0,
             totalAmount: order.totalAmount,
             payments:
               order.payments?.map((p: any) => ({
@@ -1216,6 +1325,8 @@ export class OrdersService {
     if (
       existingOrder.userId !== userId ||
       existingOrder.eventId !== dto.eventId ||
+      (existingOrder.depositRefundTotal ?? 0) !==
+        (dto.depositRefundTotal ?? 0) ||
       !sameItems ||
       !samePayments
     ) {
@@ -1231,6 +1342,9 @@ export class OrdersService {
 
   async createOrder(userId: string, dto: CreateOrderDto) {
     this.validateItems(dto?.items);
+    const depositRefundTotal = this.validateDepositRefundTotal(
+      dto.depositRefundTotal,
+    );
     const requestedPayments = dto.payments ?? [];
     const totalPaid = this.validatePayments(requestedPayments);
 
@@ -1268,7 +1382,10 @@ export class OrdersService {
         ];
         const products = await prisma.product.findMany({
           where: { id: { in: productIds }, eventId: dto.eventId },
-          include: { optionGroups: { include: { options: true } } },
+          include: {
+            optionGroups: { include: { options: true } },
+            category: { select: { deposit: true } },
+          },
         });
         const productMap = new Map(
           products.map((product) => [product.id, product]),
@@ -1356,7 +1473,8 @@ export class OrdersService {
 
           const { priceAtTime, variantId, variantName, extras } =
             this.resolveOrderItemPricing(product, item.optionIds ?? []);
-          totalAmount += priceAtTime * item.quantity;
+          const depositAtTime = this.resolveDeposit(product);
+          totalAmount += (priceAtTime + depositAtTime) * item.quantity;
           if (
             !Number.isSafeInteger(totalAmount) ||
             totalAmount > 2_147_483_647
@@ -1373,12 +1491,23 @@ export class OrdersService {
             productId: product.id,
             quantity: item.quantity,
             priceAtTime,
+            depositAtTime,
             status: "PENDING" as const,
             variantId,
             variantName,
             extras: extras.length > 0 ? (extras as any) : undefined,
           };
         });
+
+        if (depositRefundTotal > totalAmount) {
+          throw new BadRequestException(
+            orderRejection(
+              ORDER_REJECTION_CODES.VALIDATION,
+              "Eine Barauszahlung über den Bestellwert ist nur an der Bon- oder Stationskasse möglich.",
+            ),
+          );
+        }
+        totalAmount -= depositRefundTotal;
 
         const initialPaymentStatus =
           totalPaid >= totalAmount
@@ -1390,6 +1519,7 @@ export class OrdersService {
         const order = await prisma.order.create({
           data: {
             totalAmount,
+            depositRefundTotal,
             lifecycleStatus: "SUBMITTED",
             paymentStatus: initialPaymentStatus,
             fulfillmentStatus: "PENDING",
@@ -1401,7 +1531,11 @@ export class OrdersService {
             areaId: dto.areaId,
             cashierSessionId,
             items: {
-              create: orderItemsData,
+              create: orderItemsData.map((item) => ({
+                ...item,
+                paidQuantity:
+                  initialPaymentStatus === "PAID" ? item.quantity : 0,
+              })),
             },
             payments:
               requestedPayments.length > 0
@@ -1911,7 +2045,8 @@ export class OrdersService {
             `Die gewählte Menge (${qty}) für "${orderItem.product.name}" übersteigt die offene Restmenge (${unpaidQuantity}).`,
           );
         }
-        expectedSplitTotal += orderItem.priceAtTime * qty;
+        expectedSplitTotal +=
+          (orderItem.priceAtTime + (orderItem.depositAtTime ?? 0)) * qty;
       }
 
       if (
@@ -1990,7 +2125,11 @@ export class OrdersService {
                   productName: orderItemMap.get(id)?.product?.name,
                   quantity: qty,
                   priceAtTime: orderItemMap.get(id)?.priceAtTime,
-                  totalCents: (orderItemMap.get(id)?.priceAtTime ?? 0) * qty,
+                  depositAtTime: orderItemMap.get(id)?.depositAtTime ?? 0,
+                  totalCents:
+                    ((orderItemMap.get(id)?.priceAtTime ?? 0) +
+                      (orderItemMap.get(id)?.depositAtTime ?? 0)) *
+                    qty,
                 }),
               ),
               amountPaid: newPaid,
@@ -2049,6 +2188,7 @@ export class OrdersService {
           details: {
             reason: normalizedReason,
             totalAmount: order.totalAmount,
+            depositRefundTotal: order.depositRefundTotal ?? 0,
             paymentsCount: order.payments.length,
             vouchersCancelled: cancelledVouchers.count,
           },
@@ -2090,15 +2230,19 @@ export class OrdersService {
       );
 
       const newTotal = remainingItems.reduce(
-        (sum, i) => sum + i.priceAtTime * i.quantity,
+        (sum, i) => sum + (i.priceAtTime + (i.depositAtTime ?? 0)) * i.quantity,
         0,
       );
       const isAllCancelled = remainingItems.length === 0;
+      const adjustedTotal = Math.max(
+        0,
+        newTotal - (order.depositRefundTotal ?? 0),
+      );
 
       await prisma.order.update({
         where: { id: order.id },
         data: {
-          totalAmount: newTotal,
+          totalAmount: adjustedTotal,
           lifecycleStatus: isAllCancelled ? "CANCELLED" : order.lifecycleStatus,
         },
       });
@@ -2114,6 +2258,7 @@ export class OrdersService {
             orderId: order.id,
             productId: item.productId,
             itemPrice: item.priceAtTime,
+            itemDeposit: item.depositAtTime ?? 0,
             quantity: item.quantity,
             vouchersCancelled: cancelledVouchers.count,
           },

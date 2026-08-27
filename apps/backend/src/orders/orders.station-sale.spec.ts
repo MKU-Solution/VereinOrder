@@ -336,7 +336,7 @@ describe("OrdersService – Stationsverkauf für Issue #66", () => {
     });
     // category wird für resolveTargetStationId mitgeladen.
     expect(call.include.category).toEqual({
-      select: { targetStationId: true },
+      select: { targetStationId: true, deposit: true },
     });
   });
 

@@ -114,6 +114,37 @@ describe("Order-Request-DTOs", () => {
     ).resolves.toHaveLength(0);
   });
 
+  it("lässt leere Schnellverkaufspositionen nur für die Serviceprüfung einer Pfandrückgabe durch", async () => {
+    const refundOnlySale = {
+      eventId,
+      idempotencyKey: key,
+      items: [],
+      paymentMethod: "CASH",
+      depositRefundTotal: 100,
+    };
+
+    await expect(
+      errorsFor(CreateQuickSaleDto, refundOnlySale),
+    ).resolves.toHaveLength(0);
+    await expect(
+      errorsFor(CreateStationSaleDto, {
+        ...refundOnlySale,
+        stationId,
+      }),
+    ).resolves.toHaveLength(0);
+
+    // Normale Bestellungen bleiben echte Bestellungen mit mindestens einer
+    // Position; nur der atomare Kassenendpunkt darf eine reine Auszahlung
+    // erfassen und prüft die notwendige Pfandrückgabe im Service.
+    await expect(
+      errorsFor(CreateOrderDto, {
+        ...validOrder,
+        items: [],
+        depositRefundTotal: 100,
+      }),
+    ).resolves.not.toHaveLength(0);
+  });
+
   it("trimmt Stornogründe und lehnt leere oder zu lange Gründe ab", async () => {
     const dto = plainToInstance(CancelOrderDto, { reason: "  Irrtum  " });
     await expect(validate(dto)).resolves.toHaveLength(0);
