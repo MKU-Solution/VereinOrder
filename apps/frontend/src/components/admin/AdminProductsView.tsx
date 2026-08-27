@@ -3,6 +3,7 @@ import { Edit2, Layers, Package, Store, Tag, Trash2 } from "lucide-react";
 
 import { AdminEmptyState } from "./AdminEmptyState";
 import { AdminToolbar } from "./AdminToolbar";
+import { resolveProductDeposit } from "../../lib/productDeposit";
 
 export interface AdminProductsViewProps {
   products: any[];
@@ -207,8 +208,25 @@ export const AdminProductsView = ({
                             </span>
                           )}
                         </td>
-                        <td className="px-4 py-4 font-mono font-bold text-slate-100">
-                          € {priceInEuros}
+                        <td className="px-4 py-4 font-mono text-slate-100">
+                          <div className="font-bold">€ {priceInEuros}</div>
+                          {resolveProductDeposit({
+                            ...prod,
+                            category: categoriesMap.get(prod.categoryId),
+                          }) > 0 && (
+                            <div className="text-xs text-amber-400 font-semibold">
+                              + €{" "}
+                              {(
+                                resolveProductDeposit({
+                                  ...prod,
+                                  category: categoriesMap.get(prod.categoryId),
+                                }) / 100
+                              )
+                                .toFixed(2)
+                                .replace(".", ",")}{" "}
+                              Pfand
+                            </div>
+                          )}
                         </td>
                         <td className="px-4 py-4 text-xs text-slate-300">
                           {effectiveStation ? (
@@ -335,9 +353,26 @@ export const AdminProductsView = ({
                     </div>
 
                     <div className="text-right">
-                      <span className="font-mono text-base font-black text-slate-100">
+                      <div className="font-mono text-base font-black text-slate-100">
                         € {priceInEuros}
-                      </span>
+                      </div>
+                      {resolveProductDeposit({
+                        ...prod,
+                        category: categoriesMap.get(prod.categoryId),
+                      }) > 0 && (
+                        <div className="text-xs text-amber-400 font-semibold font-mono">
+                          + €{" "}
+                          {(
+                            resolveProductDeposit({
+                              ...prod,
+                              category: categoriesMap.get(prod.categoryId),
+                            }) / 100
+                          )
+                            .toFixed(2)
+                            .replace(".", ",")}{" "}
+                          Pfand
+                        </div>
+                      )}
                     </div>
                   </div>
 

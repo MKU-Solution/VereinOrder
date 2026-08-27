@@ -25,6 +25,9 @@ interface SessionSummary {
   cardSales: number;
   otherSales: number;
   expectedCash: number;
+  depositCollected?: number;
+  depositRefunded?: number;
+  depositNet?: number;
   startTime: string;
   endTime?: string;
   closingBalance?: number;
@@ -343,6 +346,24 @@ export const CashierDashboard = () => {
                   </span>
                 </div>
               )}
+              <div className="flex justify-between py-2 border-b border-slate-800 text-sm">
+                <span className="text-slate-400">Pfandeinnahmen:</span>
+                <span className="text-amber-400 font-medium">
+                  {formatCurrency(summary.depositCollected ?? 0)}
+                </span>
+              </div>
+              <div className="flex justify-between py-2 border-b border-slate-800 text-sm">
+                <span className="text-slate-400">Pfandauszahlungen:</span>
+                <span className="text-rose-400 font-medium">
+                  - {formatCurrency(summary.depositRefunded ?? 0)}
+                </span>
+              </div>
+              <div className="flex justify-between py-2 border-b border-slate-800 text-sm">
+                <span className="text-slate-400 font-bold">Pfandsaldo:</span>
+                <span className="text-slate-100 font-bold">
+                  {formatCurrency(summary.depositNet ?? 0)}
+                </span>
+              </div>
             </div>
           </div>
 

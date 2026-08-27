@@ -66,6 +66,7 @@ export const CheckoutModal = ({
       <div className="glass rounded-3xl w-full max-w-md p-6 relative animate-in fade-in zoom-in-95 duration-200">
         <button
           onClick={onClose}
+          aria-label="Abrechnung schließen"
           className="absolute right-6 top-6 text-slate-400 hover:text-white transition-colors"
         >
           <X className="w-6 h-6" />

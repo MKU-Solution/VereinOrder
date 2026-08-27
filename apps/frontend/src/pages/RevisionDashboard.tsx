@@ -25,6 +25,10 @@ interface SummaryData {
   voucherRevenue: number;
   cancelledCount: number;
   cancelledAmount: number;
+  depositCollected?: number;
+  depositRefunded?: number;
+  depositNet?: number;
+  netProductSales?: number;
 }
 
 interface ProductReport {
@@ -341,6 +345,50 @@ export const RevisionDashboard = () => {
             </div>
             <div className="text-xs text-slate-400 mt-0.5">
               {summary.cancelledCount} storniert
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Pfand-Übersicht (Issue #137) */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="glass p-4 rounded-2xl flex items-center justify-between border-amber-500/20">
+          <div>
+            <div className="text-slate-400 text-xs font-semibold uppercase tracking-wider">
+              Pfandeinnahmen
+            </div>
+            <div className="text-xl font-bold text-amber-300">
+              +{formatPrice(summary.depositCollected || 0)}
+            </div>
+          </div>
+        </div>
+        <div className="glass p-4 rounded-2xl flex items-center justify-between border-rose-500/20">
+          <div>
+            <div className="text-slate-400 text-xs font-semibold uppercase tracking-wider">
+              Pfandauszahlungen
+            </div>
+            <div className="text-xl font-bold text-rose-400">
+              -{formatPrice(summary.depositRefunded || 0)}
+            </div>
+          </div>
+        </div>
+        <div className="glass p-4 rounded-2xl flex items-center justify-between border-indigo-500/20">
+          <div>
+            <div className="text-slate-400 text-xs font-semibold uppercase tracking-wider">
+              Pfandsaldo
+            </div>
+            <div className="text-xl font-bold text-indigo-300">
+              {formatPrice(summary.depositNet || 0)}
+            </div>
+          </div>
+        </div>
+        <div className="glass p-4 rounded-2xl flex items-center justify-between border-slate-700/50">
+          <div>
+            <div className="text-slate-400 text-xs font-semibold uppercase tracking-wider">
+              Netto-Warenumsatz
+            </div>
+            <div className="text-xl font-bold text-slate-200">
+              {formatPrice(summary.netProductSales ?? summary.totalAmount)}
             </div>
           </div>
         </div>

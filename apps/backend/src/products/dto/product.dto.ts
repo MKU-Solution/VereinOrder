@@ -62,6 +62,7 @@ class ProductFieldsDto {
   @MaxLength(2000)
   description?: string | null;
   @IsOptional() @IsInt() @Min(0) @Max(2147483647) price?: number;
+  @IsOptional() @IsInt() @Min(0) @Max(2147483647) deposit?: number;
   @IsOptional() @IsInt() @Min(0) @Max(2147483647) taxRate?: number;
   @IsOptional()
   @Transform(trim)
@@ -108,6 +109,7 @@ export class UpdateAvailabilityDto {
 
 class CategoryFieldsDto {
   @IsOptional() @IsInt() @Min(0) @Max(2147483647) sortOrder?: number;
+  @IsOptional() @IsInt() @Min(0) @Max(2147483647) deposit?: number;
   @IsOptional() @IsUUID("4") targetStationId?: string | null;
 }
 export class CreateCategoryDto extends CategoryFieldsDto {

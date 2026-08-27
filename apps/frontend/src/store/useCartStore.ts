@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { resolveProductDeposit } from "../lib/productDeposit";
 
 export interface SelectedCartOption {
   id: string;
@@ -32,6 +33,10 @@ interface CartState {
   removeItem: (cartItemId: string) => void;
   deleteItem: (cartItemId: string) => void;
   clearCart: () => void;
+  depositRefundCount: number;
+  depositRefundUnitPrice: number;
+  setDepositRefundCount: (count: number) => void;
+  setDepositRefundUnitPrice: (unitPrice: number) => void;
   total: number;
 }
 
@@ -55,6 +60,10 @@ const buildCartLine = (
     .reduce((sum, o) => sum + o.priceEffect, 0);
   finalPrice += surcharge;
 
+  // Pfandaufschlag je Stück (Issue #137)
+  const deposit = resolveProductDeposit(product || {});
+  finalPrice += deposit;
+
   // cartItemId enthält alle gewählten Antwortkennungen, aufsteigend sortiert,
   // damit zwei verschiedene Zusammenstellungen desselben Produkts nicht zu
   // einer Warenkorbzeile verschmelzen (und gleiche Zusammenstellungen sicher
@@ -65,12 +74,49 @@ const buildCartLine = (
   return { cartItemId, finalPrice, options };
 };
 
-const recalcTotal = (items: CartItem[]) =>
-  items.reduce((acc, item) => acc + item.finalPrice * item.quantity, 0);
+const recalcTotal = (
+  items: CartItem[],
+  depositRefundCount = 0,
+  depositRefundUnitPrice = 100,
+) => {
+  const itemsTotal = items.reduce(
+    (acc, item) => acc + item.finalPrice * item.quantity,
+    0,
+  );
+  const refundTotal = Math.max(0, depositRefundCount * depositRefundUnitPrice);
+  return Math.max(0, itemsTotal - refundTotal);
+};
+
+const sanitizeNonNegativeInt32 = (value: number) => {
+  if (!Number.isFinite(value)) return 0;
+  return Math.min(2_147_483_647, Math.max(0, Math.floor(value)));
+};
 
 export const useCartStore = create<CartState>((set) => ({
   items: [],
   total: 0,
+  depositRefundCount: 0,
+  depositRefundUnitPrice: 100, // standardmäßig 1,00 € (100 Cent) je Pfandglas
+  setDepositRefundCount: (count) =>
+    set((state) => {
+      const sanitized = sanitizeNonNegativeInt32(count);
+      return {
+        depositRefundCount: sanitized,
+        total: recalcTotal(
+          state.items,
+          sanitized,
+          state.depositRefundUnitPrice,
+        ),
+      };
+    }),
+  setDepositRefundUnitPrice: (unitPrice) =>
+    set((state) => {
+      const sanitized = sanitizeNonNegativeInt32(unitPrice);
+      return {
+        depositRefundUnitPrice: sanitized,
+        total: recalcTotal(state.items, state.depositRefundCount, sanitized),
+      };
+    }),
   addItem: (product, selectedOptions) =>
     set((state) => {
       const { cartItemId, finalPrice, options } = buildCartLine(
@@ -98,7 +144,14 @@ export const useCartStore = create<CartState>((set) => ({
         ];
       }
 
-      return { items: newItems, total: recalcTotal(newItems) };
+      return {
+        items: newItems,
+        total: recalcTotal(
+          newItems,
+          state.depositRefundCount,
+          state.depositRefundUnitPrice,
+        ),
+      };
     }),
 
   updateItemOptions: (cartItemId, selectedOptions) =>
@@ -121,7 +174,14 @@ export const useCartStore = create<CartState>((set) => ({
             ? { ...i, selectedOptions: options, finalPrice }
             : i,
         );
-        return { items: newItems, total: recalcTotal(newItems) };
+        return {
+          items: newItems,
+          total: recalcTotal(
+            newItems,
+            state.depositRefundCount,
+            state.depositRefundUnitPrice,
+          ),
+        };
       }
 
       const mergeTarget = state.items.find((i) => i.id === newCartItemId);
@@ -154,7 +214,14 @@ export const useCartStore = create<CartState>((set) => ({
         );
       }
 
-      return { items: newItems, total: recalcTotal(newItems) };
+      return {
+        items: newItems,
+        total: recalcTotal(
+          newItems,
+          state.depositRefundCount,
+          state.depositRefundUnitPrice,
+        ),
+      };
     }),
 
   removeItem: (cartItemId) =>
@@ -168,14 +235,28 @@ export const useCartStore = create<CartState>((set) => ({
       } else {
         newItems = state.items.filter((i) => i.id !== cartItemId);
       }
-      return { items: newItems, total: recalcTotal(newItems) };
+      return {
+        items: newItems,
+        total: recalcTotal(
+          newItems,
+          state.depositRefundCount,
+          state.depositRefundUnitPrice,
+        ),
+      };
     }),
 
   deleteItem: (cartItemId) =>
     set((state) => {
       const newItems = state.items.filter((i) => i.id !== cartItemId);
-      return { items: newItems, total: recalcTotal(newItems) };
+      return {
+        items: newItems,
+        total: recalcTotal(
+          newItems,
+          state.depositRefundCount,
+          state.depositRefundUnitPrice,
+        ),
+      };
     }),
 
-  clearCart: () => set({ items: [], total: 0 }),
+  clearCart: () => set({ items: [], total: 0, depositRefundCount: 0 }),
 }));

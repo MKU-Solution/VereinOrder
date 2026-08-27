@@ -33,6 +33,7 @@ const PRODUCT_CREATE_FIELD_KEYS = [
   "shortName",
   "description",
   "price",
+  "deposit",
   "taxRate",
   "color",
   "sortOrder",
@@ -47,6 +48,7 @@ const PRODUCT_UPDATE_FIELD_KEYS = [
   "shortName",
   "description",
   "price",
+  "deposit",
   "taxRate",
   "color",
   "sortOrder",
@@ -83,12 +85,14 @@ const PRODUCT_CATEGORY_REQUIRED_MESSAGE =
 const CATEGORY_CREATE_FIELD_KEYS = [
   "name",
   "sortOrder",
+  "deposit",
   "eventId",
   "targetStationId",
 ] as const;
 const CATEGORY_UPDATE_FIELD_KEYS = [
   "name",
   "sortOrder",
+  "deposit",
   "targetStationId",
 ] as const;
 

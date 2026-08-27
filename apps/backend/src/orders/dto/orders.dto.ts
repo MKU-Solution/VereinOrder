@@ -93,6 +93,10 @@ export class CreateOrderDto {
   @IsOptional()
   @IsUUID("4")
   cashierSessionId?: string;
+
+  @IsOptional()
+  @NonNegativeInt32()
+  depositRefundTotal?: number;
 }
 
 export class CreateQuickSaleDto {
@@ -104,7 +108,6 @@ export class CreateQuickSaleDto {
   idempotencyKey: string;
 
   @IsArray()
-  @ArrayMinSize(1)
   @ArrayMaxSize(50)
   @ValidateNested({ each: true })
   @Type(() => OrderItemInputDto)
@@ -116,6 +119,10 @@ export class CreateQuickSaleDto {
   @IsOptional()
   @NonNegativeInt32()
   tenderedAmount?: number;
+
+  @IsOptional()
+  @NonNegativeInt32()
+  depositRefundTotal?: number;
 }
 
 export class CreateStationSaleDto {
@@ -127,7 +134,6 @@ export class CreateStationSaleDto {
   idempotencyKey: string;
 
   @IsArray()
-  @ArrayMinSize(1)
   @ArrayMaxSize(50)
   @ValidateNested({ each: true })
   @Type(() => OrderItemInputDto)
@@ -139,6 +145,10 @@ export class CreateStationSaleDto {
   @IsOptional()
   @NonNegativeInt32()
   tenderedAmount?: number;
+
+  @IsOptional()
+  @NonNegativeInt32()
+  depositRefundTotal?: number;
 
   @IsUUID("4")
   stationId: string;
