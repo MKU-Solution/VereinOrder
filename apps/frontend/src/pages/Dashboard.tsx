@@ -879,15 +879,6 @@ export const Dashboard = () => {
         </div>
       )}
 
-      {/* Dauerhafter Hinweis auf Verbindungszustand und offene Vormerkungen
-          (Issue #65). Nie mit einer bestätigten Bestellung verwechselbar:
-          eigener Wortlaut "vorgemerkt" statt "gesendet"/"bestätigt". */}
-      <OfflineQueueIndicator
-        openCount={openQueueCount}
-        isOnline={isOnline}
-        onOpen={() => setIsQueuePanelOpen(true)}
-      />
-
       {/* Cart List (White background) */}
       <div className="flex-1 overflow-y-auto bg-white pb-2 touch-pan-y">
         {items.length === 0 ? (
@@ -1129,13 +1120,23 @@ export const Dashboard = () => {
 
       {/* Bottom Action Bar (Orange) */}
       <div className="bg-orange-500 text-white p-3 flex justify-between items-center shadow-[0_-4px_10px_rgba(0,0,0,0.2)] shrink-0 h-[72px] pb-safe">
-        <button
-          onClick={clearCart}
-          className="p-3 hover:bg-orange-600 rounded-full transition-colors"
-          aria-label="Warenkorb leeren"
-        >
-          <Trash2 className="w-6 h-6" />
-        </button>
+        <div className="flex shrink-0 items-center gap-1">
+          <button
+            onClick={clearCart}
+            className="p-3 hover:bg-orange-600 rounded-full transition-colors"
+            aria-label="Warenkorb leeren"
+          >
+            <Trash2 className="w-6 h-6" />
+          </button>
+
+          {/* Issue #146: Der Status gehört zur unteren Aktionsleiste und
+              überlagert nicht länger den Arbeitsbereich rechts oben. */}
+          <OfflineQueueIndicator
+            openCount={openQueueCount}
+            isOnline={isOnline}
+            onOpen={() => setIsQueuePanelOpen(true)}
+          />
+        </div>
 
         <div
           className="flex-1 flex justify-center items-center gap-2 sm:gap-4 text-lg font-bold cursor-pointer hover:bg-orange-600 p-2 rounded-lg transition-colors mx-2"

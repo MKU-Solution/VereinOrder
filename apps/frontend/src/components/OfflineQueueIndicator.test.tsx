@@ -14,6 +14,7 @@ describe("OfflineQueueIndicator – Anzeige der Anzahl offener Vormerkungen", ()
 
     expect(screen.getByText("Online")).toBeInTheDocument();
     expect(screen.queryByText(/vorgemerkt/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button")).not.toHaveClass("fixed");
   });
 
   it("zeigt die Anzahl offener Vormerkungen als eigenen Wortlaut, nie als bestätigt oder gesendet", () => {
@@ -22,6 +23,7 @@ describe("OfflineQueueIndicator – Anzeige der Anzahl offener Vormerkungen", ()
     );
 
     expect(screen.getByText("3 vorgemerkt")).toBeInTheDocument();
+    expect(screen.getByText("3 offen")).toBeInTheDocument();
     expect(screen.queryByText(/bestätigt/)).not.toBeInTheDocument();
     expect(screen.queryByText(/gesendet/)).not.toBeInTheDocument();
   });

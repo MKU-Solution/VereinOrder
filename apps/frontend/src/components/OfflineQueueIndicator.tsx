@@ -31,12 +31,12 @@ export const OfflineQueueIndicator = ({
       aria-label={`Offline-Warteschlange öffnen. ${connectionLabel}. ${
         hasOpenEntries ? entriesLabel : "Keine offenen Vormerkungen."
       }`}
-      className={`fixed right-2 top-[70px] z-[60] flex min-h-11 items-center gap-2 rounded-full border px-3 py-2 text-xs font-bold shadow-lg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-900 ${
+      className={`flex min-h-11 shrink-0 items-center gap-1.5 rounded-xl border px-2.5 py-2 text-xs font-bold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-orange-600 ${
         hasOpenEntries
           ? "border-amber-400 bg-amber-500 text-slate-950"
           : isOnline
-            ? "border-emerald-500/40 bg-slate-900/90 text-emerald-300"
-            : "border-rose-500/40 bg-slate-900/90 text-rose-300"
+            ? "border-white/30 bg-orange-600/60 text-white/90"
+            : "border-rose-200 bg-rose-950 text-rose-100"
       }`}
     >
       {isOnline ? (
@@ -44,11 +44,14 @@ export const OfflineQueueIndicator = ({
       ) : (
         <WifiOff className="h-4 w-4 shrink-0" aria-hidden="true" />
       )}
-      <span>{connectionLabel}</span>
+      <span className={hasOpenEntries && isOnline ? "hidden sm:inline" : ""}>
+        {connectionLabel}
+      </span>
       {hasOpenEntries && (
         <span className="flex items-center gap-1 rounded-full bg-slate-950/15 px-2 py-0.5">
           <Inbox className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-          {openCount} vorgemerkt
+          <span className="sm:hidden">{openCount} offen</span>
+          <span className="hidden sm:inline">{openCount} vorgemerkt</span>
         </span>
       )}
     </button>
