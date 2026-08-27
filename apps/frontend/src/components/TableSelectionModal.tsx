@@ -1,6 +1,8 @@
-import { useState, useEffect } from "react";
-import { X, Delete, History, MapPin, Search } from "lucide-react";
+import { useCallback, useState, useEffect } from "react";
+import { X, Delete, History, Map, MapPin, Search } from "lucide-react";
 import { api } from "../lib/api";
+import { FloorPlanViewer } from "./FloorPlanViewer";
+import type { AreaFloorPlan } from "./floorPlanTypes";
 
 interface TableSelectionModalProps {
   isOpen: boolean;
@@ -19,6 +21,26 @@ export const TableSelectionModal = ({
   const [areas, setAreas] = useState<any[]>([]);
   const [recentTables, setRecentTables] = useState<string[]>([]);
   const [selectedAreaId, setSelectedAreaId] = useState<string | undefined>();
+  const [viewMode, setViewMode] = useState<"list" | "plan">("list");
+  const [floorPlans, setFloorPlans] = useState<AreaFloorPlan[]>([]);
+  const [isPlanLoading, setIsPlanLoading] = useState(false);
+
+  const loadFloorPlans = useCallback(async () => {
+    if (!eventId) {
+      setFloorPlans([]);
+      return;
+    }
+    setIsPlanLoading(true);
+    try {
+      const response = await api.get(`/areas/floor-plans?eventId=${eventId}`);
+      setFloorPlans(response.data ?? []);
+    } catch (error) {
+      console.error("Failed to load floor plans", error);
+      setFloorPlans([]);
+    } finally {
+      setIsPlanLoading(false);
+    }
+  }, [eventId]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -47,7 +69,41 @@ export const TableSelectionModal = ({
       console.error("Failed to load recent tables", err);
     }
     void loadAreas();
-  }, [isOpen, eventId]);
+    void loadFloorPlans();
+  }, [isOpen, eventId, loadFloorPlans]);
+
+  useEffect(() => {
+    if (!isOpen || !eventId || viewMode !== "plan") return;
+
+    const refresh = () => void loadFloorPlans();
+    const interval = window.setInterval(refresh, 15_000);
+    let eventSource: EventSource | null = null;
+    try {
+      eventSource = new EventSource(`/realtime/stream?eventId=${eventId}`);
+      eventSource.onmessage = (message) => {
+        try {
+          const payload = JSON.parse(message.data);
+          if (
+            payload.type === "TABLE_STATUS_CHANGED" ||
+            payload.type === "FLOOR_PLAN_UPDATED"
+          ) {
+            refresh();
+          }
+        } catch (error) {
+          console.error("Failed to read floor plan realtime message", error);
+        }
+      };
+    } catch (error) {
+      console.warn(
+        "Floor plan realtime unavailable; polling remains active",
+        error,
+      );
+    }
+    return () => {
+      window.clearInterval(interval);
+      eventSource?.close();
+    };
+  }, [eventId, isOpen, loadFloorPlans, viewMode]);
 
   const saveRecentTable = (table: string) => {
     if (!table || table === "Abholung") return;
@@ -114,117 +170,163 @@ export const TableSelectionModal = ({
       </div>
 
       <div className="flex-1 overflow-y-auto p-4 space-y-6">
-        {/* Input Field */}
-        <div className="bg-slate-800 p-4 rounded-2xl flex items-center shadow-inner">
-          <Search className="w-6 h-6 text-slate-500 mr-3" />
-          <input
-            type="text"
-            value={inputValue}
-            onChange={(e) => {
-              setInputValue(e.target.value);
-              setSelectedAreaId(undefined);
-            }}
-            className="bg-transparent text-3xl font-bold text-white w-full focus:outline-none"
-            placeholder="z.B. 12 oder Bar"
-            autoFocus
+        <div className="grid grid-cols-2 rounded-2xl border border-slate-700 bg-slate-950 p-1">
+          <button
+            type="button"
+            onClick={() => setViewMode("list")}
+            aria-pressed={viewMode === "list"}
+            className={`flex min-h-11 items-center justify-center gap-2 rounded-xl px-3 font-bold transition-colors ${
+              viewMode === "list"
+                ? "bg-indigo-500 text-white"
+                : "text-slate-400 hover:bg-slate-800"
+            }`}
+          >
+            <Search className="h-4 w-4" aria-hidden="true" />
+            Liste & Eingabe
+          </button>
+          <button
+            type="button"
+            onClick={() => setViewMode("plan")}
+            aria-pressed={viewMode === "plan"}
+            className={`flex min-h-11 items-center justify-center gap-2 rounded-xl px-3 font-bold transition-colors ${
+              viewMode === "plan"
+                ? "bg-indigo-500 text-white"
+                : "text-slate-400 hover:bg-slate-800"
+            }`}
+          >
+            <Map className="h-4 w-4" aria-hidden="true" />
+            Raumplan
+          </button>
+        </div>
+
+        {viewMode === "list" ? (
+          <>
+            {/* Input Field */}
+            <div className="bg-slate-800 p-4 rounded-2xl flex items-center shadow-inner">
+              <Search className="w-6 h-6 text-slate-500 mr-3" />
+              <input
+                type="text"
+                value={inputValue}
+                onChange={(e) => {
+                  setInputValue(e.target.value);
+                  setSelectedAreaId(undefined);
+                }}
+                className="bg-transparent text-3xl font-bold text-white w-full focus:outline-none"
+                placeholder="z.B. 12 oder Bar"
+                autoFocus
+              />
+              {inputValue && (
+                <button
+                  onClick={() => {
+                    setInputValue("");
+                    setSelectedAreaId(undefined);
+                  }}
+                  className="p-2 text-slate-400 hover:text-white"
+                  aria-label="Eingabe löschen"
+                >
+                  <X className="w-6 h-6" />
+                </button>
+              )}
+            </div>
+
+            {/* Areas Quick Select */}
+            {areas.length > 0 && (
+              <div className="space-y-2">
+                <h3 className="text-sm font-semibold text-slate-400 uppercase tracking-wider">
+                  Bereiche
+                </h3>
+                <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
+                  {areas.map((a) => (
+                    <button
+                      key={a.id}
+                      onClick={() => handleAreaSelect(a.id, a.name)}
+                      aria-pressed={selectedAreaId === a.id}
+                      className={`shrink-0 border px-5 py-3 rounded-xl font-bold whitespace-nowrap active:bg-indigo-500/40 transition-colors ${selectedAreaId === a.id ? "bg-indigo-500 text-white border-indigo-400" : "bg-indigo-500/20 text-indigo-300 border-indigo-500/30"}`}
+                    >
+                      {a.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Recent Tables */}
+            {recentTables.length > 0 && (
+              <div className="space-y-2">
+                <h3 className="text-sm font-semibold text-slate-400 uppercase tracking-wider flex items-center gap-1">
+                  <History className="w-4 h-4" /> Zuletzt verwendet
+                </h3>
+                <div className="flex flex-wrap gap-2">
+                  {recentTables.map((t) => (
+                    <button
+                      key={t}
+                      onClick={() => handleSubmit(t, null)}
+                      className="bg-slate-800 text-slate-300 border border-slate-700 px-4 py-2 rounded-lg font-medium active:bg-slate-700 transition-colors"
+                    >
+                      {t}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Numpad */}
+            <div className="grid grid-cols-3 gap-3 mt-auto pt-6">
+              {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((num) => (
+                <button
+                  key={num}
+                  onClick={() => handleNumpad(num.toString())}
+                  className="bg-slate-800 hover:bg-slate-700 active:bg-slate-600 text-white text-3xl font-bold py-6 rounded-2xl transition-colors shadow-sm"
+                >
+                  {num}
+                </button>
+              ))}
+              <button
+                onClick={handleTakeaway}
+                className="bg-orange-500/20 hover:bg-orange-500/30 active:bg-orange-500/40 text-orange-400 text-lg font-bold py-6 rounded-2xl transition-colors shadow-sm flex flex-col items-center justify-center gap-1"
+              >
+                Abholung
+              </button>
+              <button
+                onClick={() => handleNumpad("0")}
+                className="bg-slate-800 hover:bg-slate-700 active:bg-slate-600 text-white text-3xl font-bold py-6 rounded-2xl transition-colors shadow-sm"
+              >
+                0
+              </button>
+              <button
+                onClick={handleBackspace}
+                className="bg-slate-800 hover:bg-slate-700 active:bg-slate-600 text-slate-400 text-2xl font-bold py-6 rounded-2xl transition-colors shadow-sm flex items-center justify-center"
+              >
+                <Delete className="w-8 h-8" />
+              </button>
+            </div>
+          </>
+        ) : isPlanLoading && floorPlans.length === 0 ? (
+          <div className="flex min-h-64 items-center justify-center text-sm font-bold text-slate-400">
+            Raumplan wird geladen …
+          </div>
+        ) : (
+          <FloorPlanViewer
+            plans={floorPlans}
+            onSelectTable={(selectedTableName, selectedPlanAreaId) =>
+              handleSubmit(selectedTableName, selectedPlanAreaId)
+            }
           />
-          {inputValue && (
-            <button
-              onClick={() => {
-                setInputValue("");
-                setSelectedAreaId(undefined);
-              }}
-              className="p-2 text-slate-400 hover:text-white"
-              aria-label="Eingabe löschen"
-            >
-              <X className="w-6 h-6" />
-            </button>
-          )}
-        </div>
-
-        {/* Areas Quick Select */}
-        {areas.length > 0 && (
-          <div className="space-y-2">
-            <h3 className="text-sm font-semibold text-slate-400 uppercase tracking-wider">
-              Bereiche
-            </h3>
-            <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
-              {areas.map((a) => (
-                <button
-                  key={a.id}
-                  onClick={() => handleAreaSelect(a.id, a.name)}
-                  aria-pressed={selectedAreaId === a.id}
-                  className={`shrink-0 border px-5 py-3 rounded-xl font-bold whitespace-nowrap active:bg-indigo-500/40 transition-colors ${selectedAreaId === a.id ? "bg-indigo-500 text-white border-indigo-400" : "bg-indigo-500/20 text-indigo-300 border-indigo-500/30"}`}
-                >
-                  {a.name}
-                </button>
-              ))}
-            </div>
-          </div>
         )}
-
-        {/* Recent Tables */}
-        {recentTables.length > 0 && (
-          <div className="space-y-2">
-            <h3 className="text-sm font-semibold text-slate-400 uppercase tracking-wider flex items-center gap-1">
-              <History className="w-4 h-4" /> Zuletzt verwendet
-            </h3>
-            <div className="flex flex-wrap gap-2">
-              {recentTables.map((t) => (
-                <button
-                  key={t}
-                  onClick={() => handleSubmit(t, null)}
-                  className="bg-slate-800 text-slate-300 border border-slate-700 px-4 py-2 rounded-lg font-medium active:bg-slate-700 transition-colors"
-                >
-                  {t}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Numpad */}
-        <div className="grid grid-cols-3 gap-3 mt-auto pt-6">
-          {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((num) => (
-            <button
-              key={num}
-              onClick={() => handleNumpad(num.toString())}
-              className="bg-slate-800 hover:bg-slate-700 active:bg-slate-600 text-white text-3xl font-bold py-6 rounded-2xl transition-colors shadow-sm"
-            >
-              {num}
-            </button>
-          ))}
-          <button
-            onClick={handleTakeaway}
-            className="bg-orange-500/20 hover:bg-orange-500/30 active:bg-orange-500/40 text-orange-400 text-lg font-bold py-6 rounded-2xl transition-colors shadow-sm flex flex-col items-center justify-center gap-1"
-          >
-            Abholung
-          </button>
-          <button
-            onClick={() => handleNumpad("0")}
-            className="bg-slate-800 hover:bg-slate-700 active:bg-slate-600 text-white text-3xl font-bold py-6 rounded-2xl transition-colors shadow-sm"
-          >
-            0
-          </button>
-          <button
-            onClick={handleBackspace}
-            className="bg-slate-800 hover:bg-slate-700 active:bg-slate-600 text-slate-400 text-2xl font-bold py-6 rounded-2xl transition-colors shadow-sm flex items-center justify-center"
-          >
-            <Delete className="w-8 h-8" />
-          </button>
-        </div>
       </div>
 
       {/* Footer / Submit */}
-      <div className="p-4 bg-slate-900 border-t border-slate-800 pb-safe">
-        <button
-          onClick={() => handleSubmit()}
-          disabled={!inputValue.trim()}
-          className="w-full bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 disabled:hover:bg-emerald-500 text-white text-xl font-bold py-4 rounded-2xl shadow-lg shadow-emerald-500/20 transition-all active:scale-[0.98]"
-        >
-          Übernehmen
-        </button>
-      </div>
+      {viewMode === "list" && (
+        <div className="p-4 bg-slate-900 border-t border-slate-800 pb-safe">
+          <button
+            onClick={() => handleSubmit()}
+            disabled={!inputValue.trim()}
+            className="w-full bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 disabled:hover:bg-emerald-500 text-white text-xl font-bold py-4 rounded-2xl shadow-lg shadow-emerald-500/20 transition-all active:scale-[0.98]"
+          >
+            Übernehmen
+          </button>
+        </div>
+      )}
     </div>
   );
 };

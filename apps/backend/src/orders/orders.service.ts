@@ -2217,6 +2217,11 @@ export class OrdersService {
       const updatedItem = await prisma.orderItem.update({
         where: { id: orderItemId },
         data: { status: "CANCELLED" },
+        include: {
+          order: {
+            select: { eventId: true, areaId: true, tableName: true },
+          },
+        },
       });
 
       const cancelledVouchers = await prisma.productVoucher.updateMany({

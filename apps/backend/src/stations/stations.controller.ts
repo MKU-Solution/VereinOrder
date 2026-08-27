@@ -8,6 +8,7 @@ import {
   Query,
   ParseUUIDPipe,
   UseGuards,
+  Optional,
 } from "@nestjs/common";
 import { StationsService } from "./stations.service";
 import { JwtAuthGuard } from "../auth/jwt-auth.guard";
@@ -18,11 +19,15 @@ import {
   UpdateOrderItemStatusDto,
   UpdateStationDto,
 } from "./dto/station.dto";
+import { RealtimeService } from "../realtime/realtime.service";
 
 @Controller("stations")
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class StationsController {
-  constructor(private readonly stationsService: StationsService) {}
+  constructor(
+    private readonly stationsService: StationsService,
+    @Optional() private readonly realtimeService?: RealtimeService,
+  ) {}
 
   @Get()
   @Roles("ADMINISTRATOR", "STATION", "WAITER")
@@ -66,6 +71,17 @@ export class StationsController {
     @Param("itemId", new ParseUUIDPipe({ version: "4" })) itemId: string,
     @Body() data: UpdateOrderItemStatusDto,
   ) {
-    return this.stationsService.updateItemStatus(itemId, data.status);
+    const item = await this.stationsService.updateItemStatus(
+      itemId,
+      data.status,
+    );
+    if (item?.order?.eventId && item.order.areaId && item.order.tableName) {
+      this.realtimeService?.broadcast(
+        item.order.eventId,
+        "TABLE_STATUS_CHANGED",
+        { areaId: item.order.areaId, tableName: item.order.tableName },
+      );
+    }
+    return item;
   }
 }

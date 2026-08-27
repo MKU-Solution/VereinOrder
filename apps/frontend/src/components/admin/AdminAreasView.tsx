@@ -1,8 +1,9 @@
 import { useMemo, useState } from "react";
-import { Edit2, Map, Trash2 } from "lucide-react";
+import { Edit2, LayoutTemplate, Map, Trash2 } from "lucide-react";
 
 import { AdminEmptyState } from "./AdminEmptyState";
 import { AdminToolbar } from "./AdminToolbar";
+import { AdminFloorPlanEditor } from "./AdminFloorPlanEditor";
 
 export interface AdminAreasViewProps {
   areas: any[];
@@ -22,6 +23,7 @@ export const AdminAreasView = ({
   isRefreshing = false,
 }: AdminAreasViewProps) => {
   const [searchQuery, setSearchQuery] = useState("");
+  const [floorPlanArea, setFloorPlanArea] = useState<any | null>(null);
 
   const filteredAreas = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -89,6 +91,18 @@ export const AdminAreasView = ({
                         <div className="flex items-center justify-end gap-1.5">
                           <button
                             type="button"
+                            onClick={() => setFloorPlanArea(area)}
+                            className="inline-flex min-h-9 items-center justify-center gap-2 rounded-lg border border-indigo-400/30 bg-indigo-500/15 px-3 py-2 text-indigo-200 hover:bg-indigo-500/25 focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-200"
+                            aria-label={`Raumplan für ${area.name} bearbeiten`}
+                          >
+                            <LayoutTemplate
+                              aria-hidden="true"
+                              className="h-4 w-4"
+                            />
+                            <span className="hidden xl:inline">Raumplan</span>
+                          </button>
+                          <button
+                            type="button"
                             onClick={() => onEdit(area)}
                             className="inline-flex min-h-9 min-w-9 items-center justify-center rounded-lg border border-slate-700 bg-slate-800 p-2 text-slate-300 hover:bg-slate-700 hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-200"
                             title="Bereich bearbeiten"
@@ -139,6 +153,15 @@ export const AdminAreasView = ({
                 <div className="flex shrink-0 items-center gap-2">
                   <button
                     type="button"
+                    onClick={() => setFloorPlanArea(area)}
+                    className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-xl border border-indigo-400/30 bg-indigo-500/15 p-2.5 text-indigo-200 hover:bg-indigo-500/25 focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-200"
+                    title="Raumplan bearbeiten"
+                    aria-label={`Raumplan für ${area.name} bearbeiten`}
+                  >
+                    <LayoutTemplate aria-hidden="true" className="h-4 w-4" />
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => onEdit(area)}
                     className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-xl border border-slate-700 bg-slate-800 p-2.5 text-slate-200 hover:bg-slate-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-200"
                     title="Bereich bearbeiten"
@@ -161,6 +184,14 @@ export const AdminAreasView = ({
           </div>
         </div>
       )}
+
+      {floorPlanArea ? (
+        <AdminFloorPlanEditor
+          area={floorPlanArea}
+          onClose={() => setFloorPlanArea(null)}
+          onSaved={onRefresh}
+        />
+      ) : null}
     </div>
   );
 };
