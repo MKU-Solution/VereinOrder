@@ -23,7 +23,15 @@ const TABLE_FIELDS = {
     "createdAt",
     "updatedAt",
   ],
-  areas: ["id", "name", "sortOrder", "eventId", "createdAt", "updatedAt"],
+  areas: [
+    "id",
+    "name",
+    "sortOrder",
+    "floorPlan",
+    "eventId",
+    "createdAt",
+    "updatedAt",
+  ],
   stations: [
     "id",
     "name",

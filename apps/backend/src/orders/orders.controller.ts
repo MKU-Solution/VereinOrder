@@ -10,6 +10,7 @@ import {
   UseGuards,
   UseFilters,
   Request,
+  Optional,
 } from "@nestjs/common";
 import { OrdersService } from "./orders.service";
 import { JwtAuthGuard } from "../auth/jwt-auth.guard";
@@ -27,6 +28,7 @@ import {
   UpdatePriorityDto,
 } from "./dto/orders.dto";
 import { OrderSubmissionExceptionFilter } from "./order-submission-exception.filter";
+import { RealtimeService } from "../realtime/realtime.service";
 
 interface AuthenticatedRequest {
   user?: { userId?: string; role?: string };
@@ -35,7 +37,18 @@ interface AuthenticatedRequest {
 @Controller("orders")
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class OrdersController {
-  constructor(private readonly ordersService: OrdersService) {}
+  constructor(
+    private readonly ordersService: OrdersService,
+    @Optional() private readonly realtimeService?: RealtimeService,
+  ) {}
+
+  private broadcastTableStatus(order: any) {
+    if (!order?.eventId || !order?.areaId || !order?.tableName) return;
+    this.realtimeService?.broadcast(order.eventId, "TABLE_STATUS_CHANGED", {
+      areaId: order.areaId,
+      tableName: order.tableName,
+    });
+  }
 
   @Get("quick-sale/context")
   @Roles("ADMINISTRATOR", "CASHIER")
@@ -90,7 +103,9 @@ export class OrdersController {
     @Body() body: CreateOrderDto,
   ) {
     const userId = req.user?.userId;
-    return this.ordersService.createOrder(userId, body);
+    const order = await this.ordersService.createOrder(userId, body);
+    this.broadcastTableStatus(order);
+    return order;
   }
 
   // Issue #65, Abschnitt 7 und Abschnitt 8 Punkte 1 und 2: die beiden
@@ -152,11 +167,13 @@ export class OrdersController {
     @Body() body: AddPaymentsDto,
   ) {
     const userId = req.user?.userId;
-    return this.ordersService.addPaymentsToOrder(
+    const order = await this.ordersService.addPaymentsToOrder(
       params.id,
       body.payments,
       userId,
     );
+    this.broadcastTableStatus(order);
+    return order;
   }
 
   @Post(":id/split-payment")
@@ -167,12 +184,14 @@ export class OrdersController {
     @Body() body: SplitPaymentDto,
   ) {
     const userId = req.user?.userId;
-    return this.ordersService.splitPaymentOrder(
+    const order = await this.ordersService.splitPaymentOrder(
       params.id,
       body.items,
       body.payments,
       userId,
     );
+    this.broadcastTableStatus(order);
+    return order;
   }
 
   @Post(":id/reprint")
@@ -193,7 +212,13 @@ export class OrdersController {
     @Body() body: CancelOrderDto,
   ) {
     const userId = req.user?.userId;
-    return this.ordersService.cancelOrder(params.id, body.reason, userId);
+    const order = await this.ordersService.cancelOrder(
+      params.id,
+      body.reason,
+      userId,
+    );
+    this.broadcastTableStatus(order);
+    return order;
   }
 
   @Post("items/:itemId/cancel")
@@ -204,11 +229,13 @@ export class OrdersController {
     @Body() body: CancelOrderDto,
   ) {
     const userId = req.user?.userId;
-    return this.ordersService.cancelOrderItem(
+    const item = await this.ordersService.cancelOrderItem(
       params.itemId,
       body.reason,
       userId,
     );
+    this.broadcastTableStatus(item?.order);
+    return item;
   }
 
   @Patch(":id/priority")

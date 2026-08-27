@@ -92,6 +92,10 @@ model Area {
   id        String   @id @default(uuid())
   name      String
   sortOrder Int      @default(0)
+  // Versionierter, serverseitig validierter Raumplan. Koordinaten liegen in
+  // einer festen 1000x700-Arbeitsflaeche und bleiben dadurch auf allen
+  // Bildschirmgroessen ohne Datenumrechnung skalierbar (Issue #138).
+  floorPlan Json?
   eventId   String
   event     Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
   orders    Order[]
