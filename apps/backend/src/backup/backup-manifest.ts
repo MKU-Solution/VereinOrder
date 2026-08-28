@@ -28,6 +28,9 @@ export interface BackupModeSums {
   orderTotalAmount: number;
   paymentAmount: Record<string, number>;
   voucherCount: Record<string, number>;
+  valueVoucherBalance: number;
+  valueVoucherMovementBalance: number;
+  valueVoucherCount: Record<string, number>;
 }
 
 export interface BackupSums {
@@ -166,14 +169,33 @@ function assertSums(value: unknown): asserts value is BackupSums {
   if (!isRecord(value.byDataMode)) invalid();
   for (const [dataMode, sums] of Object.entries(value.byDataMode)) {
     if (!/^[A-Z_]{1,32}$/.test(dataMode) || !isRecord(sums)) invalid();
-    assertExactKeys(sums, [
-      "orderTotalAmount",
-      "paymentAmount",
-      "voucherCount",
-    ]);
+    const legacyKeys = ["orderTotalAmount", "paymentAmount", "voucherCount"];
+    const currentKeys = [
+      ...legacyKeys,
+      "valueVoucherBalance",
+      "valueVoucherMovementBalance",
+      "valueVoucherCount",
+    ];
+    const keys = Object.keys(sums);
+    if (
+      keys.length === legacyKeys.length &&
+      keys.every((key) => legacyKeys.includes(key))
+    ) {
+      // Native V1-Manifeste bleiben einspielbar. Nach der Migration existieren
+      // die neuen Tabellen leer; die Normalisierung macht den spaeteren
+      // Soll/Ist-Vergleich mit diesen Nullwerten deterministisch.
+      sums.valueVoucherBalance = 0;
+      sums.valueVoucherMovementBalance = 0;
+      sums.valueVoucherCount = {};
+    } else {
+      assertExactKeys(sums, currentKeys);
+    }
     assertSafeNonNegativeInteger(sums.orderTotalAmount);
     assertNumericRecord(sums.paymentAmount);
     assertNumericRecord(sums.voucherCount);
+    assertSafeNonNegativeInteger(sums.valueVoucherBalance);
+    assertSafeNonNegativeInteger(sums.valueVoucherMovementBalance);
+    assertNumericRecord(sums.valueVoucherCount);
   }
 }
 

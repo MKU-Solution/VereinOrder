@@ -29,6 +29,9 @@ function createPrisma() {
     // Issue #103: ProductVoucher wird jetzt explizit geleert und
     // wiedereingespielt (B5/#100), auditLog vollstaendig ersetzt (B3/B7).
     productVoucher: { deleteMany: jest.fn(), createMany: jest.fn() },
+    valueVoucher: { deleteMany: jest.fn(), createMany: jest.fn() },
+    valueVoucherMovement: { deleteMany: jest.fn(), createMany: jest.fn() },
+    valueVoucherAllocation: { deleteMany: jest.fn(), createMany: jest.fn() },
     auditLog: {
       deleteMany: jest.fn(),
       createMany: jest.fn(),
@@ -70,6 +73,15 @@ function createPrisma() {
     printJob: { ...tx.printJob, findMany: emptyFindMany() },
     auditLog: { ...tx.auditLog, findMany: emptyFindMany() },
     productVoucher: { ...tx.productVoucher, findMany: emptyFindMany() },
+    valueVoucher: { ...tx.valueVoucher, findMany: emptyFindMany() },
+    valueVoucherMovement: {
+      ...tx.valueVoucherMovement,
+      findMany: emptyFindMany(),
+    },
+    valueVoucherAllocation: {
+      ...tx.valueVoucherAllocation,
+      findMany: emptyFindMany(),
+    },
     $transaction: jest.fn(async (callback: (client: typeof tx) => unknown) =>
       callback(tx),
     ),
@@ -93,6 +105,119 @@ describe("BackupService – Wiederherstellung nach Issue #84", () => {
     if (previousBackupDir === undefined) delete process.env.BACKUP_DIR;
     else process.env.BACKUP_DIR = previousBackupDir;
     fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it("sichert Wertgutscheine, Bewegungen und Allokationen im Format 0.2.0", async () => {
+    const { prisma } = createPrisma();
+    prisma.valueVoucher.findMany.mockResolvedValue([{ id: "voucher-1" }]);
+    prisma.valueVoucherMovement.findMany.mockResolvedValue([
+      { id: "movement-1" },
+    ]);
+    prisma.valueVoucherAllocation.findMany.mockResolvedValue([
+      { id: "allocation-1" },
+    ]);
+    const service = new BackupService(
+      prisma as any,
+      makeMaintenanceStateStub(),
+    );
+
+    const metadata = await service.createBackup();
+    const stored = JSON.parse(
+      fs.readFileSync(path.join(tempDir, metadata.filename), "utf8"),
+    );
+    expect(stored.version).toBe("0.2.0");
+    expect(stored.counts).toMatchObject({
+      valueVouchers: 1,
+      valueVoucherMovements: 1,
+      valueVoucherAllocations: 1,
+    });
+    expect(stored.data.valueVouchers).toEqual([{ id: "voucher-1" }]);
+    expect(stored.data.valueVoucherMovements).toEqual([{ id: "movement-1" }]);
+    expect(stored.data.valueVoucherAllocations).toEqual([
+      { id: "allocation-1" },
+    ]);
+  });
+
+  it("stellt Wertgutscheine FK-sicher vor Bewegungen und Druckaufträgen wieder her", async () => {
+    const { prisma, tx } = createPrisma();
+    const service = new BackupService(
+      prisma as any,
+      makeMaintenanceStateStub(),
+    );
+    const timestamp = "2026-08-28T10:00:00.000Z";
+    fs.writeFileSync(
+      path.join(tempDir, "value-voucher-backup.json"),
+      JSON.stringify({
+        version: "0.2.0",
+        counts: {},
+        data: {
+          users: [{ id: "user-1", username: "admin" }],
+          events: [{ id: "event-1", name: "Fest" }],
+          sessions: [
+            {
+              id: "session-1",
+              userId: "user-1",
+              eventId: "event-1",
+              dataMode: "TEST",
+            },
+          ],
+          valueVouchers: [
+            {
+              id: "voucher-1",
+              code: "T-RESTORE139",
+              status: "ACTIVE",
+              initialBalance: 1000,
+              currentBalance: 1000,
+              version: 0,
+              eventId: "event-1",
+              dataMode: "TEST",
+              issuedByUserId: "user-1",
+              issuedCashierSessionId: "session-1",
+              issuedAt: timestamp,
+              updatedAt: timestamp,
+            },
+          ],
+          valueVoucherMovements: [
+            {
+              id: "movement-1",
+              type: "ISSUE",
+              balanceDelta: 1000,
+              balanceBefore: 0,
+              balanceAfter: 1000,
+              voucherId: "voucher-1",
+              eventId: "event-1",
+              dataMode: "TEST",
+              orderId: null,
+              paymentId: null,
+              reversesMovementId: null,
+              actorUserId: "user-1",
+              cashierSessionId: "session-1",
+              fundingMethod: "CARD",
+              tenderedAmount: null,
+              changeAmount: null,
+              reason: null,
+              idempotencyKey: "restore-issue-1",
+              requestFingerprint: "d".repeat(64),
+              createdAt: timestamp,
+            },
+          ],
+          valueVoucherAllocations: [],
+          printJobs: [],
+        },
+      }),
+      "utf8",
+    );
+
+    await service.restoreBackup("value-voucher-backup.json", "admin-1");
+
+    expect(tx.valueVoucher.createMany).toHaveBeenCalledTimes(1);
+    expect(tx.valueVoucherMovement.createMany).toHaveBeenCalledTimes(1);
+    expect(tx.valueVoucher.createMany.mock.invocationCallOrder[0]).toBeLessThan(
+      tx.valueVoucherMovement.createMany.mock.invocationCallOrder[0],
+    );
+    expect(tx.printJob.deleteMany.mock.invocationCallOrder[0]).toBeLessThan(
+      tx.valueVoucherMovement.deleteMany.mock.invocationCallOrder[0],
+    );
   });
 
   it("verweigert den Legacy-Restore vor jedem Dateizugriff, solange der Wartungsmodus offen ist", async () => {

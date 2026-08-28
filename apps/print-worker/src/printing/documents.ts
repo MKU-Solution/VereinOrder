@@ -11,7 +11,9 @@ export type PrintJobType =
   | "STATION_TICKET"
   | "PRODUCT_VOUCHER"
   | "RECEIPT"
-  | "CASHIER_CLOSING";
+  | "CASHIER_CLOSING"
+  | "VALUE_VOUCHER_ISSUE"
+  | "VALUE_VOUCHER_BALANCE";
 
 export interface PrintJobLike {
   id: string;
@@ -21,6 +23,7 @@ export interface PrintJobLike {
 }
 
 const RKSV_HINT = "VereinOrder ist keine RKSV-Registrierkasse.";
+const NO_RKSV_RECEIPT_HINT = "Kein RKSV-Beleg.";
 
 const PAYMENT_LABELS: Record<string, string> = {
   CASH: "Bar",
@@ -115,6 +118,125 @@ function footer(content: Record<string, any>): DocumentBlock[] {
       align: "center",
     },
   ];
+}
+
+function voucherFooter(content: Record<string, any>): DocumentBlock[] {
+  return [
+    { kind: "rule" },
+    { kind: "text", text: NO_RKSV_RECEIPT_HINT, align: "center", bold: true },
+    ...footer(content),
+  ];
+}
+
+function voucherMode(content: Record<string, any>): DocumentBlock[] {
+  const mode = firstText(content.dataMode, content.mode, "LIVE").toUpperCase();
+  const blocks: DocumentBlock[] = [
+    labelled("Betriebsart", mode === "TEST" ? "TESTBETRIEB" : mode),
+  ];
+  if (mode === "TEST") {
+    blocks.push({
+      kind: "text",
+      text: "*** TESTBETRIEB ***",
+      align: "center",
+      bold: true,
+      doubleHeight: true,
+    });
+  }
+  return blocks;
+}
+
+function voucherCodeBlocks(content: Record<string, any>): DocumentBlock[] {
+  const suppliedCode = firstText(content.voucherCode);
+  const code = suppliedCode || "NICHT VERFÜGBAR";
+  const blocks: DocumentBlock[] = [
+    { kind: "rule" },
+    { kind: "text", text: "Gutschein-Code", align: "center" },
+    {
+      kind: "text",
+      text: code,
+      align: "center",
+      bold: true,
+      doubleHeight: true,
+    },
+  ];
+  if (suppliedCode) {
+    blocks.push({ kind: "barcode", symbology: "CODE128", data: suppliedCode });
+  }
+  return blocks;
+}
+
+function valueVoucherIssue(job: PrintJobLike): PrintDocument {
+  const content = job.content ?? {};
+  return {
+    title: "Wertgutschein",
+    blocks: [
+      ...heading("WERTGUTSCHEIN"),
+      {
+        kind: "text",
+        text: firstText(content.eventName, "Vereinsfest"),
+        align: "center",
+      },
+      { kind: "rule" },
+      ...voucherMode(content),
+      labelled(
+        "Ausgestellt",
+        formatDateTime(firstText(content.issuedAt, job.createdAt)),
+      ),
+      {
+        kind: "columns",
+        left: "Guthaben",
+        right: formatCurrency(content.initialBalance),
+        bold: true,
+      },
+      ...voucherCodeBlocks(content),
+      ...voucherFooter(content),
+    ],
+  };
+}
+
+function valueVoucherBalance(job: PrintJobLike): PrintDocument {
+  const content = job.content ?? {};
+  const isCancellation = content.cancelledBalance !== undefined;
+  const balance = isCancellation
+    ? content.cancelledBalance
+    : content.currentBalance;
+  return {
+    title: "Restwertbon",
+    blocks: [
+      ...heading("RESTWERTBON"),
+      {
+        kind: "text",
+        text: firstText(content.eventName, "Vereinsfest"),
+        align: "center",
+      },
+      { kind: "rule" },
+      ...voucherMode(content),
+      labelled(
+        "Zeitpunkt",
+        formatDateTime(firstText(content.redeemedAt, job.createdAt)),
+      ),
+      ...(isCancellation
+        ? [
+            {
+              kind: "columns" as const,
+              left: "Stornierter Wert",
+              right: formatCurrency(balance),
+              bold: true,
+            },
+          ]
+        : [
+            labelled("Eingelöst", formatCurrency(content.redeemedAmount)),
+            {
+              kind: "columns" as const,
+              left: "Restguthaben",
+              right: formatCurrency(balance),
+              bold: true,
+            },
+          ]),
+      ...voucherCodeBlocks(content),
+      ...voucherFooter(content),
+    ],
+  };
 }
 
 function stationTicket(job: PrintJobLike): PrintDocument {
@@ -458,6 +580,10 @@ export function buildDocument(job: PrintJobLike): PrintDocument {
       return receipt(job);
     case "CASHIER_CLOSING":
       return cashierClosing(job);
+    case "VALUE_VOUCHER_ISSUE":
+      return valueVoucherIssue(job);
+    case "VALUE_VOUCHER_BALANCE":
+      return valueVoucherBalance(job);
     default:
       return fallback(job);
   }

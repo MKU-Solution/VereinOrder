@@ -132,6 +132,29 @@ describe("PrintJobsService – Lease und Fencing (M2, M3)", () => {
   });
 });
 
+describe("PrintJobsService – sichere Druckerauswahl", () => {
+  beforeEach(() => {
+    prisma = makePrisma();
+    audit = { log: jest.fn() };
+    service = new PrintJobsService(prisma, audit as any);
+  });
+
+  it("liest nur aktive Drucker und projiziert ausschließlich id und name", async () => {
+    prisma.printer.findMany.mockResolvedValue([
+      { id: "printer-1", name: "Kasse" },
+    ]);
+
+    await expect(service.findActivePrinterSelections()).resolves.toEqual([
+      { id: "printer-1", name: "Kasse" },
+    ]);
+    expect(prisma.printer.findMany).toHaveBeenCalledWith({
+      where: { isActive: true },
+      select: { id: true, name: true },
+      orderBy: { name: "asc" },
+    });
+  });
+});
+
 describe("PrintJobsService – Ergebnismeldung, Failover genau einmal (Abschnitt 4.4)", () => {
   beforeEach(() => {
     prisma = makePrisma();

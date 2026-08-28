@@ -203,6 +203,31 @@ const testPrint: PrintJobLike = {
   },
 };
 
+const valueVoucherIssue: PrintJobLike = {
+  id: "job-value-voucher-issue",
+  jobType: "VALUE_VOUCHER_ISSUE",
+  createdAt,
+  content: {
+    eventName: "Frühlingsfest",
+    voucherCode: "VG-2026-000042",
+    initialBalance: 2500,
+    dataMode: "TEST",
+  },
+};
+
+const valueVoucherBalance: PrintJobLike = {
+  id: "job-value-voucher-balance",
+  jobType: "VALUE_VOUCHER_BALANCE",
+  createdAt,
+  content: {
+    eventName: "Frühlingsfest",
+    voucherCode: "VG-2026-000042",
+    redeemedAmount: 900,
+    currentBalance: 1600,
+    dataMode: "LIVE",
+  },
+};
+
 const ALL_JOBS = [
   stationTicket,
   stationTicketWithOptions,
@@ -215,6 +240,8 @@ const ALL_JOBS = [
   receiptWithPickupNumber,
   cashierClosing,
   testPrint,
+  valueVoucherIssue,
+  valueVoucherBalance,
 ];
 
 function textOf(job: PrintJobLike, width: PaperWidth): string {
@@ -439,6 +466,65 @@ describe("Bonaufbau je Auftragsart", () => {
     expect(text).toContain("TEST-DRUCK");
     expect(text).toContain("Küchendrucker");
     expect(text).toContain("ÄÖÜ äöü ß");
+  });
+
+  it.each(WIDTHS)(
+    "druckt den Ausgabe-Wertgutschein auf %s mm mit TEST, Betrag und Code128",
+    (width) => {
+      const text = textOf(valueVoucherIssue, width);
+      const lines = renderDocument(
+        buildDocument(valueVoucherIssue),
+        PAPER_PROFILES[width],
+      );
+
+      expect(text).toContain("WERTGUTSCHEIN");
+      expect(text).toContain("Frühlingsfest");
+      expect(text).toContain("TESTBETRIEB");
+      expect(text).toContain(formatCurrency(2500));
+      expect(text).toContain("VG-2026-000042");
+      expect(text).toContain("Kein RKSV-Beleg.");
+      expect(
+        lines.some((line) => line.barcode?.data === "VG-2026-000042"),
+      ).toBe(true);
+    },
+  );
+
+  it.each(WIDTHS)(
+    "druckt den Restwertbon auf %s mm mit Einlösung, Saldo und Code",
+    (width) => {
+      const text = textOf(valueVoucherBalance, width);
+      expect(text).toContain("RESTWERTBON");
+      expect(text).toContain("Eingelöst");
+      expect(text).toContain(formatCurrency(900));
+      expect(text).toContain("Restguthaben");
+      expect(text).toContain(formatCurrency(1600));
+      expect(text).toContain("VG-2026-000042");
+      expect(text).toContain("Kein RKSV-Beleg.");
+    },
+  );
+
+  it("bleibt bei fehlenden Gutschein-Feldern ein klar als nicht RKSV gekennzeichneter Bon", () => {
+    const document = buildDocument({
+      id: "job-value-voucher-missing",
+      jobType: "VALUE_VOUCHER_ISSUE",
+      content: {},
+    });
+    const text = textOf(
+      {
+        id: "job-value-voucher-missing",
+        jobType: "VALUE_VOUCHER_ISSUE",
+        content: {},
+      },
+      80,
+    );
+    const lines = renderDocument(document, PAPER_PROFILES[80]);
+
+    expect(text).toContain("WERTGUTSCHEIN");
+    expect(text).toContain("Vereinsfest");
+    expect(text).toContain("LIVE");
+    expect(text).toContain("NICHT VERFÜGBAR");
+    expect(text).toContain("Kein RKSV-Beleg.");
+    expect(lines.some((line) => line.barcode)).toBe(false);
   });
 
   it("bricht lange Produktnamen um, statt sie abzuschneiden", () => {

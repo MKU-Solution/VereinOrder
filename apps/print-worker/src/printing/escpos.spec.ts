@@ -103,4 +103,25 @@ describe("ESC/POS-Kodierung", () => {
 
     expect(countSequence(encodeEscPos(big), [GS, 0x21, 0x01])).toBe(1);
   });
+
+  it("druckt einen CODE128 ohne den Gutschein-Klartext zu verschlucken", () => {
+    const code = "VG-2026-ABC123";
+    const barcode = renderDocument(
+      {
+        title: "Wertgutschein",
+        blocks: [
+          { kind: "text", text: code, align: "center", bold: true },
+          { kind: "barcode", symbology: "CODE128", data: code },
+        ],
+      },
+      PAPER_PROFILES[80],
+    );
+    const bytes = encodeEscPos(barcode);
+
+    expect(bytes.includes(Buffer.from([GS, 0x6b, 73, code.length + 2]))).toBe(
+      true,
+    );
+    expect(bytes.includes(Buffer.from(`{B${code}`, "ascii"))).toBe(true);
+    expect(decodeFromCodepage(bytes, "CP858")).toContain(code);
+  });
 });

@@ -17,6 +17,7 @@ import { AuditModule } from "./audit/audit.module";
 import { DiagnosticsModule } from "./diagnostics/diagnostics.module";
 import { RunnerModule } from "./runner/runner.module";
 import { MaintenanceModule } from "./maintenance/maintenance.module";
+import { ValueVouchersModule } from "./value-vouchers/value-vouchers.module";
 
 @Module({
   imports: [
@@ -44,6 +45,7 @@ import { MaintenanceModule } from "./maintenance/maintenance.module";
     AuditModule,
     DiagnosticsModule,
     RunnerModule,
+    ValueVouchersModule,
   ],
 })
 export class AppModule {}

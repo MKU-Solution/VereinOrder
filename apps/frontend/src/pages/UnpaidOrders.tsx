@@ -12,6 +12,13 @@ import { CheckoutModal } from "../components/CheckoutModal";
 import { OrderDetailsModal } from "../components/OrderDetailsModal";
 import { OrderSplitModal } from "../components/OrderSplitModal";
 
+type SessionContext = {
+  id: string;
+  status: "ACTIVE" | "TEST_MODE";
+  testMode: boolean;
+  activeSession: { id: string } | null;
+};
+
 export const UnpaidOrders = () => {
   const [orders, setOrders] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -19,15 +26,23 @@ export const UnpaidOrders = () => {
   const [selectedOrder, setSelectedOrder] = useState<any | null>(null);
   const [splittingOrder, setSplittingOrder] = useState<any | null>(null);
   const [editingOrder, setEditingOrder] = useState<any | null>(null);
+  const [sessions, setSessions] = useState<SessionContext[]>([]);
 
   const fetchOrders = async () => {
     try {
-      const productsRes = await api.get("/products");
-      if (productsRes.data.length > 0) {
-        const eId = productsRes.data[0].eventId;
-        const res = await api.get(`/orders/unpaid?eventId=${eId}`);
-        setOrders(res.data);
-      }
+      const sessionsRes = await api.get<SessionContext[]>("/sessions/context");
+      const activeEvents = sessionsRes.data.filter(
+        (event) =>
+          (event.status === "ACTIVE" && !event.testMode) ||
+          (event.status === "TEST_MODE" && event.testMode),
+      );
+      const results = await Promise.all(
+        activeEvents.map((event) =>
+          api.get(`/orders/unpaid?eventId=${event.id}`),
+        ),
+      );
+      setSessions(sessionsRes.data);
+      setOrders(results.flatMap((result) => result.data));
     } catch (err) {
       console.error("Failed to load unpaid orders", err);
     } finally {
@@ -91,6 +106,10 @@ export const UnpaidOrders = () => {
   };
 
   const formatPrice = (cents: number) => `€ ${(cents / 100).toFixed(2)}`;
+  const selectedVoucherSession = selectedOrder
+    ? (sessions.find((entry) => entry.id === selectedOrder.eventId)
+        ?.activeSession ?? null)
+    : null;
 
   if (isLoading)
     return (
@@ -307,6 +326,16 @@ export const UnpaidOrders = () => {
         total={selectedOrder ? selectedOrder.remainingAmount : 0}
         onClose={() => setSelectedOrder(null)}
         onConfirm={handlePaymentConfirm}
+        valueVoucherContext={
+          selectedOrder && selectedVoucherSession
+            ? {
+                eventId: selectedOrder.eventId,
+                orderId: selectedOrder.id,
+                cashierSessionId: selectedVoucherSession.id,
+              }
+            : undefined
+        }
+        onVoucherRedeemed={() => void fetchOrders()}
       />
 
       <OrderSplitModal

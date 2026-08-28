@@ -963,6 +963,8 @@ export class NativeBackupService implements OnModuleInit, OnModuleDestroy {
       orderRows,
       paymentRows,
       voucherRows,
+      valueVoucherRows,
+      valueVoucherMovementRows,
       auditRows,
     ] = await Promise.all([
       prisma.$queryRawUnsafe<Array<{ tableName: string }>>(
@@ -990,6 +992,22 @@ export class NativeBackupService implements OnModuleInit, OnModuleDestroy {
            FROM "ProductVoucher" v JOIN "Order" o ON o.id = v."orderId"
            GROUP BY o."dataMode", v.status`),
       prisma.$queryRawUnsafe<
+        Array<{
+          dataMode: string;
+          status: string;
+          count: bigint;
+          balance: bigint;
+        }>
+      >(`SELECT "dataMode"::text AS "dataMode", status::text AS status,
+                  COUNT(*)::bigint AS count,
+                  COALESCE(SUM("currentBalance"), 0)::bigint AS balance
+           FROM "ValueVoucher" GROUP BY "dataMode", status`),
+      prisma.$queryRawUnsafe<Array<{ dataMode: string; balance: bigint }>>(
+        `SELECT "dataMode"::text AS "dataMode",
+                COALESCE(SUM("balanceDelta"), 0)::bigint AS balance
+           FROM "ValueVoucherMovement" GROUP BY "dataMode"`,
+      ),
+      prisma.$queryRawUnsafe<
         Array<{ total: bigint; withUser: bigint }>
       >(`SELECT COUNT(*)::bigint AS total,
                   COUNT(*) FILTER (WHERE "userId" IS NOT NULL)::bigint AS "withUser"
@@ -1010,14 +1028,31 @@ export class NativeBackupService implements OnModuleInit, OnModuleDestroy {
     }
 
     const byDataMode: Record<string, BackupModeSums> = {
-      LIVE: { orderTotalAmount: 0, paymentAmount: {}, voucherCount: {} },
-      TEST: { orderTotalAmount: 0, paymentAmount: {}, voucherCount: {} },
+      LIVE: {
+        orderTotalAmount: 0,
+        paymentAmount: {},
+        voucherCount: {},
+        valueVoucherBalance: 0,
+        valueVoucherMovementBalance: 0,
+        valueVoucherCount: {},
+      },
+      TEST: {
+        orderTotalAmount: 0,
+        paymentAmount: {},
+        voucherCount: {},
+        valueVoucherBalance: 0,
+        valueVoucherMovementBalance: 0,
+        valueVoucherCount: {},
+      },
     };
     const mode = (name: string) =>
       (byDataMode[name] ??= {
         orderTotalAmount: 0,
         paymentAmount: {},
         voucherCount: {},
+        valueVoucherBalance: 0,
+        valueVoucherMovementBalance: 0,
+        valueVoucherCount: {},
       });
     for (const row of orderRows)
       mode(row.dataMode).orderTotalAmount = this.safeNumber(row.amount);
@@ -1027,6 +1062,20 @@ export class NativeBackupService implements OnModuleInit, OnModuleDestroy {
       );
     for (const row of voucherRows)
       mode(row.dataMode).voucherCount[row.status] = this.safeNumber(row.count);
+    for (const row of valueVoucherRows) {
+      const sums = mode(row.dataMode);
+      sums.valueVoucherCount[row.status] = this.safeNumber(row.count);
+      sums.valueVoucherBalance += this.safeNumber(row.balance);
+    }
+    for (const row of valueVoucherMovementRows)
+      mode(row.dataMode).valueVoucherMovementBalance = this.safeNumber(
+        row.balance,
+      );
+    for (const sums of Object.values(byDataMode)) {
+      if (sums.valueVoucherBalance !== sums.valueVoucherMovementBalance) {
+        throw new Error("VALUE_VOUCHER_BALANCE_MISMATCH");
+      }
+    }
 
     return {
       tableNames,

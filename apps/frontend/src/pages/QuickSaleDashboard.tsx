@@ -19,6 +19,7 @@ import {
   type QuickSaleTile,
 } from "../lib/quickSaleTiles";
 import { resolveProductDeposit } from "../lib/productDeposit";
+import { ValueVoucherIssueDialog } from "../components/ValueVoucherIssueDialog";
 
 interface QuickSaleContext {
   id: string;
@@ -80,6 +81,7 @@ export const QuickSaleDashboard = () => {
   const [error, setError] = useState("");
   const [result, setResult] = useState<SaleResult | null>(null);
   const [cardConfirmationOpen, setCardConfirmationOpen] = useState(false);
+  const [voucherDialogOpen, setVoucherDialogOpen] = useState(false);
 
   const loadContext = async () => {
     setLoading(true);
@@ -358,6 +360,14 @@ export const QuickSaleDashboard = () => {
             className="inline-flex min-h-12 items-center justify-center gap-2 rounded-xl border border-slate-700 bg-slate-800 px-4 font-bold text-slate-200 hover:bg-slate-700 focus-visible:ring-2 focus-visible:ring-orange-400"
           >
             <RefreshCw className="h-4 w-4" aria-hidden="true" /> Aktualisieren
+          </button>
+          <button
+            type="button"
+            disabled={!context?.activeSession}
+            onClick={() => setVoucherDialogOpen(true)}
+            className="inline-flex min-h-12 items-center justify-center gap-2 rounded-xl border border-rose-500/50 bg-rose-950/50 px-4 font-bold text-rose-100 hover:bg-rose-900/70 disabled:opacity-45 focus-visible:ring-2 focus-visible:ring-rose-300"
+          >
+            <Ticket className="h-4 w-4" aria-hidden="true" /> Wertgutschein
           </button>
         </div>
       </header>
@@ -828,6 +838,15 @@ export const QuickSaleDashboard = () => {
             </div>
           </div>
         </div>
+      )}
+      {context && (
+        <ValueVoucherIssueDialog
+          isOpen={voucherDialogOpen}
+          eventId={context.id}
+          cashierSessionId={context.activeSession?.id ?? null}
+          dataMode={context.testMode ? "TEST" : "LIVE"}
+          onClose={() => setVoucherDialogOpen(false)}
+        />
       )}
     </div>
   );

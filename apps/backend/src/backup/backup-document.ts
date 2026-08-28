@@ -48,6 +48,7 @@ const TABLE_FIELDS = {
     "id",
     "name",
     "sortOrder",
+    "deposit",
     "eventId",
     "targetStationId",
     "createdAt",
@@ -59,6 +60,7 @@ const TABLE_FIELDS = {
     "shortName",
     "description",
     "price",
+    "deposit",
     "taxRate",
     "color",
     "sortOrder",
@@ -96,6 +98,7 @@ const TABLE_FIELDS = {
     "id",
     "orderNumber",
     "totalAmount",
+    "depositRefundTotal",
     "lifecycleStatus",
     "paymentStatus",
     "fulfillmentStatus",
@@ -117,7 +120,9 @@ const TABLE_FIELDS = {
   orderItems: [
     "id",
     "quantity",
+    "paidQuantity",
     "priceAtTime",
+    "depositAtTime",
     "status",
     "variantId",
     "variantName",
@@ -177,6 +182,8 @@ const TABLE_FIELDS = {
     "content",
     "status",
     "orderId",
+    "valueVoucherMovementId",
+    "sourceKey",
     "errorMessage",
     "attemptPhase",
     "leaseId",
@@ -225,6 +232,43 @@ const TABLE_FIELDS = {
     "redeemedAt",
     "redeemedAtStationId",
   ],
+  valueVouchers: [
+    "id",
+    "code",
+    "status",
+    "initialBalance",
+    "currentBalance",
+    "version",
+    "eventId",
+    "dataMode",
+    "issuedByUserId",
+    "issuedCashierSessionId",
+    "issuedAt",
+    "updatedAt",
+  ],
+  valueVoucherMovements: [
+    "id",
+    "type",
+    "balanceDelta",
+    "balanceBefore",
+    "balanceAfter",
+    "voucherId",
+    "eventId",
+    "dataMode",
+    "orderId",
+    "paymentId",
+    "reversesMovementId",
+    "actorUserId",
+    "cashierSessionId",
+    "fundingMethod",
+    "tenderedAmount",
+    "changeAmount",
+    "reason",
+    "idempotencyKey",
+    "requestFingerprint",
+    "createdAt",
+  ],
+  valueVoucherAllocations: ["id", "movementId", "orderItemId", "amount"],
 } as const;
 
 type TableName = keyof typeof TABLE_FIELDS;
@@ -252,6 +296,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function isIsoDate(value: unknown): value is string {
+  return typeof value === "string" && Number.isFinite(Date.parse(value));
+}
+
 function assertAllowedKeys(
   value: Record<string, unknown>,
   allowed: readonly string[],
@@ -275,6 +323,32 @@ function validateReferences(data: Record<TableName, BackupRow[]>) {
   const orderItems = ids("orderItems");
   const sessions = ids("sessions");
   const optionGroups = ids("optionGroups");
+  const payments = new Map(
+    data.payments
+      .filter((row) => typeof row.id === "string")
+      .map((row) => [row.id as string, row.orderId]),
+  );
+  const sessionsByContext = new Map(
+    data.sessions
+      .filter((row) => typeof row.id === "string")
+      .map((row) => [
+        row.id as string,
+        { eventId: row.eventId, dataMode: row.dataMode },
+      ]),
+  );
+  const ordersByContext = new Map(
+    data.orders
+      .filter((row) => typeof row.id === "string")
+      .map((row) => [
+        row.id as string,
+        { eventId: row.eventId, dataMode: row.dataMode },
+      ]),
+  );
+  const orderItemsByOrder = new Map(
+    data.orderItems
+      .filter((row) => typeof row.id === "string")
+      .map((row) => [row.id as string, row.orderId]),
+  );
   const areas = new Map(
     data.areas
       .filter((row) => typeof row.id === "string")
@@ -299,6 +373,8 @@ function validateReferences(data: Record<TableName, BackupRow[]>) {
     ...data.sessions,
     ...data.orders,
     ...data.vouchers,
+    ...data.valueVouchers,
+    ...data.valueVoucherMovements,
   ]) {
     if (typeof row.eventId === "string" && !events.has(row.eventId)) invalid();
   }
@@ -371,6 +447,240 @@ function validateReferences(data: Record<TableName, BackupRow[]>) {
     if (typeof row.orderItemId === "string" && !orderItems.has(row.orderItemId))
       invalid();
   }
+
+  const assertUniqueText = (table: BackupRow[], field: string) => {
+    const seen = new Set<string>();
+    for (const row of table) {
+      const value = row[field];
+      if (typeof value !== "string" || value.length === 0 || seen.has(value))
+        invalid();
+      seen.add(value);
+    }
+  };
+  assertUniqueText(data.valueVouchers, "id");
+  assertUniqueText(data.valueVouchers, "code");
+  assertUniqueText(data.valueVoucherMovements, "id");
+  assertUniqueText(data.valueVoucherMovements, "idempotencyKey");
+  assertUniqueText(data.valueVoucherAllocations, "id");
+
+  const valueVouchers = new Map(
+    data.valueVouchers.map((row) => [row.id as string, row]),
+  );
+  const valueVoucherMovements = new Map(
+    data.valueVoucherMovements.map((row) => [row.id as string, row]),
+  );
+  const movementPaymentIds = new Set<string>();
+
+  for (const voucher of data.valueVouchers) {
+    const session = sessionsByContext.get(voucher.issuedCashierSessionId);
+    if (
+      typeof voucher.code !== "string" ||
+      voucher.code.length === 0 ||
+      voucher.code.length > 40 ||
+      !["ACTIVE", "DEPLETED", "CANCELLED"].includes(voucher.status) ||
+      (voucher.dataMode !== "TEST" && voucher.dataMode !== "LIVE") ||
+      typeof voucher.issuedByUserId !== "string" ||
+      !users.has(voucher.issuedByUserId) ||
+      !session ||
+      session.eventId !== voucher.eventId ||
+      session.dataMode !== voucher.dataMode ||
+      !Number.isInteger(voucher.initialBalance) ||
+      voucher.initialBalance <= 0 ||
+      !Number.isInteger(voucher.currentBalance) ||
+      voucher.currentBalance < 0 ||
+      voucher.currentBalance > voucher.initialBalance ||
+      !Number.isInteger(voucher.version) ||
+      voucher.version < 0 ||
+      !isIsoDate(voucher.issuedAt) ||
+      !isIsoDate(voucher.updatedAt) ||
+      (voucher.status === "ACTIVE" && voucher.currentBalance === 0) ||
+      ((voucher.status === "DEPLETED" || voucher.status === "CANCELLED") &&
+        voucher.currentBalance !== 0)
+    )
+      invalid();
+  }
+
+  const movementsByVoucher = new Map<string, BackupRow[]>();
+  for (const movement of data.valueVoucherMovements) {
+    const voucher = valueVouchers.get(movement.voucherId);
+    const session = sessionsByContext.get(movement.cashierSessionId);
+    const order =
+      typeof movement.orderId === "string"
+        ? ordersByContext.get(movement.orderId)
+        : undefined;
+    const reasonPresent =
+      typeof movement.reason === "string" && movement.reason.trim().length > 0;
+    const cashIssue =
+      movement.fundingMethod === "CASH" &&
+      Number.isInteger(movement.tenderedAmount) &&
+      Number.isInteger(movement.changeAmount) &&
+      movement.tenderedAmount >= movement.balanceDelta &&
+      movement.changeAmount === movement.tenderedAmount - movement.balanceDelta;
+    const cardIssue =
+      movement.fundingMethod === "CARD" &&
+      movement.tenderedAmount == null &&
+      movement.changeAmount == null;
+    const noFunding =
+      movement.fundingMethod == null &&
+      movement.tenderedAmount == null &&
+      movement.changeAmount == null;
+    const typeFieldsValid =
+      (movement.type === "ISSUE" &&
+        movement.balanceDelta > 0 &&
+        movement.balanceBefore === 0 &&
+        movement.balanceAfter === movement.balanceDelta &&
+        movement.orderId == null &&
+        movement.paymentId == null &&
+        movement.reversesMovementId == null &&
+        (cashIssue || cardIssue)) ||
+      (movement.type === "REDEEM" &&
+        movement.balanceDelta < 0 &&
+        typeof movement.orderId === "string" &&
+        typeof movement.paymentId === "string" &&
+        movement.reversesMovementId == null &&
+        noFunding) ||
+      (movement.type === "REDEEM_REVERSAL" &&
+        movement.balanceDelta > 0 &&
+        movement.paymentId == null &&
+        typeof movement.reversesMovementId === "string" &&
+        reasonPresent &&
+        noFunding) ||
+      (movement.type === "CANCEL" &&
+        movement.balanceDelta < 0 &&
+        movement.balanceAfter === 0 &&
+        movement.orderId == null &&
+        movement.paymentId == null &&
+        movement.reversesMovementId == null &&
+        reasonPresent &&
+        noFunding);
+    if (
+      !voucher ||
+      voucher.eventId !== movement.eventId ||
+      voucher.dataMode !== movement.dataMode ||
+      typeof movement.actorUserId !== "string" ||
+      !users.has(movement.actorUserId) ||
+      !session ||
+      session.eventId !== movement.eventId ||
+      session.dataMode !== movement.dataMode ||
+      (typeof movement.orderId === "string" &&
+        (!order ||
+          order.eventId !== movement.eventId ||
+          order.dataMode !== movement.dataMode)) ||
+      (typeof movement.paymentId === "string" &&
+        payments.get(movement.paymentId) !== movement.orderId) ||
+      (typeof movement.reversesMovementId === "string" &&
+        !valueVoucherMovements.has(movement.reversesMovementId)) ||
+      !Number.isInteger(movement.balanceBefore) ||
+      !Number.isInteger(movement.balanceDelta) ||
+      !Number.isInteger(movement.balanceAfter) ||
+      movement.balanceBefore < 0 ||
+      movement.balanceAfter < 0 ||
+      movement.balanceAfter !==
+        movement.balanceBefore + movement.balanceDelta ||
+      !typeFieldsValid ||
+      typeof movement.idempotencyKey !== "string" ||
+      movement.idempotencyKey.length === 0 ||
+      movement.idempotencyKey.length > 128 ||
+      (typeof movement.reason === "string" && movement.reason.length > 500) ||
+      typeof movement.requestFingerprint !== "string" ||
+      !/^[a-f0-9]{64}$/i.test(movement.requestFingerprint) ||
+      !isIsoDate(movement.createdAt)
+    )
+      invalid();
+    if (typeof movement.paymentId === "string") {
+      if (movementPaymentIds.has(movement.paymentId)) invalid();
+      movementPaymentIds.add(movement.paymentId);
+    }
+    const list = movementsByVoucher.get(movement.voucherId) ?? [];
+    list.push(movement);
+    movementsByVoucher.set(movement.voucherId, list);
+  }
+
+  for (const voucher of data.valueVouchers) {
+    const movements = (movementsByVoucher.get(voucher.id) ?? []).sort((a, b) =>
+      `${a.createdAt}\0${a.id}`.localeCompare(`${b.createdAt}\0${b.id}`, "en"),
+    );
+    if (movements.length === 0 || movements[0].type !== "ISSUE") invalid();
+    let balance = 0;
+    for (const [index, movement] of movements.entries()) {
+      if (
+        movement.balanceBefore !== balance ||
+        (index > 0 && movement.type === "ISSUE") ||
+        (movement.type === "ISSUE" &&
+          movement.balanceAfter !== voucher.initialBalance)
+      )
+        invalid();
+      if (typeof movement.reversesMovementId === "string") {
+        const reversed = valueVoucherMovements.get(movement.reversesMovementId);
+        if (
+          !reversed ||
+          reversed.voucherId !== voucher.id ||
+          reversed.type !== "REDEEM" ||
+          movements.indexOf(reversed) >= index
+        )
+          invalid();
+      }
+      balance = movement.balanceAfter;
+    }
+    const expectedStatus =
+      movements[movements.length - 1].type === "CANCEL"
+        ? "CANCELLED"
+        : balance === 0
+          ? "DEPLETED"
+          : "ACTIVE";
+    if (balance !== voucher.currentBalance || voucher.status !== expectedStatus)
+      invalid();
+  }
+
+  const allocationKeys = new Set<string>();
+  const allocationSums = new Map<string, number>();
+  for (const allocation of data.valueVoucherAllocations) {
+    const movement = valueVoucherMovements.get(allocation.movementId);
+    const orderItemOrderId = orderItemsByOrder.get(allocation.orderItemId);
+    const key = `${allocation.movementId}\0${allocation.orderItemId}`;
+    if (
+      !movement ||
+      movement.type !== "REDEEM" ||
+      !orderItemOrderId ||
+      orderItemOrderId !== movement.orderId ||
+      !Number.isInteger(allocation.amount) ||
+      allocation.amount <= 0 ||
+      allocationKeys.has(key)
+    )
+      invalid();
+    allocationKeys.add(key);
+    allocationSums.set(
+      allocation.movementId,
+      (allocationSums.get(allocation.movementId) ?? 0) + allocation.amount,
+    );
+  }
+  for (const movement of data.valueVoucherMovements) {
+    const allocated = allocationSums.get(movement.id) ?? 0;
+    if (
+      (movement.type === "REDEEM" && allocated !== -movement.balanceDelta) ||
+      (movement.type !== "REDEEM" && allocated !== 0)
+    )
+      invalid();
+  }
+
+  for (const printJob of data.printJobs) {
+    if (
+      typeof printJob.valueVoucherMovementId === "string" &&
+      !valueVoucherMovements.has(printJob.valueVoucherMovementId)
+    )
+      invalid();
+  }
+  const printSourceKeys = new Set<string>();
+  for (const printJob of data.printJobs) {
+    if (typeof printJob.sourceKey !== "string") continue;
+    if (
+      printJob.sourceKey.length === 0 ||
+      printJob.sourceKey.length > 128 ||
+      printSourceKeys.has(printJob.sourceKey)
+    )
+      invalid();
+    printSourceKeys.add(printJob.sourceKey);
+  }
 }
 
 export function parseBackupDocument(content: string): ValidatedBackupDocument {
@@ -392,7 +702,7 @@ export function parseBackupDocument(content: string): ValidatedBackupDocument {
   ]);
   if (
     typeof raw.version !== "string" ||
-    raw.version !== "0.1.0" ||
+    (raw.version !== "0.1.0" && raw.version !== "0.2.0") ||
     !isRecord(raw.data)
   )
     invalid();

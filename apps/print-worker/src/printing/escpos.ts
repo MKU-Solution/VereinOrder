@@ -42,6 +42,24 @@ function characterSize(line: RenderedLine): number {
   return (line.doubleWidth ? 0x10 : 0x00) | (line.doubleHeight ? 0x01 : 0x00);
 }
 
+function encodeCode128(data: string, codepage: Codepage): Buffer {
+  // GS k 73 n d1..dn: CODE128 mit Längenbyte. ESC/POS erwartet eine
+  // Startsequenz; {B deckt die hier verwendeten lesbaren Gutschein-Codes ab.
+  const payload = Buffer.concat([
+    Buffer.from("{B", "ascii"),
+    encodeForCodepage(data, codepage),
+  ]);
+  const length = Math.min(255, payload.length);
+  return Buffer.concat([
+    Buffer.from([GS, 0x48, 0x00]), // HRI aus: Klartext steht bereits am Bon.
+    Buffer.from([GS, 0x77, 0x02]), // schmale, druckerschonende Modulbreite
+    Buffer.from([GS, 0x68, 80]), // 80 Punkte Höhe
+    Buffer.from([GS, 0x6b, 73, length]),
+    payload.subarray(0, length),
+    Buffer.from([LF]),
+  ]);
+}
+
 function encodeLines(lines: RenderedLine[], codepage: Codepage): Buffer[] {
   const chunks: Buffer[] = [];
   let align = -1;
@@ -49,6 +67,12 @@ function encodeLines(lines: RenderedLine[], codepage: Codepage): Buffer[] {
   let size = -1;
 
   for (const line of lines) {
+    if (line.barcode) {
+      if (line.barcode.symbology === "CODE128") {
+        chunks.push(encodeCode128(line.barcode.data, codepage));
+      }
+      continue;
+    }
     const lineAlign = ALIGNMENT_CODES[line.align] ?? 0;
     if (lineAlign !== align) {
       chunks.push(Buffer.from([ESC, 0x61, lineAlign]));

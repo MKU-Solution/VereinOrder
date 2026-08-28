@@ -68,6 +68,9 @@ export class BackupService {
       printJobs,
       auditLogs,
       vouchers,
+      valueVouchers,
+      valueVoucherMovements,
+      valueVoucherAllocations,
     ] = await Promise.all([
       this.prisma.event.findMany(),
       this.prisma.area.findMany(),
@@ -89,10 +92,13 @@ export class BackupService {
       // Zeile hier stuende in der Sicherung nie etwas, das den Verlust
       // rueckgaengig machen koennte.
       this.prisma.productVoucher.findMany(),
+      this.prisma.valueVoucher.findMany(),
+      this.prisma.valueVoucherMovement.findMany(),
+      this.prisma.valueVoucherAllocation.findMany(),
     ]);
 
     const backupData = {
-      version: "0.1.0",
+      version: "0.2.0",
       timestamp: timestamp.toISOString(),
       database: "postgresql",
       createdBy: userId || "ADMINISTRATOR",
@@ -113,6 +119,9 @@ export class BackupService {
         printJobs: printJobs.length,
         auditLogs: auditLogs.length,
         vouchers: vouchers.length,
+        valueVouchers: valueVouchers.length,
+        valueVoucherMovements: valueVoucherMovements.length,
+        valueVoucherAllocations: valueVoucherAllocations.length,
       },
       data: {
         events,
@@ -131,6 +140,9 @@ export class BackupService {
         printJobs,
         auditLogs,
         vouchers,
+        valueVouchers,
+        valueVoucherMovements,
+        valueVoucherAllocations,
       },
     };
 
@@ -269,8 +281,11 @@ export class BackupService {
         // denselben Datenbestand angewendet wird oder seither weitere
         // Auditzeilen entstanden sind.
         await tx.auditLog.deleteMany();
-        await tx.productVoucher.deleteMany();
         await tx.printJob.deleteMany();
+        await tx.valueVoucherAllocation.deleteMany();
+        await tx.valueVoucherMovement.deleteMany();
+        await tx.valueVoucher.deleteMany();
+        await tx.productVoucher.deleteMany();
         await tx.payment.deleteMany();
         await tx.orderItem.deleteMany();
         await tx.order.deleteMany();
@@ -310,16 +325,13 @@ export class BackupService {
         // "Product"."categoryId" is now a required, RESTRICT-guarded foreign
         // key ("productCategory" is created here, before "product", to match).
         //
-        // This backup format carries no schema/data version of its own —
-        // "version" above is the application version, not a data-shape version
-        // like the event template's "schemaVersion". A backup taken before
-        // this migration can still contain products with no category at all,
-        // which the (now required) "categoryId" column would reject at insert
-        // time — a raw database error in the middle of restoring, i.e. exactly
-        // when something has already gone wrong. There is no version field to
-        // gate a fix on, but the data itself is the discriminator: a product
-        // with no "categoryId" can only predate this migration. Such products
-        // get the same fallback category as the SQL migration
+        // Alte 0.1.0-Sicherungen koennen weiterhin Produkte ohne Kategorie
+        // enthalten. Die ab Issue #139 verwendete Formatversion 0.2.0 macht
+        // neue Gutscheinwert-Tabellen sichtbar, aendert aber diesen historischen
+        // Kompatibilitaetspfad nicht. Ein altes Produkt ohne "categoryId"
+        // wuerde sonst erst mitten im Restore am Pflicht-Fremdschluessel
+        // scheitern. Solche Produkte erhalten dieselbe Auffangkategorie wie
+        // in der SQL-Migration
         // 20260822120000_move_target_station_to_category and the event
         // template importer (events.service.ts) — one rule in
         // ../common/fallback-category.ts for all three.
@@ -367,10 +379,20 @@ export class BackupService {
         // wiedereinspielen — orderId, orderItemId, productId, die zugehoerige
         // Kassensitzung und der ausstellende Benutzer sind an dieser Stelle
         // bereits vorhanden.
-        if (data.vouchers?.length)
-          await tx.productVoucher.createMany({ data: data.vouchers });
         if (data.payments?.length)
           await tx.payment.createMany({ data: data.payments });
+        if (data.vouchers?.length)
+          await tx.productVoucher.createMany({ data: data.vouchers });
+        if (data.valueVouchers?.length)
+          await tx.valueVoucher.createMany({ data: data.valueVouchers });
+        if (data.valueVoucherMovements?.length)
+          await tx.valueVoucherMovement.createMany({
+            data: data.valueVoucherMovements,
+          });
+        if (data.valueVoucherAllocations?.length)
+          await tx.valueVoucherAllocation.createMany({
+            data: data.valueVoucherAllocations,
+          });
         if (data.printJobs?.length)
           await tx.printJob.createMany({ data: data.printJobs });
 
