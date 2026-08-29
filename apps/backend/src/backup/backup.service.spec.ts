@@ -32,6 +32,8 @@ function createPrisma() {
     valueVoucher: { deleteMany: jest.fn(), createMany: jest.fn() },
     valueVoucherMovement: { deleteMany: jest.fn(), createMany: jest.fn() },
     valueVoucherAllocation: { deleteMany: jest.fn(), createMany: jest.fn() },
+    inventoryStock: { deleteMany: jest.fn(), createMany: jest.fn() },
+    inventoryMovement: { deleteMany: jest.fn(), createMany: jest.fn() },
     auditLog: {
       deleteMany: jest.fn(),
       createMany: jest.fn(),
@@ -82,6 +84,11 @@ function createPrisma() {
       ...tx.valueVoucherAllocation,
       findMany: emptyFindMany(),
     },
+    inventoryStock: { ...tx.inventoryStock, findMany: emptyFindMany() },
+    inventoryMovement: {
+      ...tx.inventoryMovement,
+      findMany: emptyFindMany(),
+    },
     $transaction: jest.fn(async (callback: (client: typeof tx) => unknown) =>
       callback(tx),
     ),
@@ -107,7 +114,7 @@ describe("BackupService – Wiederherstellung nach Issue #84", () => {
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it("sichert Wertgutscheine, Bewegungen und Allokationen im Format 0.2.0", async () => {
+  it("sichert Gutschein- und Bestandsledger im Format 0.3.0", async () => {
     const { prisma } = createPrisma();
     prisma.valueVoucher.findMany.mockResolvedValue([{ id: "voucher-1" }]);
     prisma.valueVoucherMovement.findMany.mockResolvedValue([
@@ -115,6 +122,12 @@ describe("BackupService – Wiederherstellung nach Issue #84", () => {
     ]);
     prisma.valueVoucherAllocation.findMany.mockResolvedValue([
       { id: "allocation-1" },
+    ]);
+    prisma.inventoryStock.findMany.mockResolvedValue([
+      { productId: "product-1", dataMode: "TEST", stockQuantity: 7 },
+    ]);
+    prisma.inventoryMovement.findMany.mockResolvedValue([
+      { id: "inventory-movement-1" },
     ]);
     const service = new BackupService(
       prisma as any,
@@ -125,16 +138,24 @@ describe("BackupService – Wiederherstellung nach Issue #84", () => {
     const stored = JSON.parse(
       fs.readFileSync(path.join(tempDir, metadata.filename), "utf8"),
     );
-    expect(stored.version).toBe("0.2.0");
+    expect(stored.version).toBe("0.3.0");
     expect(stored.counts).toMatchObject({
       valueVouchers: 1,
       valueVoucherMovements: 1,
       valueVoucherAllocations: 1,
+      inventoryStocks: 1,
+      inventoryMovements: 1,
     });
     expect(stored.data.valueVouchers).toEqual([{ id: "voucher-1" }]);
     expect(stored.data.valueVoucherMovements).toEqual([{ id: "movement-1" }]);
     expect(stored.data.valueVoucherAllocations).toEqual([
       { id: "allocation-1" },
+    ]);
+    expect(stored.data.inventoryStocks).toEqual([
+      { productId: "product-1", dataMode: "TEST", stockQuantity: 7 },
+    ]);
+    expect(stored.data.inventoryMovements).toEqual([
+      { id: "inventory-movement-1" },
     ]);
   });
 
@@ -317,6 +338,8 @@ describe("BackupService – Wiederherstellung nach Issue #84", () => {
       (p) => p.id === "product-legacy",
     );
     expect(restoredProduct.categoryId).toBe(fallback.id);
+    expect(restoredProduct.manualAvailability).toBe("AVAILABLE");
+    expect(restoredProduct).not.toHaveProperty("availability");
   });
 
   it("lässt eine Sicherung ohne kategorielose Produkte unverändert", async () => {
@@ -387,5 +410,123 @@ describe("BackupService – Wiederherstellung nach Issue #84", () => {
       .data as any[];
     expect(productsWritten).toHaveLength(1);
     expect(productsWritten[0].categoryId).toBe("category-a");
+  });
+
+  it("stellt Bestände nach Produkten und Bewegungen erst nach Bestellpositionen wieder her", async () => {
+    const { prisma, tx } = createPrisma();
+    const service = new BackupService(
+      prisma as any,
+      makeMaintenanceStateStub(),
+    );
+    const timestamp = "2026-08-29T10:00:00.000Z";
+    fs.writeFileSync(
+      path.join(tempDir, "inventory-backup.json"),
+      JSON.stringify({
+        version: "0.3.0",
+        counts: {},
+        data: {
+          events: [{ id: "event-1", name: "Fest" }],
+          users: [{ id: "user-1", username: "admin" }],
+          categories: [
+            { id: "category-1", name: "Speisen", eventId: "event-1" },
+          ],
+          products: [
+            {
+              id: "product-1",
+              name: "Hendl",
+              price: 1200,
+              categoryId: "category-1",
+              eventId: "event-1",
+              manualAvailability: "OUT_OF_STOCK",
+            },
+          ],
+          orders: [
+            {
+              id: "order-1",
+              eventId: "event-1",
+              dataMode: "TEST",
+              userId: "user-1",
+            },
+          ],
+          orderItems: [
+            {
+              id: "item-1",
+              quantity: 1,
+              priceAtTime: 1200,
+              orderId: "order-1",
+              productId: "product-1",
+            },
+          ],
+          inventoryStocks: [
+            {
+              productId: "product-1",
+              eventId: "event-1",
+              dataMode: "TEST",
+              trackingEnabled: true,
+              initialQuantity: 2,
+              stockQuantity: 1,
+              lowStockThreshold: 1,
+              manualBlocked: false,
+              version: 2,
+              createdAt: timestamp,
+              updatedAt: timestamp,
+            },
+          ],
+          inventoryMovements: [
+            {
+              id: "inventory-init-1",
+              type: "INITIALIZATION",
+              quantityDelta: 2,
+              quantityBefore: 0,
+              quantityAfter: 2,
+              productId: "product-1",
+              eventId: "event-1",
+              dataMode: "TEST",
+              orderId: null,
+              orderItemId: null,
+              reversesMovementId: null,
+              actorUserId: "user-1",
+              reason: null,
+              idempotencyKey: "inventory:init:1",
+              requestFingerprint: "a".repeat(64),
+              createdAt: timestamp,
+            },
+            {
+              id: "inventory-sale-1",
+              type: "SALE",
+              quantityDelta: -1,
+              quantityBefore: 2,
+              quantityAfter: 1,
+              productId: "product-1",
+              eventId: "event-1",
+              dataMode: "TEST",
+              orderId: "order-1",
+              orderItemId: "item-1",
+              reversesMovementId: null,
+              actorUserId: "user-1",
+              reason: null,
+              idempotencyKey: "inventory:sale:item-1",
+              requestFingerprint: "b".repeat(64),
+              createdAt: "2026-08-29T10:01:00.000Z",
+            },
+          ],
+        },
+      }),
+      "utf8",
+    );
+
+    await service.restoreBackup("inventory-backup.json", "admin-1");
+
+    expect(tx.inventoryStock.createMany).toHaveBeenCalledTimes(1);
+    expect(tx.inventoryMovement.createMany).toHaveBeenCalledTimes(1);
+    expect(tx.product.createMany.mock.invocationCallOrder[0]).toBeLessThan(
+      tx.inventoryStock.createMany.mock.invocationCallOrder[0],
+    );
+    expect(tx.orderItem.createMany.mock.invocationCallOrder[0]).toBeLessThan(
+      tx.inventoryMovement.createMany.mock.invocationCallOrder[0],
+    );
+    expect(
+      tx.inventoryMovement.deleteMany.mock.invocationCallOrder[0],
+    ).toBeLessThan(tx.inventoryStock.deleteMany.mock.invocationCallOrder[0]);
   });
 });

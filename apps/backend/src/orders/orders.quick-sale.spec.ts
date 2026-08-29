@@ -19,6 +19,7 @@ describe("OrdersService – Bonkassen-Schnellverkauf für Issue #52", () => {
     },
     targetStationId: null,
     availability: "AVAILABLE",
+    manualAvailability: "AVAILABLE",
     optionGroups: [],
   };
 
@@ -149,6 +150,59 @@ describe("OrdersService – Bonkassen-Schnellverkauf für Issue #52", () => {
     );
   });
 
+  it("delegiert den Schnellverkauf atomar an die Bestandsdomäne und sendet erst nach Commit", async () => {
+    const inventory = {
+      reserveSale: jest.fn().mockResolvedValue([
+        {
+          productId: product.id,
+          quantity: 2,
+          quantityBefore: 9,
+          quantityAfter: 7,
+          lowStockThreshold: 2,
+          version: 4,
+          manualAvailability: "AVAILABLE",
+        },
+      ]),
+      recordSales: jest.fn().mockResolvedValue([
+        {
+          productId: product.id,
+          stockQuantity: 7,
+          lowStockThreshold: 2,
+          version: 4,
+          manualAvailability: "AVAILABLE",
+        },
+      ]),
+      publishChanges: jest.fn(),
+    };
+    service = new OrdersService(
+      prisma,
+      createAuditServiceStub() as any,
+      inventory as any,
+    );
+
+    await service.createQuickSale("cashier-1", {
+      eventId: "event-1",
+      idempotencyKey: "quick-sale-inventory",
+      items: [{ productId: product.id, quantity: 2 }],
+      paymentMethod: "CASH",
+      tenderedAmount: 1000,
+    });
+
+    expect(inventory.reserveSale).toHaveBeenCalledWith(
+      prisma,
+      expect.objectContaining({ eventId: "event-1", dataMode: "TEST" }),
+    );
+    expect(inventory.recordSales).toHaveBeenCalledWith(
+      prisma,
+      expect.objectContaining({ orderId: "order-1" }),
+    );
+    expect(inventory.publishChanges).toHaveBeenCalledWith(
+      "event-1",
+      "TEST",
+      expect.any(Array),
+    );
+  });
+
   it("legt je verkaufter Einheit einen eindeutigen Produktbon sowie Druckaufträge und Audit an", async () => {
     await service.createQuickSale("cashier-1", {
       eventId: "event-1",
@@ -246,7 +300,11 @@ describe("OrdersService – Bonkassen-Schnellverkauf für Issue #52", () => {
     ).rejects.toBeInstanceOf(BadRequestException);
 
     prisma.product.findMany.mockResolvedValue([
-      { ...product, availability: "OUT_OF_STOCK" },
+      {
+        ...product,
+        availability: "OUT_OF_STOCK",
+        manualAvailability: "OUT_OF_STOCK",
+      },
     ]);
     await expect(
       service.createQuickSale("cashier-1", {

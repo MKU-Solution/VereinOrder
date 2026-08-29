@@ -11,6 +11,7 @@ const INVALID_EVENT_DATABASE = "vereinorder_ci_test_invalid_event_refs";
 const repoRoot = resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const migrationsDir = resolve(repoRoot, "packages/database/prisma/migrations");
 const pnpmEntryPoint = process.env.npm_execpath;
+const prismaCliEntryPoint = process.env.PRISMA_CLI_ENTRYPOINT;
 
 // Kennungen des repraesentativen Altstands fuer die Uebernahmepruefung der
 // Migration "20260821140000_add_product_option_groups" (Issue #75). Fest
@@ -134,6 +135,20 @@ const EVENT_INTEGRITY_SEED = {
   productId: "e0000000-0000-4000-8000-000000000030",
 };
 
+// Issue #141 erhaelt alle vier historisch gespeicherten Availability-Werte
+// als manuellen Override. Der Upgrade-Test belegt ausdrücklich, dass daraus
+// keine erfundenen Bestandszeilen oder Mengen entstehen.
+const INVENTORY_SEED = {
+  eventId: "f0000000-0000-4000-8000-000000000001",
+  categoryId: "f0000000-0000-4000-8000-000000000002",
+  products: {
+    AVAILABLE: "f0000000-0000-4000-8000-000000000010",
+    LOW_STOCK: "f0000000-0000-4000-8000-000000000011",
+    OUT_OF_STOCK: "f0000000-0000-4000-8000-000000000012",
+    DISABLED: "f0000000-0000-4000-8000-000000000013",
+  },
+};
+
 function fail(message) {
   throw new Error(message);
 }
@@ -246,6 +261,23 @@ function databaseUrl(target, database) {
 }
 
 function prisma(args, targetUrl) {
+  // Lokale Agenten-/Release-Umgebungen koennen die bereits installierte
+  // Prisma-CLI ohne Paketmanager-Netzzugriff verwenden. CI und normale
+  // Entwicklerlaeufe bleiben beim dokumentierten pnpm-Pfad.
+  if (prismaCliEntryPoint) {
+    return run(
+      process.execPath,
+      [
+        prismaCliEntryPoint,
+        ...args,
+        "--schema",
+        resolve(repoRoot, "packages/database/prisma/schema.prisma"),
+      ],
+      {
+        env: { ...process.env, DATABASE_URL: targetUrl },
+      },
+    );
+  }
   const command = pnpmEntryPoint ? process.execPath : "pnpm";
   const commandArgs = pnpmEntryPoint
     ? [
@@ -1069,6 +1101,54 @@ END $$;
 `;
 }
 
+function seedLegacyAvailabilitySql(ids) {
+  return `
+INSERT INTO "Event" (id, name, "createdAt", "updatedAt")
+VALUES ('${ids.eventId}', 'Migration Bestandsfuehrung', now(), now());
+INSERT INTO "ProductCategory" (id, name, "eventId", "createdAt", "updatedAt")
+VALUES ('${ids.categoryId}', 'Bestandsartikel', '${ids.eventId}', now(), now());
+INSERT INTO "Product" (
+  id, name, price, availability, "categoryId", "eventId", "createdAt", "updatedAt"
+) VALUES
+  ('${ids.products.AVAILABLE}', 'Verfuegbar', 100, 'AVAILABLE', '${ids.categoryId}', '${ids.eventId}', now(), now()),
+  ('${ids.products.LOW_STOCK}', 'Knapp', 100, 'LOW_STOCK', '${ids.categoryId}', '${ids.eventId}', now(), now()),
+  ('${ids.products.OUT_OF_STOCK}', 'Aus', 100, 'OUT_OF_STOCK', '${ids.categoryId}', '${ids.eventId}', now(), now()),
+  ('${ids.products.DISABLED}', 'Deaktiviert', 100, 'DISABLED', '${ids.categoryId}', '${ids.eventId}', now(), now());
+`;
+}
+
+function verifyInventoryMigrationSql(ids) {
+  const expected = Object.entries(ids.products)
+    .map(
+      ([availability, id]) =>
+        `('${id}', '${availability}'::"ProductAvailability")`,
+    )
+    .join(",\n      ");
+  return `
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1
+    FROM (VALUES
+      ${expected}
+    ) AS expected(id, availability)
+    LEFT JOIN "Product" p ON p.id = expected.id
+    WHERE p.id IS NULL OR p.availability IS DISTINCT FROM expected.availability
+  ) THEN
+    RAISE EXCEPTION 'Die Bestandsmigration hat einen manuellen Availability-Override veraendert oder geloescht.';
+  END IF;
+
+  IF EXISTS (
+    SELECT 1 FROM "InventoryStock" WHERE "eventId" = '${ids.eventId}'
+  ) OR EXISTS (
+    SELECT 1 FROM "InventoryMovement" WHERE "eventId" = '${ids.eventId}'
+  ) THEN
+    RAISE EXCEPTION 'Die Bestandsmigration hat aus historischen Statuswerten Mengen erfunden.';
+  END IF;
+END $$;
+`;
+}
+
 function dropDatabase(target, database) {
   const literal = database.replaceAll("'", "''");
   psql(
@@ -1132,6 +1212,14 @@ const DATA_MIGRATION_CHECKS = [
     seed: () => seedLegacyEventIntegritySql(EVENT_INTEGRITY_SEED),
     verifyLabel: "Eventintegritaet und Stationsloeschung pruefen",
     verify: () => verifyEventIntegrityMigrationSql(EVENT_INTEGRITY_SEED),
+  },
+  {
+    migration: "20260829100000_add_inventory_stock_and_movements",
+    seedLabel: "alle manuellen Availability-Overrides einspielen",
+    seed: () => seedLegacyAvailabilitySql(INVENTORY_SEED),
+    verifyLabel:
+      "Verlustfreiheit der Overrides und ausbleibende Mengenerfindung prüfen",
+    verify: () => verifyInventoryMigrationSql(INVENTORY_SEED),
   },
 ];
 

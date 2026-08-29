@@ -42,6 +42,10 @@ export interface QuickSaleProduct {
   deposit?: number;
   color?: string | null;
   availability: "AVAILABLE" | "LOW_STOCK" | "OUT_OF_STOCK";
+  inventoryTracked?: boolean;
+  stockQuantity?: number | null;
+  lowStockThreshold?: number | null;
+  inventoryVersion?: number;
   category?: {
     id: string;
     name: string;

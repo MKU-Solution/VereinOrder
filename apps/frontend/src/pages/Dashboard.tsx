@@ -586,12 +586,28 @@ export const Dashboard = () => {
       eventSource.onmessage = (event) => {
         try {
           const payload = JSON.parse(event.data);
-          if (payload.type === "PRODUCT_AVAILABILITY_CHANGED") {
+          if (
+            payload.type === "PRODUCT_AVAILABILITY_CHANGED" ||
+            payload.type === "PRODUCT_INVENTORY_CHANGED"
+          ) {
             const { productId, productName, availability } = payload.data;
 
             setProducts((prev) =>
               prev.map((p) =>
-                p.id === productId ? { ...p, availability } : p,
+                p.id === productId
+                  ? {
+                      ...p,
+                      availability,
+                      ...(payload.data.stockQuantity !== undefined
+                        ? {
+                            stockQuantity: payload.data.stockQuantity,
+                            lowStockThreshold: payload.data.lowStockThreshold,
+                            inventoryTracked: true,
+                            inventoryVersion: payload.data.version,
+                          }
+                        : {}),
+                    }
+                  : p,
               ),
             );
 
@@ -762,9 +778,12 @@ export const Dashboard = () => {
       console.error("Order submission failed", err);
 
       if (!shouldQueueOffline(err)) {
+        const code = err.response?.data?.code;
         alert(
-          "Fehler bei der Buchung: " +
-            (err.response?.data?.message || err.message),
+          code === "INVENTORY_INSUFFICIENT"
+            ? "Der Bestand hat sich während der Eingabe geändert. Der Warenkorb bleibt unverändert: Bitte Menge und Verfügbarkeit prüfen und bewusst erneut buchen."
+            : "Fehler bei der Buchung: " +
+                (err.response?.data?.message || err.message),
         );
         return;
       }
@@ -775,6 +794,17 @@ export const Dashboard = () => {
       // nicht abfragbar, deshalb der zuletzt bekannte, online geladene Wert
       // aus `eventContexts` (Entwurf Abschnitt 4).
       const eventId = items[0].product.eventId;
+      const trackedItems = items.filter(
+        (item) =>
+          products.find((product) => product.id === item.product?.id)
+            ?.inventoryTracked === true,
+      );
+      if (trackedItems.length > 0) {
+        alert(
+          `Die Bestellung enthält lagergeführte Artikel (${trackedItems.map((item) => item.product.name).join(", ")}). Sie wird nicht offline vorgemerkt, damit der Bestand nicht überbucht wird.`,
+        );
+        return;
+      }
       const eventEntry = eventContexts.find((e) => e.id === eventId);
       const dataMode = eventEntry
         ? deriveDataMode(eventEntry.status, eventEntry.testMode)

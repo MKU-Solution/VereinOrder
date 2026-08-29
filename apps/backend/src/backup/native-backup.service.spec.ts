@@ -8,6 +8,7 @@ import { NativeBackupService } from "./native-backup.service";
 function createPrisma(options?: {
   changeTablesAfterDump?: boolean;
   valueVoucherMovementBalance?: bigint;
+  inventoryMovementQuantity?: bigint;
 }) {
   let tableReads = 0;
   const migrations = [
@@ -28,6 +29,8 @@ function createPrisma(options?: {
       tableReads += 1;
       const names = [
         "AuditLog",
+        "InventoryMovement",
+        "InventoryStock",
         "Order",
         "Payment",
         "Product",
@@ -70,6 +73,30 @@ function createPrisma(options?: {
         {
           dataMode: "LIVE",
           balance: options?.valueVoucherMovementBalance ?? BigInt(2000),
+        },
+      ];
+    }
+    if (
+      sql.includes('FROM "InventoryStock"') &&
+      sql.includes('SUM("stockQuantity")')
+    ) {
+      return [
+        {
+          dataMode: "LIVE",
+          quantity: BigInt(17),
+          tracked: BigInt(3),
+          blocked: BigInt(1),
+        },
+      ];
+    }
+    if (
+      sql.includes('FROM "InventoryMovement"') &&
+      sql.includes('SUM("quantityDelta")')
+    ) {
+      return [
+        {
+          dataMode: "LIVE",
+          quantity: options?.inventoryMovementQuantity ?? BigInt(17),
         },
       ];
     }
@@ -190,6 +217,10 @@ describe("Native PostgreSQL-Sicherung V1 (Issue #67)", () => {
       valueVoucherBalance: 2000,
       valueVoucherMovementBalance: 2000,
       valueVoucherCount: { ACTIVE: 2 },
+      inventoryStockQuantity: 17,
+      inventoryMovementQuantity: 17,
+      inventoryTrackedCount: 3,
+      inventoryManualBlockedCount: 1,
     });
     expect(manifest.createdBy).toEqual({
       userId: "admin-id",
@@ -199,6 +230,19 @@ describe("Native PostgreSQL-Sicherung V1 (Issue #67)", () => {
       expect.objectContaining({
         data: expect.objectContaining({ action: "BACKUP_CREATED" }),
       }),
+    );
+  });
+
+  it("bricht bei einer vom Bestandsledger abweichenden Mengensumme sicher ab", async () => {
+    const prisma = createPrisma({ inventoryMovementQuantity: BigInt(16) });
+    const service = new NativeBackupService(
+      prisma as any,
+      { read: () => ({ phase: "OPEN" }) } as any,
+      createTools() as any,
+    );
+
+    await expect(service.createBackup("MANUAL", null)).rejects.toBeInstanceOf(
+      ServiceUnavailableException,
     );
   });
 

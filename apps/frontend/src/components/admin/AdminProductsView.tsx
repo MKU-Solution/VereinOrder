@@ -4,6 +4,7 @@ import { Edit2, Layers, Package, Store, Tag, Trash2 } from "lucide-react";
 import { AdminEmptyState } from "./AdminEmptyState";
 import { AdminToolbar } from "./AdminToolbar";
 import { resolveProductDeposit } from "../../lib/productDeposit";
+import { InventoryControls, InventorySummary } from "./InventoryControls";
 
 export interface AdminProductsViewProps {
   products: any[];
@@ -14,6 +15,8 @@ export interface AdminProductsViewProps {
   onEdit: (product: any) => void;
   onDelete: (id: string) => void;
   isRefreshing?: boolean;
+  eventId?: string;
+  dataMode?: "TEST" | "LIVE";
 }
 
 export const AdminProductsView = ({
@@ -25,6 +28,8 @@ export const AdminProductsView = ({
   onEdit,
   onDelete,
   isRefreshing = false,
+  eventId,
+  dataMode,
 }: AdminProductsViewProps) => {
   const [searchQuery, setSearchQuery] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("ALL");
@@ -159,6 +164,7 @@ export const AdminProductsView = ({
                     <th className="px-4 py-3.5">Preis</th>
                     <th className="px-4 py-3.5">Zielstation</th>
                     <th className="px-4 py-3.5">Auswahlgruppen</th>
+                    <th className="px-4 py-3.5">Bestand</th>
                     <th className="px-4 py-3.5">Sortierung</th>
                     <th className="px-5 py-3.5 text-right">Aktionen</th>
                   </tr>
@@ -266,11 +272,22 @@ export const AdminProductsView = ({
                             <span className="text-slate-500">–</span>
                           )}
                         </td>
+                        <td className="px-4 py-4">
+                          <InventorySummary product={prod} />
+                        </td>
                         <td className="px-4 py-4 text-xs font-mono text-slate-400">
                           {prod.sortOrder ?? 0}
                         </td>
                         <td className="px-5 py-4 text-right">
                           <div className="flex items-center justify-end gap-1.5">
+                            {eventId && dataMode && (
+                              <InventoryControls
+                                product={prod}
+                                eventId={eventId}
+                                dataMode={dataMode}
+                                onChanged={onRefresh}
+                              />
+                            )}
                             <button
                               type="button"
                               onClick={() => onEdit(prod)}
@@ -415,6 +432,17 @@ export const AdminProductsView = ({
                         <Trash2 aria-hidden="true" className="h-4 w-4" />
                       </button>
                     </div>
+                  </div>
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-800 pt-2.5">
+                    <InventorySummary product={prod} />
+                    {eventId && dataMode && (
+                      <InventoryControls
+                        product={prod}
+                        eventId={eventId}
+                        dataMode={dataMode}
+                        onChanged={onRefresh}
+                      />
+                    )}
                   </div>
                 </article>
               );

@@ -18,6 +18,7 @@ import { DiagnosticsModule } from "./diagnostics/diagnostics.module";
 import { RunnerModule } from "./runner/runner.module";
 import { MaintenanceModule } from "./maintenance/maintenance.module";
 import { ValueVouchersModule } from "./value-vouchers/value-vouchers.module";
+import { InventoryModule } from "./inventory/inventory.module";
 
 @Module({
   imports: [
@@ -46,6 +47,7 @@ import { ValueVouchersModule } from "./value-vouchers/value-vouchers.module";
     DiagnosticsModule,
     RunnerModule,
     ValueVouchersModule,
+    InventoryModule,
   ],
 })
 export class AppModule {}

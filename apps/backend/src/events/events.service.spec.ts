@@ -177,9 +177,21 @@ function createPrisma() {
     order: { findMany: jest.fn(), deleteMany: jest.fn(), count: jest.fn() },
     cashierSession: { deleteMany: jest.fn(), count: jest.fn() },
     eventPickupCounter: { deleteMany: jest.fn() },
+    // Issue #141: Die Bereinigung raeumt zusaetzlich das Bestands-Ledger der
+    // Betriebsart TEST ab. Die Vorbelegung entspricht einer Veranstaltung
+    // ohne Bestandsfuehrung, damit die uebrigen Tests unveraendert gelten.
+    inventoryMovement: {
+      groupBy: jest.fn().mockResolvedValue([]),
+      deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
+    },
+    inventoryStock: {
+      findMany: jest.fn().mockResolvedValue([]),
+      update: jest.fn(),
+    },
     auditLog: { create: jest.fn() },
     configOperation: { findUnique: jest.fn(), create: jest.fn() },
     $queryRaw: jest.fn(),
+    $executeRaw: jest.fn(),
   };
   const prisma = {
     ...tx,
@@ -846,6 +858,191 @@ describe("EventsService – Wächtervertrag für Issue #53", () => {
         data: expect.objectContaining({
           details: expect.objectContaining({ pickupCountersDeleted: 1 }),
         }),
+      }),
+    );
+  });
+
+  // Issue #141: Reihenfolge und Reichweite des Bestandsteils. Ob die
+  // Fremdschlüssel und der Append-only-Trigger das tatsächlich hergeben,
+  // beweist ausschließlich der Integrationstest
+  // test/event-test-data-cleanup-inventory.integration-spec.ts – hier wird
+  // nur festgehalten, was der Dienst in welcher Reihenfolge anweist.
+  it("räumt das TEST-Ledger vor den Bestellungen ab, schaltet die Ausnahme wieder aus und setzt den Bestand auf den Ledgerstand", async () => {
+    tx.configOperation.findUnique.mockResolvedValue(null);
+    tx.$queryRaw.mockResolvedValueOnce([]).mockResolvedValueOnce([
+      {
+        id: "event-test",
+        name: "Testfest",
+        status: "TEST_MODE",
+        testMode: true,
+      },
+    ]);
+    tx.order.count.mockResolvedValue(0);
+    tx.cashierSession.count.mockResolvedValue(0);
+    tx.order.findMany.mockResolvedValue([{ id: "order-1" }]);
+    tx.productVoucher.deleteMany.mockResolvedValue({ count: 0 });
+    tx.printJob.deleteMany.mockResolvedValue({ count: 0 });
+    tx.payment.deleteMany.mockResolvedValue({ count: 0 });
+    tx.orderItem.deleteMany.mockResolvedValue({ count: 1 });
+    tx.order.deleteMany.mockResolvedValue({ count: 1 });
+    tx.cashierSession.deleteMany.mockResolvedValue({ count: 0 });
+    tx.eventPickupCounter.deleteMany.mockResolvedValue({ count: 1 });
+    tx.inventoryMovement.groupBy
+      .mockResolvedValueOnce([
+        { productId: "product-1", _count: { _all: 3 } },
+        { productId: "product-2", _count: { _all: 1 } },
+      ])
+      .mockResolvedValueOnce([
+        { productId: "product-1", _sum: { quantityDelta: 10 } },
+        { productId: "product-2", _sum: { quantityDelta: 4 } },
+      ]);
+    tx.inventoryMovement.deleteMany
+      .mockResolvedValueOnce({ count: 1 })
+      .mockResolvedValueOnce({ count: 3 });
+    tx.inventoryStock.findMany.mockResolvedValue([
+      { productId: "product-1", stockQuantity: 6 },
+      { productId: "product-2", stockQuantity: 4 },
+    ]);
+    tx.auditLog.create.mockResolvedValue({ id: "audit-1" });
+    tx.event.update.mockResolvedValue({
+      id: "event-test",
+      status: "PREPARED",
+      testMode: false,
+    });
+
+    const result = await service.cleanTestData(
+      "event-test",
+      "admin-1",
+      "Testfest",
+      "cleanup-key-1",
+    );
+
+    // Stornobewegungen zuerst: "reversesMovementId" ist ebenfalls RESTRICT.
+    expect(
+      tx.inventoryMovement.deleteMany.mock.calls.map(([call]) => call),
+    ).toEqual([
+      {
+        where: {
+          eventId: "event-test",
+          dataMode: "TEST",
+          type: "CANCELLATION",
+        },
+      },
+      {
+        where: {
+          eventId: "event-test",
+          dataMode: "TEST",
+          type: { in: ["SALE", "CORRECTION"] },
+        },
+      },
+    ]);
+    const callOrder = (mock: jest.Mock, index = 0) =>
+      mock.mock.invocationCallOrder[index];
+    expect(callOrder(tx.inventoryMovement.deleteMany, 1)).toBeLessThan(
+      callOrder(tx.orderItem.deleteMany),
+    );
+    // Die Ausnahme umschließt ausschließlich die beiden Löschungen.
+    const flagCalls = tx.$executeRaw.mock.invocationCallOrder;
+    expect(flagCalls).toHaveLength(2);
+    expect(flagCalls[0]).toBeLessThan(
+      callOrder(tx.inventoryMovement.deleteMany, 0),
+    );
+    expect(flagCalls[1]).toBeGreaterThan(
+      callOrder(tx.inventoryMovement.deleteMany, 1),
+    );
+    expect(
+      tx.$executeRaw.mock.calls.map(
+        ([query]) =>
+          (query as { strings?: string[]; sql?: string }).sql ?? String(query),
+      ),
+    ).toEqual([
+      expect.stringContaining("'on'"),
+      expect.stringContaining("'off'"),
+    ]);
+
+    // Nur die tatsächlich abweichende Bestandszeile wird geschrieben, und
+    // zwar auf den Wert, den das verbliebene Ledger erklärt.
+    expect(tx.inventoryStock.update).toHaveBeenCalledTimes(1);
+    expect(tx.inventoryStock.update).toHaveBeenCalledWith({
+      where: {
+        productId_eventId_dataMode: {
+          productId: "product-1",
+          eventId: "event-test",
+          dataMode: "TEST",
+        },
+      },
+      data: { stockQuantity: 10, version: { increment: 1 } },
+    });
+    expect(tx.auditLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        action: "INVENTORY_TEST_DATA_RESET",
+        entityType: "Product",
+        entityId: "product-1",
+        userId: "admin-1",
+        details: expect.objectContaining({
+          eventId: "event-test",
+          dataMode: "TEST",
+          previousStockQuantity: 6,
+          stockQuantity: 10,
+          movementsDeleted: 3,
+        }),
+      }),
+    });
+    expect(result).toEqual(
+      expect.objectContaining({
+        inventory: { movementsDeleted: 4, stocksReset: 1 },
+      }),
+    );
+    expect(tx.auditLog.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          action: "EVENT_TEST_DATA_CLEANED",
+          details: expect.objectContaining({
+            inventoryMovementsDeleted: 4,
+            inventoryStocksReset: 1,
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("lässt Bestand und Ledger unberührt, wenn im Testbetrieb nichts verkauft wurde", async () => {
+    tx.configOperation.findUnique.mockResolvedValue(null);
+    tx.$queryRaw.mockResolvedValueOnce([]).mockResolvedValueOnce([
+      {
+        id: "event-test",
+        name: "Testfest",
+        status: "TEST_MODE",
+        testMode: true,
+      },
+    ]);
+    tx.order.count.mockResolvedValue(0);
+    tx.cashierSession.count.mockResolvedValue(0);
+    tx.order.findMany.mockResolvedValue([]);
+    tx.productVoucher.deleteMany.mockResolvedValue({ count: 0 });
+    tx.cashierSession.deleteMany.mockResolvedValue({ count: 0 });
+    tx.eventPickupCounter.deleteMany.mockResolvedValue({ count: 0 });
+    tx.auditLog.create.mockResolvedValue({ id: "audit-1" });
+    tx.event.update.mockResolvedValue({
+      id: "event-test",
+      status: "PREPARED",
+      testMode: false,
+    });
+
+    const result = await service.cleanTestData(
+      "event-test",
+      "admin-1",
+      "Testfest",
+      "cleanup-key-1",
+    );
+
+    expect(tx.inventoryMovement.deleteMany).not.toHaveBeenCalled();
+    expect(tx.inventoryStock.update).not.toHaveBeenCalled();
+    // Ohne zu löschende Bewegung wird die Ausnahme gar nicht erst gesetzt.
+    expect(tx.$executeRaw).not.toHaveBeenCalled();
+    expect(result).toEqual(
+      expect.objectContaining({
+        inventory: { movementsDeleted: 0, stocksReset: 0 },
       }),
     );
   });

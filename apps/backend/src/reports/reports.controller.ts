@@ -3,6 +3,7 @@ import { ReportsService } from "./reports.service";
 import { JwtAuthGuard } from "../auth/jwt-auth.guard";
 import { RolesGuard } from "../common/guards/roles.guard";
 import { Roles } from "../common/decorators/roles.decorator";
+import { InventoryReportQueryDto } from "./reports.dto";
 
 @Controller("reports")
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -40,14 +41,33 @@ export class ReportsController {
     return this.reportsService.getSessionsSummary(eventId);
   }
 
+  @Get("inventory")
+  async getInventoryReport(@Query() query: InventoryReportQueryDto) {
+    return this.reportsService.getInventoryReport(
+      query.eventId,
+      query.dataMode,
+    );
+  }
+
   @Get("export/:type")
   async exportCsv(
     @Param("type")
-    type: "orders" | "products" | "users" | "sessions" | "categories",
+    type:
+      | "orders"
+      | "products"
+      | "users"
+      | "sessions"
+      | "categories"
+      | "inventory",
     @Query("eventId") eventId: string | undefined,
+    @Query("dataMode") dataMode: string | undefined,
     @Res() res: any,
   ) {
-    const csvContent = await this.reportsService.exportCsv(type, eventId);
+    const csvContent = await this.reportsService.exportCsv(
+      type,
+      eventId,
+      dataMode,
+    );
     const filename = `vereinorder_report_${type}_${new Date().toISOString().slice(0, 10)}.csv`;
 
     if (typeof res.header === "function") {

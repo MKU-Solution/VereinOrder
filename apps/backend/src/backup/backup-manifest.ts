@@ -31,6 +31,10 @@ export interface BackupModeSums {
   valueVoucherBalance: number;
   valueVoucherMovementBalance: number;
   valueVoucherCount: Record<string, number>;
+  inventoryStockQuantity: number;
+  inventoryMovementQuantity: number;
+  inventoryTrackedCount: number;
+  inventoryManualBlockedCount: number;
 }
 
 export interface BackupSums {
@@ -175,6 +179,10 @@ function assertSums(value: unknown): asserts value is BackupSums {
       "valueVoucherBalance",
       "valueVoucherMovementBalance",
       "valueVoucherCount",
+      "inventoryStockQuantity",
+      "inventoryMovementQuantity",
+      "inventoryTrackedCount",
+      "inventoryManualBlockedCount",
     ];
     const keys = Object.keys(sums);
     if (
@@ -187,6 +195,19 @@ function assertSums(value: unknown): asserts value is BackupSums {
       sums.valueVoucherBalance = 0;
       sums.valueVoucherMovementBalance = 0;
       sums.valueVoucherCount = {};
+      sums.inventoryStockQuantity = 0;
+      sums.inventoryMovementQuantity = 0;
+      sums.inventoryTrackedCount = 0;
+      sums.inventoryManualBlockedCount = 0;
+    } else if (
+      keys.length === currentKeys.length - 4 &&
+      keys.every((key) => currentKeys.slice(0, -4).includes(key))
+    ) {
+      // Native Manifeste aus der Zeit der Wertgutscheine, aber vor Issue #141.
+      sums.inventoryStockQuantity = 0;
+      sums.inventoryMovementQuantity = 0;
+      sums.inventoryTrackedCount = 0;
+      sums.inventoryManualBlockedCount = 0;
     } else {
       assertExactKeys(sums, currentKeys);
     }
@@ -196,6 +217,10 @@ function assertSums(value: unknown): asserts value is BackupSums {
     assertSafeNonNegativeInteger(sums.valueVoucherBalance);
     assertSafeNonNegativeInteger(sums.valueVoucherMovementBalance);
     assertNumericRecord(sums.valueVoucherCount);
+    assertSafeNonNegativeInteger(sums.inventoryStockQuantity);
+    assertSafeNonNegativeInteger(sums.inventoryMovementQuantity);
+    assertSafeNonNegativeInteger(sums.inventoryTrackedCount);
+    assertSafeNonNegativeInteger(sums.inventoryManualBlockedCount);
   }
 }
 

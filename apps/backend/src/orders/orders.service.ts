@@ -5,6 +5,7 @@ import {
   ConflictException,
   ForbiddenException,
   NotFoundException,
+  Optional,
 } from "@nestjs/common";
 import { PrismaClient, Prisma } from "@vereinorder/database";
 import { PRISMA_CLIENT } from "../prisma/prisma.module";
@@ -24,6 +25,12 @@ import {
   SplitPaymentItemDto,
 } from "./dto/orders.dto";
 import { orderRejection } from "./order-rejection";
+import {
+  effectiveAvailability,
+  InventoryChange,
+  InventoryService,
+  ReservedInventorySale,
+} from "../inventory/inventory.service";
 
 // Snapshot einer aufgeloesten Bestellposition. variantId/variantName/extras
 // entsprechen exakt den gleichnamigen OrderItem-Spalten (unveraendert seit
@@ -102,7 +109,29 @@ export class OrdersService {
     // Issue (Audit-Ereignis nach Serverkontakt) als auch den
     // unverhandelbaren Projektregeln zu auditierbaren Aktionen mit Geldbezug.
     private readonly auditService: AuditService,
+    @Optional() private readonly inventory?: InventoryService,
   ) {}
+
+  private reserveInventory(
+    prisma: Prisma.TransactionClient,
+    input: Parameters<InventoryService["reserveSale"]>[1],
+  ): Promise<ReservedInventorySale[]> {
+    return this.inventory?.reserveSale(prisma, input) ?? Promise.resolve([]);
+  }
+
+  private recordInventorySales(
+    prisma: Prisma.TransactionClient,
+    input: Parameters<InventoryService["recordSales"]>[1],
+  ): Promise<InventoryChange[]> {
+    return this.inventory?.recordSales(prisma, input) ?? Promise.resolve([]);
+  }
+
+  private reverseInventorySales(
+    prisma: Prisma.TransactionClient,
+    input: Parameters<InventoryService["reverseSales"]>[1],
+  ): Promise<InventoryChange[]> {
+    return this.inventory?.reverseSales(prisma, input) ?? Promise.resolve([]);
+  }
 
   /** Zweite Verteidigung hinter den Request-DTOs für direkte Serviceaufrufe. */
   private validateItems(
@@ -256,7 +285,7 @@ export class OrdersService {
           status: true,
           testMode: true,
           products: {
-            where: { availability: { not: "DISABLED" } },
+            where: { manualAvailability: { not: "DISABLED" } },
             select: {
               id: true,
               name: true,
@@ -265,7 +294,7 @@ export class OrdersService {
               deposit: true,
               color: true,
               sortOrder: true,
-              availability: true,
+              manualAvailability: true,
               // Issue #66, Stationskasse: Zielstation von Produkt und
               // Kategorie. Getragen fuer die Anzeige, nicht fuer die
               // Verkaufstransaktion selbst (die prueft Station und
@@ -284,6 +313,33 @@ export class OrdersService {
               // als zwei auseinanderlaufende Selects fuer dieselbe
               // Produktliste; die zentrale Bonkasse ignoriert sie einfach.
               targetStationId: true,
+              // Issue #141, Fehler A: Bon- und Stationskasse zeigten ein
+              // bestandsgefuehrtes Produkt mit Menge 0 beim Laden/Neuladen
+              // immer als verfuegbar, weil hier bislang nur der manuelle
+              // Override (manualAvailability) mitkam, nie der tatsaechliche
+              // Bestand. Genau wie targetStationId oben ist das kein
+              // Rand-, sondern ein Kernfeld dieser Abfrage: die Kassen lesen
+              // "availability" als EFFEKTIVEN Wert (siehe
+              // effectiveAvailability, inventory.service.ts), nicht als
+              // rohen manuellen Override. Wie bei den beiden
+              // Zielstationsfeldern reicht ein struktureller Mock diese
+              // Luecke nicht ab (siehe test/station-sale-context.
+              // integration-spec.ts) - eine Attrappe liefert immer exakt
+              // das, was sie vorgibt, unabhaengig vom echten select. Sparsam
+              // bleibt die Abfrage trotzdem: nur die Skalarfelder, die
+              // effectiveAvailability() tatsaechlich braucht (siehe
+              // inventoryFacade in products.service.ts als Vorbild), und nur
+              // je Produkt hoechstens zwei Zeilen (LIVE/TEST).
+              inventoryStocks: {
+                select: {
+                  dataMode: true,
+                  trackingEnabled: true,
+                  stockQuantity: true,
+                  lowStockThreshold: true,
+                  manualBlocked: true,
+                  version: true,
+                },
+              },
               category: {
                 select: {
                   id: true,
@@ -356,11 +412,50 @@ export class OrdersService {
       sessions.map((session) => [session.eventId, session]),
     );
 
-    return events.map((event) => ({
-      ...event,
-      activeSession: sessionsByEvent.get(event.id) || null,
-      printingReady: Boolean(activePrinter),
-    }));
+    return events.map((event) => {
+      // Dieselbe Ableitung wie an den uebrigen neun Stellen im Backend
+      // (u.a. weiter unten in createQuickSale/createOrder derselben Datei,
+      // sowie inventory.service.ts, products.service.ts) - bewusst nicht in
+      // eine zehnte gemeinsame Funktion ausgelagert, sondern hier direkt
+      // angewendet: nur die Betriebsart, in der die Veranstaltung GERADE
+      // laeuft, darf ueber ihren Bestand entscheiden; die andere bleibt
+      // fuer diese Anzeige unsichtbar (Issue #141, Fehler A).
+      const dataMode =
+        event.status === "ACTIVE" && !event.testMode
+          ? "LIVE"
+          : event.status === "TEST_MODE" && event.testMode
+            ? "TEST"
+            : undefined;
+      return {
+        ...event,
+        activeSession: sessionsByEvent.get(event.id) || null,
+        printingReady: Boolean(activePrinter),
+        products: event.products.map((product) => {
+          const stock =
+            product.inventoryStocks?.find(
+              (entry) => entry.dataMode === dataMode,
+            ) ?? null;
+          return {
+            ...product,
+            // Effektive Verfuegbarkeit statt des rohen manuellen Overrides
+            // (siehe effectiveAvailability, inventory.service.ts) - dieselbe
+            // Ableitung wie inventoryFacade in products.service.ts. Ohne
+            // diesen Schritt zeigte die Kasse ein bestandsgefuehrtes Produkt
+            // mit Menge 0 bis zum ersten Live-Ereignis als verfuegbar an.
+            availability: effectiveAvailability(
+              product.manualAvailability,
+              stock,
+            ),
+            inventoryTracked: !!stock?.trackingEnabled,
+            stockQuantity: stock?.trackingEnabled ? stock.stockQuantity : null,
+            lowStockThreshold: stock?.trackingEnabled
+              ? stock.lowStockThreshold
+              : null,
+            inventoryVersion: stock?.version ?? 0,
+          };
+        }),
+      };
+    });
   }
 
   /**
@@ -828,14 +923,16 @@ export class OrdersService {
             );
           }
           if (
-            product.availability === "OUT_OF_STOCK" ||
-            product.availability === "DISABLED"
+            !this.inventory &&
+            ((product as any).manualAvailability ??
+              (product as any).availability) !== "AVAILABLE" &&
+            ((product as any).manualAvailability ??
+              (product as any).availability) !== "LOW_STOCK"
           ) {
             throw new BadRequestException(
               ORDER_REJECTION_MESSAGES.PRODUCT_OUT_OF_STOCK(product.name),
             );
           }
-
           const { priceAtTime, variantId, variantName, extras } =
             this.resolveOrderItemPricing(product, item.optionIds ?? []);
           const depositAtTime = this.resolveDeposit(product);
@@ -900,6 +997,20 @@ export class OrdersService {
           }
           tenderedAmount = totalAmount;
         }
+
+        const inventoryReservations = await this.reserveInventory(prisma, {
+          eventId: dto.eventId,
+          dataMode,
+          lines: dto.items.map((item) => {
+            const product = productsById.get(item.productId)!;
+            return {
+              productId: product.id,
+              quantity: item.quantity,
+              productName: product.name,
+              manualAvailability: product.manualAvailability,
+            };
+          }),
+        });
 
         const user = await prisma.user.findUnique({ where: { id: userId } });
         if (!user?.isActive)
@@ -977,6 +1088,14 @@ export class OrdersService {
         });
 
         const vouchers: PrintOptions["vouchers"] = [];
+        const inventoryChanges = await this.recordInventorySales(prisma, {
+          eventId: dto.eventId,
+          dataMode,
+          orderId: order.id,
+          actorUserId: userId,
+          reservations: inventoryReservations,
+          items: order.items,
+        });
         for (const item of order.items) {
           for (let unit = 0; unit < item.quantity; unit += 1) {
             const voucher = await prisma.productVoucher.create({
@@ -1047,6 +1166,7 @@ export class OrdersService {
           changeAmount,
           pickupNumber,
           idempotentReplay: false,
+          inventoryChanges,
         };
       });
     } catch (error) {
@@ -1075,6 +1195,11 @@ export class OrdersService {
       throw error;
     }
 
+    this.inventory?.publishChanges(
+      dto.eventId,
+      result.order.dataMode,
+      result.inventoryChanges ?? [],
+    );
     return result;
   }
 
@@ -1362,8 +1487,10 @@ export class OrdersService {
     const idempotentOrder = await this.resolveIdempotentOrder(userId, dto);
     if (idempotentOrder) return idempotentOrder;
 
+    let createdOrder: any;
+    let inventoryChanges: InventoryChange[] = [];
     try {
-      return await this.prisma.$transaction(async (prisma) => {
+      const result = await this.prisma.$transaction(async (prisma) => {
         const eventRows = await prisma.$queryRaw<
           { status: string; testMode: boolean }[]
         >(
@@ -1471,8 +1598,11 @@ export class OrdersService {
         const orderItemsData = dto.items.map((item) => {
           const product = productMap.get(item.productId);
           if (
-            product.availability === "OUT_OF_STOCK" ||
-            product.availability === "DISABLED"
+            !this.inventory &&
+            ((product as any).manualAvailability ??
+              (product as any).availability) !== "AVAILABLE" &&
+            ((product as any).manualAvailability ??
+              (product as any).availability) !== "LOW_STOCK"
           ) {
             throw new BadRequestException(
               orderRejection(
@@ -1481,7 +1611,6 @@ export class OrdersService {
               ),
             );
           }
-
           const { priceAtTime, variantId, variantName, extras } =
             this.resolveOrderItemPricing(product, item.optionIds ?? []);
           const depositAtTime = this.resolveDeposit(product);
@@ -1527,6 +1656,20 @@ export class OrdersService {
               ? "PARTIALLY_PAID"
               : "OPEN";
 
+        const inventoryReservations = await this.reserveInventory(prisma, {
+          eventId: dto.eventId,
+          dataMode: orderDataMode,
+          lines: dto.items.map((item) => {
+            const product = productMap.get(item.productId)!;
+            return {
+              productId: product.id,
+              quantity: item.quantity,
+              productName: product.name,
+              manualAvailability: product.manualAvailability,
+            };
+          }),
+        });
+
         const order = await prisma.order.create({
           data: {
             totalAmount,
@@ -1570,11 +1713,22 @@ export class OrdersService {
           },
         });
 
+        const stockChanges = await this.recordInventorySales(prisma, {
+          eventId: dto.eventId,
+          dataMode: orderDataMode,
+          orderId: order.id,
+          actorUserId: userId,
+          reservations: inventoryReservations,
+          items: order.items,
+        });
+
         // Dispatch smart PrintJobs
         await this.dispatchPrintJobs(prisma, order, user);
 
-        return order;
+        return { order, stockChanges };
       });
+      createdOrder = result.order;
+      inventoryChanges = result.stockChanges;
     } catch (error) {
       // Issue #65, Abschnitt 8 Punkt 4 (Befund B5): die Idempotenzpruefung
       // liegt vor der Transaktion, zwei gleichzeitige Versuche mit
@@ -1597,6 +1751,12 @@ export class OrdersService {
       }
       throw error;
     }
+    this.inventory?.publishChanges(
+      dto.eventId,
+      createdOrder.dataMode,
+      inventoryChanges,
+    );
+    return createdOrder;
   }
 
   /**
@@ -1619,7 +1779,13 @@ export class OrdersService {
     if (typeof target === "string") {
       return target.includes("idempotencyKey");
     }
-    return false;
+    // PostgreSQL liefert ueber Prisma 5 fuer diesen Konflikt in der realen
+    // Datenbank teilweise nur `target: (not available)`. Nach dem Rollback
+    // der unterlegenen Transaktion ist der Gewinner bereits sichtbar; die
+    // anschliessende vollstaendige Idempotenzpruefung darf den P2002 daher
+    // auch bei fehlender Zielangabe aufloesen. Liefert sie keine exakt
+    // passende Bestellung, wird der Originalfehler weiterhin geworfen.
+    return target == null;
   }
 
   /**
@@ -2167,7 +2333,22 @@ export class OrdersService {
 
   async cancelOrder(orderId: string, reason: string, userId: string) {
     const normalizedReason = this.normalizeCancellationReason(reason);
-    return await this.prisma.$transaction(async (prisma) => {
+    const result = await this.prisma.$transaction(async (prisma) => {
+      // Der Auftragslock serialisiert Vollstornos vor der Statuspruefung.
+      // So kann ein paralleler zweiter Versuch keine zweite Rueckbuchung
+      // zwischen Lesen und Schreiben einschieben.
+      if (this.inventory)
+        await prisma.$queryRaw(
+          Prisma.sql`SELECT "id" FROM "Order" WHERE "id" = ${orderId} FOR UPDATE`,
+        );
+      if (this.inventory)
+        await prisma.$queryRaw(Prisma.sql`
+          SELECT "id"
+          FROM "OrderItem"
+          WHERE "orderId" = ${orderId}
+          ORDER BY "id" ASC
+          FOR UPDATE
+        `);
       const order = await prisma.order.findUnique({
         where: { id: orderId },
         include: { items: true, payments: true },
@@ -2200,6 +2381,15 @@ export class OrdersService {
         data: { status: "CANCELLED" },
       });
 
+      const inventoryChanges = await this.reverseInventorySales(prisma, {
+        eventId: order.eventId,
+        dataMode: order.dataMode,
+        orderId: order.id,
+        orderItemIds: order.items.map((item) => item.id),
+        actorUserId: userId,
+        reason: normalizedReason,
+      });
+
       await prisma.auditLog.create({
         data: {
           action: "CANCEL_ORDER",
@@ -2216,13 +2406,38 @@ export class OrdersService {
         },
       });
 
-      return updatedOrder;
+      return { order: updatedOrder, inventoryChanges };
     });
+    this.inventory?.publishChanges(
+      result.order.eventId,
+      result.order.dataMode,
+      result.inventoryChanges,
+    );
+    return result.order;
   }
 
   async cancelOrderItem(orderItemId: string, reason: string, userId: string) {
     const normalizedReason = this.normalizeCancellationReason(reason);
-    return await this.prisma.$transaction(async (prisma) => {
+    const result = await this.prisma.$transaction(async (prisma) => {
+      if (this.inventory) {
+        // Voll- und Positionsstorno folgen demselben Lockvertrag:
+        // zuerst die Bestellung, danach ihre Positionen. Das JOIN ermittelt
+        // den unveraenderlichen Elternschluessel und sperrt ausschliesslich
+        // die Order; der zweite Query sperrt anschliessend die Zielposition.
+        // Damit kann kein Pfad Order -> Item gegen Item -> Order laufen und
+        // PostgreSQL muss keinen der beiden legitimen Stornos als Deadlock-
+        // Opfer abbrechen.
+        await prisma.$queryRaw(Prisma.sql`
+          SELECT orders."id"
+          FROM "Order" orders
+          INNER JOIN "OrderItem" items ON items."orderId" = orders."id"
+          WHERE items."id" = ${orderItemId}
+          FOR UPDATE OF orders
+        `);
+        await prisma.$queryRaw(
+          Prisma.sql`SELECT "id" FROM "OrderItem" WHERE "id" = ${orderItemId} FOR UPDATE`,
+        );
+      }
       const item = await prisma.orderItem.findUnique({
         where: { id: orderItemId },
         include: { order: { include: { items: true } } },
@@ -2248,6 +2463,15 @@ export class OrdersService {
       const cancelledVouchers = await prisma.productVoucher.updateMany({
         where: { orderItemId, status: "ISSUED" },
         data: { status: "CANCELLED" },
+      });
+
+      const inventoryChanges = await this.reverseInventorySales(prisma, {
+        eventId: item.order.eventId,
+        dataMode: item.order.dataMode,
+        orderId: item.order.id,
+        orderItemIds: [item.id],
+        actorUserId: userId,
+        reason: normalizedReason,
       });
 
       const order = item.order;
@@ -2291,8 +2515,19 @@ export class OrdersService {
         },
       });
 
-      return updatedItem;
+      return {
+        item: updatedItem,
+        inventoryChanges,
+        eventId: item.order.eventId,
+        dataMode: item.order.dataMode,
+      };
     });
+    this.inventory?.publishChanges(
+      result.eventId,
+      result.dataMode,
+      result.inventoryChanges,
+    );
+    return result.item;
   }
 
   async updatePriority(orderId: string, isPriority: boolean) {

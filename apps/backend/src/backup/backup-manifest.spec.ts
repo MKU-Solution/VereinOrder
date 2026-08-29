@@ -36,6 +36,10 @@ function validManifest(): BackupManifest {
           valueVoucherBalance: 2000,
           valueVoucherMovementBalance: 2000,
           valueVoucherCount: { ACTIVE: 2 },
+          inventoryStockQuantity: 17,
+          inventoryMovementQuantity: 17,
+          inventoryTrackedCount: 3,
+          inventoryManualBlockedCount: 1,
         },
         TEST: {
           orderTotalAmount: 0,
@@ -44,6 +48,10 @@ function validManifest(): BackupManifest {
           valueVoucherBalance: 0,
           valueVoucherMovementBalance: 0,
           valueVoucherCount: {},
+          inventoryStockQuantity: 0,
+          inventoryMovementQuantity: 0,
+          inventoryTrackedCount: 0,
+          inventoryManualBlockedCount: 0,
         },
       },
       auditLogCount: 4,
@@ -58,6 +66,10 @@ function validManifest(): BackupManifest {
           valueVoucherBalance: 2000,
           valueVoucherMovementBalance: 2000,
           valueVoucherCount: { ACTIVE: 2 },
+          inventoryStockQuantity: 17,
+          inventoryMovementQuantity: 17,
+          inventoryTrackedCount: 3,
+          inventoryManualBlockedCount: 1,
         },
         TEST: {
           orderTotalAmount: 0,
@@ -66,6 +78,10 @@ function validManifest(): BackupManifest {
           valueVoucherBalance: 0,
           valueVoucherMovementBalance: 0,
           valueVoucherCount: {},
+          inventoryStockQuantity: 0,
+          inventoryMovementQuantity: 0,
+          inventoryTrackedCount: 0,
+          inventoryManualBlockedCount: 0,
         },
       },
       auditLogCount: 4,
@@ -115,6 +131,10 @@ describe("PostgreSQL-Sicherungsmanifest V1 (Issue #67)", () => {
         delete sums.valueVoucherBalance;
         delete sums.valueVoucherMovementBalance;
         delete sums.valueVoucherCount;
+        delete sums.inventoryStockQuantity;
+        delete sums.inventoryMovementQuantity;
+        delete sums.inventoryTrackedCount;
+        delete sums.inventoryManualBlockedCount;
       }
     }
 
@@ -123,6 +143,26 @@ describe("PostgreSQL-Sicherungsmanifest V1 (Issue #67)", () => {
       valueVoucherBalance: 0,
       valueVoucherMovementBalance: 0,
       valueVoucherCount: {},
+    });
+  });
+
+  it("normalisiert 0.2-era Manifeste ohne Bestandssummen rückwärtskompatibel", () => {
+    const legacy: any = JSON.parse(serializeBackupManifest(validManifest()));
+    for (const snapshot of [legacy.sumsBefore, legacy.sumsAfter]) {
+      for (const sums of Object.values(snapshot.byDataMode) as any[]) {
+        delete sums.inventoryStockQuantity;
+        delete sums.inventoryMovementQuantity;
+        delete sums.inventoryTrackedCount;
+        delete sums.inventoryManualBlockedCount;
+      }
+    }
+
+    const parsed = parseBackupManifest(JSON.stringify(legacy));
+    expect(parsed.sumsAfter.byDataMode.LIVE).toMatchObject({
+      inventoryStockQuantity: 0,
+      inventoryMovementQuantity: 0,
+      inventoryTrackedCount: 0,
+      inventoryManualBlockedCount: 0,
     });
   });
 
