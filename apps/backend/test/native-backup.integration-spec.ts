@@ -200,7 +200,13 @@ describe("Native PostgreSQL-Sicherung gegen echte Testdatenbank (Issue #67)", ()
       format: "POSTGRES_CUSTOM",
       verification: "STRUCTURE_VERIFIED",
       compatibility: "CURRENT",
-      restoreAvailable: false,
+      // Seit #67 ("sicheren nativen Restore abschließen", f1d2726) übernimmt
+      // NativeRestoreService.execute() für CURRENT selbst die isolierte
+      // Wiederherstellungsprüfung, bevor umgeschaltet wird. Ein Restore ist
+      // daher bereits an dieser Stelle angeboten, nicht erst nach einer
+      // separat ausgelösten Prüfung.
+      restoreAvailable: true,
+      restoreUnavailableReason: null,
     });
     const downloadPath = await service.getDownloadFilePath(result.filename);
     expect(path.basename(downloadPath)).toBe(result.filename);
