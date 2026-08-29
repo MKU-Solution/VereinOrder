@@ -33,7 +33,23 @@ export interface FeedBlock {
   lines?: number;
 }
 
-export type DocumentBlock = TextBlock | ColumnsBlock | RuleBlock | FeedBlock;
+/**
+ * Maschinenlesbarer Gutschein-Code. Der Klartext wird bewusst zusätzlich
+ * als Textblock ausgegeben: Ein Scanner ist Hilfe, nicht einzige Grundlage
+ * für die Einlösung am Fest.
+ */
+export interface BarcodeBlock {
+  kind: "barcode";
+  data: string;
+  symbology: "CODE128";
+}
+
+export type DocumentBlock =
+  | TextBlock
+  | ColumnsBlock
+  | RuleBlock
+  | FeedBlock
+  | BarcodeBlock;
 
 export interface PrintDocument {
   /** Kurzbezeichnung für Protokolle und Simulatorkopf. */
@@ -52,6 +68,7 @@ export interface RenderedLine {
   bold: boolean;
   doubleHeight: boolean;
   doubleWidth: boolean;
+  barcode?: { data: string; symbology: "CODE128" };
 }
 
 function emptyLine(overrides: Partial<RenderedLine> = {}): RenderedLine {
@@ -164,6 +181,22 @@ export function renderDocument(
         const count = Math.max(1, Math.min(10, block.lines ?? 1));
         for (let index = 0; index < count; index += 1) {
           lines.push(emptyLine());
+        }
+        break;
+      }
+      case "barcode": {
+        // Der Simulator kann keine Striche zeichnen. Die Kennzeichnung macht
+        // den Inhalt trotzdem sichtbar; der ESC/POS-Renderer erzeugt daraus
+        // den echten CODE128-Befehl.
+        const data = String(block.data ?? "").trim();
+        if (data) {
+          lines.push(
+            emptyLine({
+              text: `[CODE128] ${data}`,
+              align: "center",
+              barcode: { data, symbology: block.symbology },
+            }),
+          );
         }
         break;
       }

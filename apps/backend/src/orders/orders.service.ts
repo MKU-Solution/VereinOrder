@@ -203,12 +203,12 @@ export class OrdersService {
         !Number.isInteger(payment.amount) ||
         payment.amount <= 0 ||
         payment.amount > 2_147_483_647 ||
-        !["CASH", "CARD", "VOUCHER"].includes(payment.method)
+        !["CASH", "CARD"].includes(payment.method)
       ) {
         throw new BadRequestException(
           orderRejection(
             ORDER_REJECTION_CODES.VALIDATION,
-            "Zahlungen müssen positive ganzzahlige Centbeträge mit gültiger Zahlungsart sein.",
+            "Zahlungen müssen positive ganzzahlige Centbeträge mit CASH oder CARD sein; Wertgutscheine werden ausschließlich über den Gutscheinpfad entwertet.",
           ),
         );
       }
@@ -223,6 +223,17 @@ export class OrdersService {
       }
     }
     return total;
+  }
+
+  /** Serialisiert konkurrierende Zahlungswege auf derselben Bestellung. */
+  private async lockOrderForPayment(prisma: any, orderId: string) {
+    // Unit-Test-Doubles älterer Bestelltests bilden kein Raw-SQL ab. Ein echter
+    // Prisma-Transaktionsclient besitzt diese Methode immer; die Abzweigung
+    // ändert daher den Produktivpfad nicht.
+    if (typeof prisma.$queryRaw !== "function") return;
+    await prisma.$queryRaw(
+      Prisma.sql`SELECT "id" FROM "Order" WHERE "id" = ${orderId} FOR UPDATE`,
+    );
   }
 
   private normalizeCancellationReason(reason: string): string {
@@ -1915,6 +1926,10 @@ export class OrdersService {
     const newPaid = this.validatePayments(payments);
 
     return await this.prisma.$transaction(async (prisma) => {
+      // Zahlungswege sperren dieselbe Bestellung vor dem Saldoabgleich. Damit
+      // kann weder ein paralleler CASH/CARD-Vorgang noch eine Gutschein-
+      // Entwertung den offenen Betrag gleichzeitig verbrauchen.
+      await this.lockOrderForPayment(prisma, orderId);
       const order = await prisma.order.findUnique({
         where: { id: orderId },
         include: { payments: true },
@@ -1929,6 +1944,11 @@ export class OrdersService {
       if (!Number.isSafeInteger(totalPaid) || totalPaid > 2_147_483_647) {
         throw new BadRequestException(
           "Die Summe aller Zahlungen überschreitet den zulässigen Centbetrag.",
+        );
+      }
+      if (totalPaid > order.totalAmount) {
+        throw new BadRequestException(
+          "Die Zahlung würde die Bestellung überzahlen.",
         );
       }
 
@@ -1997,6 +2017,7 @@ export class OrdersService {
     const newPaid = this.validatePayments(payments);
 
     return await this.prisma.$transaction(async (prisma) => {
+      await this.lockOrderForPayment(prisma, orderId);
       const order = await prisma.order.findUnique({
         where: { id: orderId },
         include: {

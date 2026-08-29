@@ -88,6 +88,15 @@ export interface ResolveJobInput {
   comment?: string | null;
 }
 
+/**
+ * Minimaler Lesevertrag für Zahlungsdialoge. Netzwerk- und Betriebsdaten
+ * eines Druckers sind bewusst kein Teil dieses Typs.
+ */
+export interface ActivePrinterSelection {
+  id: string;
+  name: string;
+}
+
 interface OutcomeEvidence {
   errorCode?: string | null;
   errorMessage?: string | null;
@@ -712,6 +721,19 @@ export class PrintJobsService {
   async findAllPrinters(): Promise<Printer[]> {
     return this.prisma.printer.findMany({
       include: { stations: true },
+      orderBy: { name: "asc" },
+    });
+  }
+
+  /**
+   * Liefert ausschließlich die für eine Bon-Auswahl notwendigen Angaben.
+   * Dieser Vertrag darf auch von Kasse und Service gelesen werden, ohne
+   * Druckeradressen, Failover- oder Fehlerdaten offenzulegen.
+   */
+  async findActivePrinterSelections(): Promise<ActivePrinterSelection[]> {
+    return this.prisma.printer.findMany({
+      where: { isActive: true },
+      select: { id: true, name: true },
       orderBy: { name: "asc" },
     });
   }

@@ -5,7 +5,10 @@ import * as path from "node:path";
 import { BackupTrigger, parseBackupManifest } from "./backup-manifest";
 import { NativeBackupService } from "./native-backup.service";
 
-function createPrisma(options?: { changeTablesAfterDump?: boolean }) {
+function createPrisma(options?: {
+  changeTablesAfterDump?: boolean;
+  valueVoucherMovementBalance?: bigint;
+}) {
   let tableReads = 0;
   const migrations = [
     { name: "20260801000000_first", checksum: "checksum-a" },
@@ -29,6 +32,8 @@ function createPrisma(options?: { changeTablesAfterDump?: boolean }) {
         "Payment",
         "Product",
         "ProductVoucher",
+        "ValueVoucher",
+        "ValueVoucherMovement",
         "_prisma_migrations",
       ];
       if (options?.changeTablesAfterDump && tableReads > 1)
@@ -43,6 +48,30 @@ function createPrisma(options?: { changeTablesAfterDump?: boolean }) {
     }
     if (sql.includes('FROM "ProductVoucher"')) {
       return [{ dataMode: "LIVE", status: "ISSUED", count: BigInt(3) }];
+    }
+    if (
+      sql.includes('FROM "ValueVoucher"') &&
+      sql.includes('SUM("currentBalance")')
+    ) {
+      return [
+        {
+          dataMode: "LIVE",
+          status: "ACTIVE",
+          count: BigInt(2),
+          balance: BigInt(2000),
+        },
+      ];
+    }
+    if (
+      sql.includes('FROM "ValueVoucherMovement"') &&
+      sql.includes('SUM("balanceDelta")')
+    ) {
+      return [
+        {
+          dataMode: "LIVE",
+          balance: options?.valueVoucherMovementBalance ?? BigInt(2000),
+        },
+      ];
     }
     if (sql.includes('FROM "AuditLog"') && sql.includes("withUser")) {
       return [{ total: BigInt(4), withUser: BigInt(3) }];
@@ -158,6 +187,9 @@ describe("Native PostgreSQL-Sicherung V1 (Issue #67)", () => {
       orderTotalAmount: 1050,
       paymentAmount: { CASH: 1050 },
       voucherCount: { ISSUED: 3 },
+      valueVoucherBalance: 2000,
+      valueVoucherMovementBalance: 2000,
+      valueVoucherCount: { ACTIVE: 2 },
     });
     expect(manifest.createdBy).toEqual({
       userId: "admin-id",
@@ -166,6 +198,31 @@ describe("Native PostgreSQL-Sicherung V1 (Issue #67)", () => {
     expect(prisma.auditLog.create).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({ action: "BACKUP_CREATED" }),
+      }),
+    );
+  });
+
+  it("bricht bei einer von den Gutscheinbewegungen abweichenden Saldoprojektion sicher ab", async () => {
+    const prisma = createPrisma({
+      valueVoucherMovementBalance: BigInt(1900),
+    });
+    const service = new NativeBackupService(
+      prisma as any,
+      createTools() as any,
+      { read: jest.fn(() => ({ phase: "OPEN" })) } as any,
+    );
+
+    await expect(service.createBackup("MANUAL", null)).rejects.toBeInstanceOf(
+      ServiceUnavailableException,
+    );
+    expect(prisma.auditLog.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          action: "BACKUP_FAILED",
+          details: expect.objectContaining({
+            errorCode: "BACKUP_UNAVAILABLE",
+          }),
+        }),
       }),
     );
   });

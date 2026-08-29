@@ -6,6 +6,10 @@ import {
   Clock,
   SplitSquareHorizontal,
 } from "lucide-react";
+import {
+  ValueVoucherPaymentFlow,
+  type ValueVoucherPaymentContext,
+} from "./ValueVoucherPaymentFlow";
 
 interface CheckoutModalProps {
   isOpen: boolean;
@@ -16,6 +20,8 @@ interface CheckoutModalProps {
     payments: { amount: number; method: "CASH" | "CARD" | "VOUCHER" }[],
     tableName?: string,
   ) => void;
+  valueVoucherContext?: ValueVoucherPaymentContext;
+  onVoucherRedeemed?: () => void;
 }
 
 export const CheckoutModal = ({
@@ -24,6 +30,8 @@ export const CheckoutModal = ({
   initialTableName = "",
   onClose,
   onConfirm,
+  valueVoucherContext,
+  onVoucherRedeemed,
 }: CheckoutModalProps) => {
   const [mode, setMode] = useState<"SELECT" | "SPLIT">("SELECT");
   const [cashAmount, setCashAmount] = useState<number>(0);
@@ -136,6 +144,13 @@ export const CheckoutModal = ({
                 </div>
               </button>
             </div>
+            <ValueVoucherPaymentFlow
+              context={valueVoucherContext}
+              onRedeemed={() => {
+                onVoucherRedeemed?.();
+                onClose();
+              }}
+            />
           </div>
         ) : (
           <div className="space-y-6">

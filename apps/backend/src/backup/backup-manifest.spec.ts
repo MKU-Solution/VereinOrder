@@ -33,11 +33,17 @@ function validManifest(): BackupManifest {
           orderTotalAmount: 1050,
           paymentAmount: { CASH: 1050 },
           voucherCount: { ISSUED: 3 },
+          valueVoucherBalance: 2000,
+          valueVoucherMovementBalance: 2000,
+          valueVoucherCount: { ACTIVE: 2 },
         },
         TEST: {
           orderTotalAmount: 0,
           paymentAmount: {},
           voucherCount: {},
+          valueVoucherBalance: 0,
+          valueVoucherMovementBalance: 0,
+          valueVoucherCount: {},
         },
       },
       auditLogCount: 4,
@@ -49,11 +55,17 @@ function validManifest(): BackupManifest {
           orderTotalAmount: 1050,
           paymentAmount: { CASH: 1050 },
           voucherCount: { ISSUED: 3 },
+          valueVoucherBalance: 2000,
+          valueVoucherMovementBalance: 2000,
+          valueVoucherCount: { ACTIVE: 2 },
         },
         TEST: {
           orderTotalAmount: 0,
           paymentAmount: {},
           voucherCount: {},
+          valueVoucherBalance: 0,
+          valueVoucherMovementBalance: 0,
+          valueVoucherCount: {},
         },
       },
       auditLogCount: 4,
@@ -94,6 +106,24 @@ describe("PostgreSQL-Sicherungsmanifest V1 (Issue #67)", () => {
     ]);
     expect(first).toBe(second);
     expect(first).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  it("normalisiert ältere Manifeste ohne Wertgutschein-Summen rückwärtskompatibel", () => {
+    const legacy: any = JSON.parse(serializeBackupManifest(validManifest()));
+    for (const snapshot of [legacy.sumsBefore, legacy.sumsAfter]) {
+      for (const sums of Object.values(snapshot.byDataMode) as any[]) {
+        delete sums.valueVoucherBalance;
+        delete sums.valueVoucherMovementBalance;
+        delete sums.valueVoucherCount;
+      }
+    }
+
+    const parsed = parseBackupManifest(JSON.stringify(legacy));
+    expect(parsed.sumsAfter.byDataMode.LIVE).toMatchObject({
+      valueVoucherBalance: 0,
+      valueVoucherMovementBalance: 0,
+      valueVoucherCount: {},
+    });
   });
 
   it.each([

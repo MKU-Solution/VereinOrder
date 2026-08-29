@@ -14,6 +14,7 @@ describe("PrintJobsController", () => {
     resolveJob: jest.fn(),
     findJobStatus: jest.fn(),
     findAllPrinters: jest.fn(),
+    findActivePrinterSelections: jest.fn(),
     createPrinter: jest.fn(),
     updatePrinter: jest.fn(),
     createTestJob: jest.fn(),
@@ -46,6 +47,29 @@ describe("PrintJobsController", () => {
       ]);
     },
   );
+
+  it("erlaubt die schmale Druckerauswahl auch für Kasse und Service", () => {
+    expect(
+      Reflect.getMetadata(ROLES_KEY, controller.getActivePrinterSelections),
+    ).toEqual(["ADMINISTRATOR", "EVENT_MANAGER", "WAITER", "CASHIER"]);
+    expect(Reflect.getMetadata(ROLES_KEY, controller.getPrinters)).toEqual([
+      "ADMINISTRATOR",
+      "EVENT_MANAGER",
+    ]);
+  });
+
+  it("liefert für Zahlungsdialoge nur die sichere aktive Druckerauswahl", async () => {
+    printJobsService.findActivePrinterSelections.mockResolvedValue([
+      { id: "printer-1", name: "Kasse" },
+    ]);
+
+    await expect(controller.getActivePrinterSelections()).resolves.toEqual([
+      { id: "printer-1", name: "Kasse" },
+    ]);
+    expect(printJobsService.findActivePrinterSelections).toHaveBeenCalledTimes(
+      1,
+    );
+  });
 
   it("löst den Testdruck für den angefragten Drucker aus", async () => {
     printJobsService.createTestJob.mockResolvedValue({ id: "job-1" });

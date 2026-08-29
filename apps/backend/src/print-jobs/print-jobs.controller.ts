@@ -109,6 +109,18 @@ export class PrintJobsController {
 
   // --- ADMIN PRINTER MANAGEMENT ---
 
+  /**
+   * Sicherer, bewusst schmaler Auswahlvertrag für Zahlungsdialoge.
+   * Verwaltung und vollständige Druckerkonfiguration bleiben Administratoren
+   * und Veranstaltungsleitungen vorbehalten.
+   */
+  @Get("active-printers")
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles("ADMINISTRATOR", "EVENT_MANAGER", "WAITER", "CASHIER")
+  async getActivePrinterSelections() {
+    return this.printJobsService.findActivePrinterSelections();
+  }
+
   @Get("printers")
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles("ADMINISTRATOR", "EVENT_MANAGER")
