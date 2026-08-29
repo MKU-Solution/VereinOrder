@@ -66,6 +66,7 @@ const TABLE_FIELDS = {
     "sortOrder",
     "imageUrl",
     "availability",
+    "manualAvailability",
     "categoryId",
     "targetStationId",
     "eventId",
@@ -269,6 +270,37 @@ const TABLE_FIELDS = {
     "createdAt",
   ],
   valueVoucherAllocations: ["id", "movementId", "orderItemId", "amount"],
+  inventoryStocks: [
+    "productId",
+    "eventId",
+    "dataMode",
+    "trackingEnabled",
+    "initialQuantity",
+    "stockQuantity",
+    "lowStockThreshold",
+    "manualBlocked",
+    "version",
+    "createdAt",
+    "updatedAt",
+  ],
+  inventoryMovements: [
+    "id",
+    "type",
+    "quantityDelta",
+    "quantityBefore",
+    "quantityAfter",
+    "productId",
+    "eventId",
+    "dataMode",
+    "orderId",
+    "orderItemId",
+    "reversesMovementId",
+    "actorUserId",
+    "reason",
+    "idempotencyKey",
+    "requestFingerprint",
+    "createdAt",
+  ],
 } as const;
 
 type TableName = keyof typeof TABLE_FIELDS;
@@ -319,6 +351,11 @@ function validateReferences(data: Record<TableName, BackupRow[]>) {
   const printers = ids("printers");
   const users = ids("users");
   const products = ids("products");
+  const productsByEvent = new Map(
+    data.products
+      .filter((row) => typeof row.id === "string")
+      .map((row) => [row.id as string, row.eventId]),
+  );
   const orders = ids("orders");
   const orderItems = ids("orderItems");
   const sessions = ids("sessions");
@@ -349,6 +386,14 @@ function validateReferences(data: Record<TableName, BackupRow[]>) {
       .filter((row) => typeof row.id === "string")
       .map((row) => [row.id as string, row.orderId]),
   );
+  const orderItemsByContext = new Map(
+    data.orderItems
+      .filter((row) => typeof row.id === "string")
+      .map((row) => [
+        row.id as string,
+        { orderId: row.orderId, productId: row.productId },
+      ]),
+  );
   const areas = new Map(
     data.areas
       .filter((row) => typeof row.id === "string")
@@ -375,6 +420,8 @@ function validateReferences(data: Record<TableName, BackupRow[]>) {
     ...data.vouchers,
     ...data.valueVouchers,
     ...data.valueVoucherMovements,
+    ...data.inventoryStocks,
+    ...data.inventoryMovements,
   ]) {
     if (typeof row.eventId === "string" && !events.has(row.eventId)) invalid();
   }
@@ -390,6 +437,16 @@ function validateReferences(data: Record<TableName, BackupRow[]>) {
       invalid();
   }
   for (const row of data.products) {
+    if (row.availability !== undefined && row.manualAvailability !== undefined)
+      invalid();
+    const manualAvailability =
+      row.manualAvailability ?? row.availability ?? "AVAILABLE";
+    if (
+      !["AVAILABLE", "LOW_STOCK", "OUT_OF_STOCK", "DISABLED"].includes(
+        manualAvailability,
+      )
+    )
+      invalid();
     if (
       typeof row.categoryId === "string" &&
       categories.get(row.categoryId) !== row.eventId
@@ -446,6 +503,174 @@ function validateReferences(data: Record<TableName, BackupRow[]>) {
     if (typeof row.orderId === "string" && !orders.has(row.orderId)) invalid();
     if (typeof row.orderItemId === "string" && !orderItems.has(row.orderItemId))
       invalid();
+  }
+
+  const stockKey = (row: BackupRow) =>
+    `${row.productId}\0${row.eventId}\0${row.dataMode}`;
+  const inventoryStocks = new Map<string, BackupRow>();
+  for (const stock of data.inventoryStocks) {
+    const key = stockKey(stock);
+    if (
+      typeof stock.productId !== "string" ||
+      productsByEvent.get(stock.productId) !== stock.eventId ||
+      (stock.dataMode !== "TEST" && stock.dataMode !== "LIVE") ||
+      typeof stock.trackingEnabled !== "boolean" ||
+      typeof stock.manualBlocked !== "boolean" ||
+      !Number.isInteger(stock.initialQuantity) ||
+      stock.initialQuantity < 0 ||
+      !Number.isInteger(stock.stockQuantity) ||
+      stock.stockQuantity < 0 ||
+      !Number.isInteger(stock.lowStockThreshold) ||
+      stock.lowStockThreshold < 0 ||
+      !Number.isInteger(stock.version) ||
+      stock.version < 0 ||
+      !isIsoDate(stock.createdAt) ||
+      !isIsoDate(stock.updatedAt) ||
+      (!stock.trackingEnabled &&
+        (stock.initialQuantity !== 0 ||
+          stock.stockQuantity !== 0 ||
+          stock.lowStockThreshold !== 0)) ||
+      inventoryStocks.has(key)
+    )
+      invalid();
+    inventoryStocks.set(key, stock);
+  }
+
+  const inventoryMovements = new Map<string, BackupRow>();
+  const inventoryIdempotencyKeys = new Set<string>();
+  for (const movement of data.inventoryMovements) {
+    if (
+      typeof movement.id !== "string" ||
+      movement.id.length === 0 ||
+      inventoryMovements.has(movement.id) ||
+      typeof movement.idempotencyKey !== "string" ||
+      movement.idempotencyKey.length === 0 ||
+      movement.idempotencyKey.length > 128 ||
+      inventoryIdempotencyKeys.has(movement.idempotencyKey)
+    )
+      invalid();
+    inventoryMovements.set(movement.id, movement);
+    inventoryIdempotencyKeys.add(movement.idempotencyKey);
+  }
+
+  const reversedInventoryMovements = new Set<string>();
+  const movementsByStock = new Map<string, BackupRow[]>();
+  for (const movement of data.inventoryMovements) {
+    const key = stockKey(movement);
+    const stock = inventoryStocks.get(key);
+    const order =
+      typeof movement.orderId === "string"
+        ? ordersByContext.get(movement.orderId)
+        : undefined;
+    const orderItem =
+      typeof movement.orderItemId === "string"
+        ? orderItemsByContext.get(movement.orderItemId)
+        : undefined;
+    const reasonPresent =
+      typeof movement.reason === "string" &&
+      movement.reason.trim().length > 0 &&
+      movement.reason.length <= 500;
+    const typeFieldsValid =
+      (movement.type === "INITIALIZATION" &&
+        movement.quantityBefore === 0 &&
+        movement.quantityDelta >= 0 &&
+        movement.quantityAfter === movement.quantityDelta &&
+        movement.orderId == null &&
+        movement.orderItemId == null &&
+        movement.reversesMovementId == null) ||
+      (movement.type === "SALE" &&
+        movement.quantityDelta < 0 &&
+        typeof movement.orderId === "string" &&
+        typeof movement.orderItemId === "string" &&
+        movement.reversesMovementId == null) ||
+      (movement.type === "CANCELLATION" &&
+        movement.quantityDelta > 0 &&
+        typeof movement.orderId === "string" &&
+        typeof movement.orderItemId === "string" &&
+        typeof movement.reversesMovementId === "string") ||
+      (movement.type === "CORRECTION" &&
+        movement.quantityDelta !== 0 &&
+        movement.orderId == null &&
+        movement.orderItemId == null &&
+        movement.reversesMovementId == null &&
+        reasonPresent);
+
+    if (
+      !stock ||
+      !stock.trackingEnabled ||
+      typeof movement.actorUserId !== "string" ||
+      !users.has(movement.actorUserId) ||
+      !Number.isInteger(movement.quantityBefore) ||
+      movement.quantityBefore < 0 ||
+      !Number.isInteger(movement.quantityDelta) ||
+      !Number.isInteger(movement.quantityAfter) ||
+      movement.quantityAfter < 0 ||
+      movement.quantityAfter !==
+        movement.quantityBefore + movement.quantityDelta ||
+      !typeFieldsValid ||
+      (typeof movement.orderId === "string" &&
+        (!order ||
+          order.eventId !== movement.eventId ||
+          order.dataMode !== movement.dataMode)) ||
+      (typeof movement.orderItemId === "string" &&
+        (!orderItem ||
+          orderItem.orderId !== movement.orderId ||
+          orderItem.productId !== movement.productId)) ||
+      (movement.reason != null && !reasonPresent) ||
+      typeof movement.requestFingerprint !== "string" ||
+      !/^[a-f0-9]{64}$/i.test(movement.requestFingerprint) ||
+      !isIsoDate(movement.createdAt)
+    )
+      invalid();
+
+    if (typeof movement.reversesMovementId === "string") {
+      const reversed = inventoryMovements.get(movement.reversesMovementId);
+      if (
+        !reversed ||
+        reversedInventoryMovements.has(movement.reversesMovementId) ||
+        reversed.type !== "SALE" ||
+        stockKey(reversed) !== key ||
+        reversed.orderId !== movement.orderId ||
+        reversed.orderItemId !== movement.orderItemId ||
+        reversed.quantityDelta !== -movement.quantityDelta
+      )
+        invalid();
+      reversedInventoryMovements.add(movement.reversesMovementId);
+    }
+
+    const list = movementsByStock.get(key) ?? [];
+    list.push(movement);
+    movementsByStock.set(key, list);
+  }
+
+  for (const [key, stock] of inventoryStocks) {
+    const movements = (movementsByStock.get(key) ?? []).sort((a, b) =>
+      `${a.createdAt}\0${a.id}`.localeCompare(`${b.createdAt}\0${b.id}`, "en"),
+    );
+    if (!stock.trackingEnabled) {
+      if (movements.length !== 0) invalid();
+      continue;
+    }
+    if (
+      movements.length === 0 ||
+      movements[0].type !== "INITIALIZATION" ||
+      movements[0].quantityAfter !== stock.initialQuantity
+    )
+      invalid();
+    let quantity = 0;
+    for (const [index, movement] of movements.entries()) {
+      if (
+        movement.quantityBefore !== quantity ||
+        (index > 0 && movement.type === "INITIALIZATION") ||
+        (typeof movement.reversesMovementId === "string" &&
+          movements.indexOf(
+            inventoryMovements.get(movement.reversesMovementId)!,
+          ) >= index)
+      )
+        invalid();
+      quantity = movement.quantityAfter;
+    }
+    if (quantity !== stock.stockQuantity) invalid();
   }
 
   const assertUniqueText = (table: BackupRow[], field: string) => {
@@ -702,7 +927,7 @@ export function parseBackupDocument(content: string): ValidatedBackupDocument {
   ]);
   if (
     typeof raw.version !== "string" ||
-    (raw.version !== "0.1.0" && raw.version !== "0.2.0") ||
+    !["0.1.0", "0.2.0", "0.3.0"].includes(raw.version) ||
     !isRecord(raw.data)
   )
     invalid();

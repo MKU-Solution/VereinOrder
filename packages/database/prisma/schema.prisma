@@ -33,6 +33,7 @@ model User {
   issuedVouchers        ProductVoucher[]       @relation("VoucherIssuer")
   issuedValueVouchers   ValueVoucher[]         @relation("ValueVoucherIssuer")
   valueVoucherMovements ValueVoucherMovement[] @relation("ValueVoucherMovementActor")
+  inventoryMovements    InventoryMovement[]    @relation("InventoryMovementActor")
   // Druckauftraege, deren unklarer Ausgang von dieser Person entschieden wurde
   resolvedPrintJobs     PrintJob[]             @relation("PrintJobResolver")
 }
@@ -87,6 +88,7 @@ model Event {
   cashierSessions CashierSession[]
   productVouchers ProductVoucher[]
   valueVouchers   ValueVoucher[]
+  inventoryStocks InventoryStock[]
   // Je Betriebsart ein Zaehler fuer die Abholnummer (Issue #66).
   pickupCounters  EventPickupCounter[]
 }
@@ -172,17 +174,21 @@ enum ProductAvailability {
 // (Issue #84): Station des Produkts, sonst Station der Kategorie, sonst
 // zentrale Ausgabe. Das Backend darf diese Regel nicht mehrfach nachbauen.
 model Product {
-  id           String              @id @default(uuid())
-  name         String
-  shortName    String?
-  description  String?
-  price        Int // in cents
-  deposit      Int                 @default(0) // in cents, Pfand je Einheit
-  taxRate      Int                 @default(2000) // 20.00% = 2000
-  color        String?
-  sortOrder    Int                 @default(0)
-  imageUrl     String?
-  availability ProductAvailability @default(AVAILABLE)
+  id                 String              @id @default(uuid())
+  name               String
+  shortName          String?
+  description        String?
+  price              Int // in cents
+  deposit            Int                 @default(0) // in cents, Pfand je Einheit
+  taxRate            Int                 @default(2000) // 20.00% = 2000
+  color              String?
+  sortOrder          Int                 @default(0)
+  imageUrl           String?
+  // Manueller, verlustfrei beibehaltener Verfuegbarkeits-Override. Die
+  // effektive Verfuegbarkeit wird ab Issue #141 zusammen mit dem getrennten
+  // TEST-/LIVE-Bestand berechnet; der Spaltenname bleibt fuer bestehende
+  // Installationen und alte Backups unveraendert.
+  manualAvailability ProductAvailability @default(AVAILABLE) @map("availability")
 
   // Pflicht: ohne Warengruppe waere die Zielstation unbestimmt. Restrict statt
   // SetNull, weil eine Pflichtspalte nicht auf NULL gesetzt werden kann. Eine
@@ -202,9 +208,96 @@ model Product {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  optionGroups ProductOptionGroup[]
-  orderItems   OrderItem[]
-  vouchers     ProductVoucher[]
+  optionGroups    ProductOptionGroup[]
+  orderItems      OrderItem[]
+  vouchers        ProductVoucher[]
+  inventoryStocks InventoryStock[]
+
+  // Basis fuer den veranstaltungsgebundenen Bestands-Fremdschluessel.
+  @@unique([id, eventId])
+}
+
+enum InventoryMovementType {
+  INITIALIZATION
+  SALE
+  CANCELLATION
+  CORRECTION
+}
+
+// Bestandszaehler sind je Veranstaltung UND Betriebsart getrennt. Ein
+// Produkt ohne Zeile beziehungsweise mit trackingEnabled=false bleibt
+// mengenmaessig unverwaltet; insbesondere werden bei der Migration keine
+// historischen Mengen aus Bestellungen erfunden.
+//
+// Die SQL-Migration 20260829100000_add_inventory_stock_and_movements ergaenzt
+// die von Prisma nicht ausdrueckbaren Mengen-CHECKs und verhindert, dass eine
+// einmal aktivierte Bestandsfuehrung versehentlich deaktiviert oder geloescht
+// wird. Fuer den abgesicherten JSON-Restore existiert eine transaktionslokale
+// Ausnahme, die nur der BackupService setzt.
+model InventoryStock {
+  productId String
+  eventId   String
+  dataMode  OperationalDataMode
+
+  trackingEnabled   Boolean @default(false)
+  initialQuantity   Int     @default(0)
+  stockQuantity     Int     @default(0)
+  lowStockThreshold Int     @default(0)
+  manualBlocked     Boolean @default(false)
+  version           Int     @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  product   Product             @relation(fields: [productId, eventId], references: [id, eventId], onDelete: Restrict, onUpdate: NoAction)
+  event     Event               @relation(fields: [eventId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  movements InventoryMovement[]
+
+  @@id([productId, eventId, dataMode])
+  @@index([eventId, dataMode])
+  @@index([eventId, dataMode, trackingEnabled, manualBlocked])
+}
+
+// Unveraenderliches Bestands-Ledger. Die SQL-Migration sichert Arithmetik und
+// typspezifische Pflichtfelder per CHECK und blockiert UPDATE/DELETE. Die
+// zusammengesetzten Fremdschluessel verhindern event- oder
+// betriebsartfremde Verkaufs- und Stornobewegungen bereits in PostgreSQL.
+model InventoryMovement {
+  id             String                @id @default(uuid())
+  type           InventoryMovementType
+  quantityDelta  Int
+  quantityBefore Int
+  quantityAfter  Int
+
+  productId String
+  eventId   String
+  dataMode  OperationalDataMode
+  stock     InventoryStock      @relation(fields: [productId, eventId, dataMode], references: [productId, eventId, dataMode], onDelete: Restrict, onUpdate: NoAction)
+
+  orderId String?
+  order   Order?  @relation(fields: [orderId, eventId, dataMode], references: [id, eventId, dataMode], onDelete: Restrict, onUpdate: NoAction)
+
+  orderItemId String?
+  orderItem   OrderItem? @relation(fields: [orderItemId, orderId, productId], references: [id, orderId, productId], onDelete: Restrict, onUpdate: NoAction)
+
+  reversesMovementId String?             @unique
+  reversesMovement   InventoryMovement?  @relation("InventoryMovementReversal", fields: [reversesMovementId, productId, eventId, dataMode], references: [id, productId, eventId, dataMode], onDelete: Restrict, onUpdate: NoAction)
+  reversals          InventoryMovement[] @relation("InventoryMovementReversal")
+
+  actorUserId String
+  actor       User   @relation("InventoryMovementActor", fields: [actorUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  reason             String?  @db.VarChar(500)
+  idempotencyKey     String   @unique @db.VarChar(128)
+  requestFingerprint String   @db.VarChar(64)
+  createdAt          DateTime @default(now())
+
+  @@unique([id, productId, eventId, dataMode])
+  @@index([productId, eventId, dataMode, createdAt, id])
+  @@index([eventId, dataMode, type, createdAt])
+  @@index([orderId, type])
+  @@index([orderItemId, type])
+  @@index([actorUserId, createdAt])
 }
 
 // Anzahl der zulaessigen Antworten je Auswahlgruppe (Issue #75).
@@ -366,6 +459,7 @@ model Order {
   payments              Payment[]
   vouchers              ProductVoucher[]
   valueVoucherMovements ValueVoucherMovement[]
+  inventoryMovements    InventoryMovement[]
 
   cashierSessionId String?
   cashierSession   CashierSession? @relation(fields: [cashierSessionId], references: [id])
@@ -626,9 +720,15 @@ model OrderItem {
   product                 Product                  @relation(fields: [productId], references: [id])
   vouchers                ProductVoucher[]
   valueVoucherAllocations ValueVoucherAllocation[]
+  inventoryMovements      InventoryMovement[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  // Bindet eine Bestandsbewegung gleichzeitig an Position, Bestellung und
+  // Produkt. So kann eine SALE-/CANCELLATION-Zeile nicht auf eine fremde
+  // Position zeigen.
+  @@unique([id, orderId, productId])
 }
 
 enum PrintJobStatus {

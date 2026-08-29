@@ -1331,6 +1331,8 @@ export const AdminDashboardController = ({
                 products={data}
                 categoriesList={productCategories}
                 stationsList={productStations}
+                eventId={eventId}
+                dataMode={selectedEvent?.testMode ? "TEST" : "LIVE"}
                 onRefresh={() => void fetchData()}
                 onOpenCreate={() => void handleOpenModal()}
                 onEdit={(item) => void handleOpenModal(item)}

@@ -21,11 +21,13 @@ const emptyTables = {
   valueVouchers: [],
   valueVoucherMovements: [],
   valueVoucherAllocations: [],
+  inventoryStocks: [],
+  inventoryMovements: [],
 };
 
 function document(
   data: Record<string, unknown[]> = emptyTables,
-  version = "0.2.0",
+  version = "0.3.0",
 ) {
   return JSON.stringify({
     version,
@@ -101,12 +103,16 @@ describe("Backup-Dokumentgrenze (Issue #69)", () => {
       valueVouchers: _valueVouchers,
       valueVoucherMovements: _valueVoucherMovements,
       valueVoucherAllocations: _valueVoucherAllocations,
+      inventoryStocks: _inventoryStocks,
+      inventoryMovements: _inventoryMovements,
       ...legacyTables
     } = emptyTables;
     const parsed = parseBackupDocument(document(legacyTables, "0.1.0"));
     expect(parsed.data.valueVouchers).toEqual([]);
     expect(parsed.data.valueVoucherMovements).toEqual([]);
     expect(parsed.data.valueVoucherAllocations).toEqual([]);
+    expect(parsed.data.inventoryStocks).toEqual([]);
+    expect(parsed.data.inventoryMovements).toEqual([]);
   });
 
   it("akzeptiert frisch exportierte Bestellungen mit allen persistenten Feldern", () => {
@@ -320,6 +326,156 @@ describe("Backup-Dokumentgrenze (Issue #69)", () => {
   it("verwirft eine unterbrochene oder manipulierte Bewegungskette", () => {
     const data = valueVoucherData();
     data.valueVoucherMovements[0].balanceAfter = 1900;
+    expect(() => parseBackupDocument(document(data))).toThrow(
+      BadRequestException,
+    );
+  });
+
+  function inventoryData() {
+    const timestamp = "2026-08-29T10:00:00.000Z";
+    return {
+      ...emptyTables,
+      events: [{ id: "event-1", name: "Fest" }],
+      users: [{ id: "user-1", username: "admin" }],
+      categories: [{ id: "category-1", name: "Speisen", eventId: "event-1" }],
+      products: [
+        {
+          id: "product-1",
+          name: "Grillhendl",
+          price: 1200,
+          categoryId: "category-1",
+          eventId: "event-1",
+          manualAvailability: "LOW_STOCK",
+        },
+      ],
+      orders: [
+        {
+          id: "order-1",
+          eventId: "event-1",
+          dataMode: "TEST",
+          userId: "user-1",
+        },
+      ],
+      orderItems: [
+        {
+          id: "item-1",
+          quantity: 2,
+          priceAtTime: 1200,
+          orderId: "order-1",
+          productId: "product-1",
+        },
+      ],
+      inventoryStocks: [
+        {
+          productId: "product-1",
+          eventId: "event-1",
+          dataMode: "TEST",
+          trackingEnabled: true,
+          initialQuantity: 5,
+          stockQuantity: 3,
+          lowStockThreshold: 2,
+          manualBlocked: false,
+          version: 2,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        },
+      ],
+      inventoryMovements: [
+        {
+          id: "inventory-init-1",
+          type: "INITIALIZATION",
+          quantityDelta: 5,
+          quantityBefore: 0,
+          quantityAfter: 5,
+          productId: "product-1",
+          eventId: "event-1",
+          dataMode: "TEST",
+          orderId: null,
+          orderItemId: null,
+          reversesMovementId: null,
+          actorUserId: "user-1",
+          reason: null,
+          idempotencyKey: "inventory:init:1",
+          requestFingerprint: "a".repeat(64),
+          createdAt: timestamp,
+        },
+        {
+          id: "inventory-sale-1",
+          type: "SALE",
+          quantityDelta: -2,
+          quantityBefore: 5,
+          quantityAfter: 3,
+          productId: "product-1",
+          eventId: "event-1",
+          dataMode: "TEST",
+          orderId: "order-1",
+          orderItemId: "item-1",
+          reversesMovementId: null,
+          actorUserId: "user-1",
+          reason: null,
+          idempotencyKey: "inventory:sale:item-1",
+          requestFingerprint: "b".repeat(64),
+          createdAt: "2026-08-29T10:01:00.000Z",
+        },
+      ],
+    };
+  }
+
+  it("akzeptiert einen vollständigen TEST-Bestand samt lückenlosem Ledger", () => {
+    const parsed = parseBackupDocument(document(inventoryData()));
+    expect(parsed.data.inventoryStocks).toHaveLength(1);
+    expect(parsed.data.inventoryMovements).toHaveLength(2);
+    expect(parsed.data.products[0].manualAvailability).toBe("LOW_STOCK");
+  });
+
+  it("akzeptiert 0.2.0 ohne Inventartabellen und behält den alten Availability-Override", () => {
+    const data = inventoryData();
+    const oldProduct: any = { ...data.products[0] };
+    delete oldProduct.manualAvailability;
+    oldProduct.availability = "OUT_OF_STOCK";
+    data.products[0] = oldProduct;
+    const {
+      inventoryStocks: _stocks,
+      inventoryMovements: _movements,
+      ...old
+    } = data;
+    const parsed = parseBackupDocument(document(old, "0.2.0"));
+    expect(parsed.data.inventoryStocks).toEqual([]);
+    expect(parsed.data.products[0].availability).toBe("OUT_OF_STOCK");
+  });
+
+  it("verwirft eine event- oder modusfremde Bestandsbewegung", () => {
+    const data = inventoryData();
+    data.inventoryMovements[1].dataMode = "LIVE";
+    expect(() => parseBackupDocument(document(data))).toThrow(
+      BadRequestException,
+    );
+  });
+
+  it("verwirft eine unterbrochene Bestandskette vor jedem Restore-Schreibzugriff", () => {
+    const data = inventoryData();
+    data.inventoryMovements[1].quantityBefore = 4;
+    data.inventoryMovements[1].quantityAfter = 2;
+    expect(() => parseBackupDocument(document(data))).toThrow(
+      BadRequestException,
+    );
+  });
+
+  it("verwirft eine Stornobewegung ohne betragsgleiche SALE-Umkehrung", () => {
+    const data = inventoryData();
+    data.inventoryStocks[0].stockQuantity = 4;
+    data.inventoryMovements.push({
+      ...data.inventoryMovements[1],
+      id: "inventory-cancel-1",
+      type: "CANCELLATION",
+      quantityDelta: 1,
+      quantityBefore: 3,
+      quantityAfter: 4,
+      reversesMovementId: "inventory-sale-1",
+      idempotencyKey: "inventory:cancel:item-1",
+      requestFingerprint: "c".repeat(64),
+      createdAt: "2026-08-29T10:02:00.000Z",
+    });
     expect(() => parseBackupDocument(document(data))).toThrow(
       BadRequestException,
     );

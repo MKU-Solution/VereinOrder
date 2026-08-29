@@ -379,6 +379,156 @@ export class EventsService {
     };
   }
 
+  /**
+   * Setzt die Bestandsfuehrung der Betriebsart TEST einer Veranstaltung auf
+   * den Stand vor dem Testbetrieb zurueck (Issue #141).
+   *
+   * Warum ueberhaupt: "InventoryMovement" haengt per ON DELETE RESTRICT an
+   * "Order" und "OrderItem". Ohne diesen Schritt bricht die Bereinigung mit
+   * 23001 ab, und die Veranstaltung kann nicht mehr aktiviert werden.
+   *
+   * Was genau geschieht:
+   *  - Geloescht werden ausschliesslich TEST-Bewegungen dieser Veranstaltung
+   *    vom Typ CANCELLATION, SALE und CORRECTION. CANCELLATION zuerst, weil
+   *    "reversesMovementId" ebenfalls ON DELETE RESTRICT ist und sonst die
+   *    stornierte Verkaufsbewegung nicht entfernt werden koennte.
+   *  - Die INITIALIZATION-Bewegung bleibt stehen. Sie ist es, die den Bestand
+   *    nach der Bereinigung erklaert: der Soll-Ist-Vergleich der Revision
+   *    rechnet Soll aus dem Ledger und Ist aus dem Bestand. Wuerde die
+   *    Initialisierung mitgeloescht, staende dort ab sofort eine Differenz,
+   *    die niemand verursacht hat.
+   *  - "InventoryStock" wird nicht geloescht. trackingEnabled,
+   *    initialQuantity, lowStockThreshold und manualBlocked sind
+   *    Einstellungen der Verwaltung und kein Testdatum; sie ueberleben die
+   *    Bereinigung, damit ein zweiter Testlauf denselben Ausgangsstand hat.
+   *    Angepasst wird nur stockQuantity, und zwar auf genau den Wert, den das
+   *    verbliebene Ledger erklaert.
+   *
+   * Die Ausnahme vom Append-only-Waechter ist nicht die des Sicherungs-
+   * dienstes: "vereinorder.inventory_test_reset" erlaubt in PostgreSQL
+   * ausschliesslich DELETE und ausschliesslich auf Zeilen mit
+   * dataMode = TEST (Migration 20260829130000). Sie gilt per SET LOCAL nur
+   * innerhalb dieser Transaktion und wird direkt nach den beiden
+   * Loeschanweisungen wieder abgeschaltet.
+   */
+  private async resetTestInventory(
+    tx: Prisma.TransactionClient,
+    eventId: string,
+    userId: string,
+  ) {
+    // Bestandszeilen der Betriebsart TEST sperren, bevor gezaehlt wird.
+    // Bestandskorrekturen nehmen die Veranstaltungssperre nicht, deshalb ist
+    // dieser Zeilenlock die einzige Serialisierung gegen eine Korrektur, die
+    // waehrend der Bereinigung laeuft. Sortiert nach "productId", damit die
+    // Reihenfolge zu den uebrigen Bestandssperren passt.
+    await tx.$queryRaw(
+      Prisma.sql`
+        SELECT "productId"
+        FROM "InventoryStock"
+        WHERE "eventId" = ${eventId}
+          AND "dataMode" = 'TEST'::"OperationalDataMode"
+        ORDER BY "productId"
+        FOR UPDATE
+      `,
+    );
+
+    const affected = await tx.inventoryMovement.groupBy({
+      by: ["productId"],
+      where: {
+        eventId,
+        dataMode: "TEST",
+        type: { in: ["SALE", "CANCELLATION", "CORRECTION"] },
+      },
+      _count: { _all: true },
+    });
+    if (affected.length === 0) return { movementsDeleted: 0, stocksReset: 0 };
+    const deletedByProduct = new Map(
+      affected.map((entry) => [entry.productId, entry._count._all]),
+    );
+
+    await tx.$executeRaw(
+      Prisma.sql`SET LOCAL "vereinorder.inventory_test_reset" = 'on'`,
+    );
+    const deletedCancellations = await tx.inventoryMovement.deleteMany({
+      where: { eventId, dataMode: "TEST", type: "CANCELLATION" },
+    });
+    const deletedSalesAndCorrections = await tx.inventoryMovement.deleteMany({
+      where: {
+        eventId,
+        dataMode: "TEST",
+        type: { in: ["SALE", "CORRECTION"] },
+      },
+    });
+    await tx.$executeRaw(
+      Prisma.sql`SET LOCAL "vereinorder.inventory_test_reset" = 'off'`,
+    );
+
+    // Der Bestand wird aus dem verbliebenen Ledger abgeleitet und nicht aus
+    // initialQuantity uebernommen: nur so erklaert das Ledger den Bestand
+    // auch dann, wenn dort ausnahmsweise etwas anderes steht als erwartet.
+    const explained = await tx.inventoryMovement.groupBy({
+      by: ["productId"],
+      where: { eventId, dataMode: "TEST" },
+      _sum: { quantityDelta: true },
+    });
+    const quantityByProduct = new Map(
+      explained.map((entry) => [
+        entry.productId,
+        entry._sum.quantityDelta ?? 0,
+      ]),
+    );
+    const stocks = await tx.inventoryStock.findMany({
+      where: {
+        eventId,
+        dataMode: "TEST",
+        productId: { in: [...deletedByProduct.keys()] },
+      },
+      select: { productId: true, stockQuantity: true },
+    });
+
+    let stocksReset = 0;
+    for (const stock of stocks) {
+      const quantity = quantityByProduct.get(stock.productId) ?? 0;
+      if (quantity !== stock.stockQuantity) {
+        await tx.inventoryStock.update({
+          where: {
+            productId_eventId_dataMode: {
+              productId: stock.productId,
+              eventId,
+              dataMode: "TEST",
+            },
+          },
+          data: { stockQuantity: quantity, version: { increment: 1 } },
+        });
+        stocksReset += 1;
+      }
+      // Die geloeschten Ledgerzeilen sind danach nicht mehr nachlesbar. Was
+      // die Bereinigung am Bestand getan hat, muss deshalb im Protokoll
+      // stehen - je Produkt, nicht nur als Gesamtzahl.
+      await tx.auditLog.create({
+        data: {
+          action: "INVENTORY_TEST_DATA_RESET",
+          entityType: "Product",
+          entityId: stock.productId,
+          userId,
+          details: {
+            eventId,
+            dataMode: "TEST",
+            previousStockQuantity: stock.stockQuantity,
+            stockQuantity: quantity,
+            movementsDeleted: deletedByProduct.get(stock.productId) ?? 0,
+          },
+        },
+      });
+    }
+
+    return {
+      movementsDeleted:
+        deletedCancellations.count + deletedSalesAndCorrections.count,
+      stocksReset,
+    };
+  }
+
   async cleanTestData(
     id: string,
     userId: string,
@@ -429,6 +579,14 @@ export class EventsService {
               where: { eventId: id, order: { dataMode: "TEST" } },
             });
 
+            // Issue #141: Das Bestands-Ledger haengt per ON DELETE RESTRICT an
+            // "Order" und "OrderItem". Ohne diesen Schritt scheitert die
+            // Bereinigung mit 23001, sobald im Testbetrieb ein
+            // bestandsgefuehrtes Produkt verkauft wurde - und die
+            // Veranstaltung liesse sich nie wieder auf Echtbetrieb umstellen.
+            // Der Aufruf muss vor dem Loeschen der Bestellungen stehen.
+            const inventory = await this.resetTestInventory(tx, id, userId);
+
             if (orderIds.length > 0) {
               deletedPrintJobs = await tx.printJob.deleteMany({
                 where: { orderId: { in: orderIds } },
@@ -478,6 +636,8 @@ export class EventsService {
                   itemsDeleted: deletedOrderItems.count,
                   vouchersDeleted: deletedVouchers.count,
                   pickupCountersDeleted: deletedPickupCounters.count,
+                  inventoryMovementsDeleted: inventory.movementsDeleted,
+                  inventoryStocksReset: inventory.stocksReset,
                 },
               },
             });
@@ -497,6 +657,11 @@ export class EventsService {
                 printJobs: deletedPrintJobs.count,
                 vouchers: deletedVouchers.count,
                 pickupCounters: deletedPickupCounters.count,
+                inventoryMovements: inventory.movementsDeleted,
+              },
+              inventory: {
+                movementsDeleted: inventory.movementsDeleted,
+                stocksReset: inventory.stocksReset,
               },
             };
           },
@@ -602,7 +767,7 @@ export class EventsService {
                   color: product.color,
                   sortOrder: product.sortOrder,
                   imageUrl: product.imageUrl,
-                  availability: product.availability,
+                  manualAvailability: product.manualAvailability,
                   categoryId,
                   eventId: target.id,
                   targetStationId: product.targetStationId
@@ -770,7 +935,7 @@ export class EventsService {
                   color: product.color,
                   sortOrder: product.sortOrder,
                   imageUrl: product.imageUrl,
-                  availability: product.availability,
+                  manualAvailability: product.manualAvailability,
                   eventId: target.id,
                   categoryId,
                   targetStationId: product.targetStationId
@@ -880,7 +1045,7 @@ export class EventsService {
       color: p.color,
       sortOrder: p.sortOrder,
       imageUrl: p.imageUrl,
-      availability: p.availability,
+      availability: p.manualAvailability,
       optionGroups: p.optionGroups.map((g) => ({
         name: g.name,
         selectionType: g.selectionType,
@@ -1046,7 +1211,7 @@ export class EventsService {
                   color: product.color,
                   sortOrder: product.sortOrder,
                   imageUrl: product.imageUrl,
-                  availability: product.availability as any,
+                  manualAvailability: product.manualAvailability as any,
                   eventId: target.id,
                   categoryId: product.categoryRef
                     ? categoryIds.get(product.categoryRef)!

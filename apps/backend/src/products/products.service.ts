@@ -9,6 +9,7 @@ import { PRISMA_CLIENT } from "../prisma/prisma.module";
 import { RealtimeService } from "../realtime/realtime.service";
 import { GroupInput, saveOptionGroups } from "./product-option-groups";
 import { productAtStationFilter } from "../common/target-station";
+import { effectiveAvailability } from "../inventory/inventory.service";
 import {
   CreateCategoryDto,
   CreateProductDto,
@@ -38,7 +39,7 @@ const PRODUCT_CREATE_FIELD_KEYS = [
   "color",
   "sortOrder",
   "imageUrl",
-  "availability",
+  "manualAvailability",
   "categoryId",
   "targetStationId",
   "eventId",
@@ -53,7 +54,7 @@ const PRODUCT_UPDATE_FIELD_KEYS = [
   "color",
   "sortOrder",
   "imageUrl",
-  "availability",
+  "manualAvailability",
   "categoryId",
   "targetStationId",
 ] as const;
@@ -116,13 +117,37 @@ export class ProductsService {
     private realtimeService: RealtimeService,
   ) {}
 
+  private inventoryFacade(product: any) {
+    const mode =
+      product.event?.status === "ACTIVE" && !product.event?.testMode
+        ? "LIVE"
+        : product.event?.status === "TEST_MODE" && product.event?.testMode
+          ? "TEST"
+          : undefined;
+    const stock =
+      product.inventoryStocks?.find((item: any) => item.dataMode === mode) ??
+      null;
+    return {
+      ...product,
+      availability: effectiveAvailability(product.manualAvailability, stock),
+      inventoryTracked: !!stock?.trackingEnabled,
+      stockQuantity: stock?.trackingEnabled ? stock.stockQuantity : null,
+      lowStockThreshold: stock?.trackingEnabled
+        ? stock.lowStockThreshold
+        : null,
+      inventoryVersion: stock?.version ?? 0,
+    };
+  }
+
   async findAllActive() {
-    return this.prisma.product.findMany({
+    const products = await this.prisma.product.findMany({
       where: {
-        availability: { not: "DISABLED" },
+        manualAvailability: { not: "DISABLED" },
         event: { status: { in: ["ACTIVE", "TEST_MODE"] } },
       },
       include: {
+        event: { select: { status: true, testMode: true } },
+        inventoryStocks: true,
         // include statt bloßem true, damit die Zielstation der Kategorie
         // mitkommt (Issue #84): ohne sie kennt die Verwaltung nur die
         // Ausnahme am Produkt, nicht was ohne eigenen Eintrag gilt.
@@ -139,6 +164,7 @@ export class ProductsService {
       },
       orderBy: [{ category: { sortOrder: "asc" } }, { sortOrder: "asc" }],
     });
+    return products.map((product) => this.inventoryFacade(product));
   }
 
   async updateAvailability(
@@ -146,12 +172,32 @@ export class ProductsService {
     availability: ProductAvailability,
     userId?: string,
   ) {
-    const product = await this.prisma.product.findUnique({ where: { id } });
+    // Bestand wird mitgeladen (nur so, wie inventoryFacade ihn ohnehin
+    // braucht), damit die Rundmeldung unten dieselbe effektive
+    // Verfuegbarkeit tragen kann wie jeder andere Meldeweg im Projekt.
+    const product = await this.prisma.product.findUnique({
+      where: { id },
+      include: {
+        event: { select: { status: true, testMode: true } },
+        inventoryStocks: true,
+      },
+    });
     if (!product) throw new NotFoundException("Product not found");
 
     const updated = await this.prisma.product.update({
       where: { id },
-      data: { availability },
+      data: { manualAvailability: availability },
+    });
+
+    // An die Kassen geht die effektive Verfuegbarkeit, nicht der rohe
+    // manuelle Override: ein bestandsgefuehrtes Produkt mit Menge 0 bleibt
+    // OUT_OF_STOCK, unabhaengig davon, was die Verwaltung manuell setzt
+    // (siehe effectiveAvailability in inventory.service.ts). Die Ableitung
+    // der Betriebsart kommt aus der bereits vorhandenen inventoryFacade,
+    // statt sie hier ein weiteres Mal nachzubauen.
+    const effective = this.inventoryFacade({
+      ...product,
+      manualAvailability: updated.manualAvailability,
     });
 
     this.realtimeService.broadcast(
@@ -160,7 +206,7 @@ export class ProductsService {
       {
         productId: updated.id,
         productName: updated.name,
-        availability: updated.availability,
+        availability: effective.availability,
       },
     );
 
@@ -173,8 +219,8 @@ export class ProductsService {
           userId,
           details: {
             productName: updated.name,
-            previousAvailability: product.availability,
-            newAvailability: updated.availability,
+            previousAvailability: product.manualAvailability,
+            newAvailability: updated.manualAvailability,
           },
         },
       });
@@ -186,9 +232,11 @@ export class ProductsService {
   // --- ADMIN METHODS: PRODUCTS ---
 
   async findAllProductsAdmin(eventId: string) {
-    return this.prisma.product.findMany({
+    const products = await this.prisma.product.findMany({
       where: { eventId },
       include: {
+        event: { select: { status: true, testMode: true } },
+        inventoryStocks: true,
         category: { include: { targetStation: true } },
         targetStation: true,
         // Admin-Ansicht liefert ALLE Optionen, auch inaktive, sonst kann
@@ -200,20 +248,31 @@ export class ProductsService {
       },
       orderBy: { sortOrder: "asc" },
     });
+    return products.map((product) => this.inventoryFacade(product));
   }
 
   async findByStation(stationId: string) {
-    return this.prisma.product.findMany({
+    const products = await this.prisma.product.findMany({
       where: productAtStationFilter(stationId),
-      include: { category: true },
+      include: {
+        category: true,
+        event: { select: { status: true, testMode: true } },
+        inventoryStocks: true,
+      },
       orderBy: { sortOrder: "asc" },
     });
+    return products.map((product) => this.inventoryFacade(product));
   }
 
   private async findProductAdmin(id: string) {
     return this.prisma.product.findUnique({
       where: { id },
       include: {
+        // create/update liefern dieselbe effektive Inventar-Fassade wie die
+        // Produktlisten. Dazu muss der Betriebsmodus des Events zusammen mit
+        // allen getrennten TEST-/LIVE-Zählern geladen werden.
+        event: { select: { status: true, testMode: true } },
+        inventoryStocks: true,
         category: { include: { targetStation: true } },
         targetStation: true,
         optionGroups: {
@@ -263,7 +322,10 @@ export class ProductsService {
       return created;
     });
 
-    return (await this.findProductAdmin(product.id)) ?? product;
+    const detailed = await this.findProductAdmin(product.id);
+    return detailed
+      ? this.inventoryFacade(detailed)
+      : this.inventoryFacade({ ...product, inventoryStocks: [] });
   }
 
   async updateProduct(id: string, data: UpdateProductDto, userId?: string) {
@@ -319,7 +381,10 @@ export class ProductsService {
       return result;
     });
 
-    return (await this.findProductAdmin(id)) ?? updated;
+    const detailed = await this.findProductAdmin(id);
+    return detailed
+      ? this.inventoryFacade(detailed)
+      : this.inventoryFacade({ ...updated, inventoryStocks: [] });
   }
 
   // --- ADMIN METHODS: CATEGORIES ---

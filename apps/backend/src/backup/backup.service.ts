@@ -71,6 +71,8 @@ export class BackupService {
       valueVouchers,
       valueVoucherMovements,
       valueVoucherAllocations,
+      inventoryStocks,
+      inventoryMovements,
     ] = await Promise.all([
       this.prisma.event.findMany(),
       this.prisma.area.findMany(),
@@ -95,10 +97,12 @@ export class BackupService {
       this.prisma.valueVoucher.findMany(),
       this.prisma.valueVoucherMovement.findMany(),
       this.prisma.valueVoucherAllocation.findMany(),
+      this.prisma.inventoryStock.findMany(),
+      this.prisma.inventoryMovement.findMany(),
     ]);
 
     const backupData = {
-      version: "0.2.0",
+      version: "0.3.0",
       timestamp: timestamp.toISOString(),
       database: "postgresql",
       createdBy: userId || "ADMINISTRATOR",
@@ -122,6 +126,8 @@ export class BackupService {
         valueVouchers: valueVouchers.length,
         valueVoucherMovements: valueVoucherMovements.length,
         valueVoucherAllocations: valueVoucherAllocations.length,
+        inventoryStocks: inventoryStocks.length,
+        inventoryMovements: inventoryMovements.length,
       },
       data: {
         events,
@@ -143,6 +149,8 @@ export class BackupService {
         valueVouchers,
         valueVoucherMovements,
         valueVoucherAllocations,
+        inventoryStocks,
+        inventoryMovements,
       },
     };
 
@@ -260,6 +268,13 @@ export class BackupService {
     // 2. Perform restoration in transactional sequence
     const restoreResult = await this.prisma.$transaction(
       async (tx) => {
+        // Die Ledger-/Stock-Trigger gestatten diesen Sonderpfad nur als
+        // transaktionslokale Einstellung. Ein Fehler oder Rollback entfernt
+        // die Ausnahme automatisch; normale Anwendungstransaktionen koennen
+        // Bewegungen weiterhin weder aendern noch loeschen.
+        await tx.$executeRaw(
+          Prisma.sql`SET LOCAL "vereinorder.inventory_restore" = 'on'`,
+        );
         // Clear current operational data (in reverse foreign key order).
         // Issue #84: "Product"."categoryId" -> "ProductCategory"."id" is now
         // ON DELETE RESTRICT (was SetNull), so every product referencing a
@@ -285,6 +300,8 @@ export class BackupService {
         await tx.valueVoucherAllocation.deleteMany();
         await tx.valueVoucherMovement.deleteMany();
         await tx.valueVoucher.deleteMany();
+        await tx.inventoryMovement.deleteMany();
+        await tx.inventoryStock.deleteMany();
         await tx.productVoucher.deleteMany();
         await tx.payment.deleteMany();
         await tx.orderItem.deleteMany();
@@ -337,6 +354,19 @@ export class BackupService {
         // ../common/fallback-category.ts for all three.
         const categories: any[] = data.categories ? [...data.categories] : [];
         const products: any[] = data.products ?? [];
+        // 0.1.0/0.2.0 exportierten den alten Prisma-Feldnamen
+        // `availability`. Die Datenbankspalte bleibt in 0.3.0 dieselbe, nur
+        // der Clientname lautet nun `manualAvailability`. Deshalb ist diese
+        // Umbenennung verlustfrei und erzeugt weder Mengen noch neue Sperren.
+        for (const product of products) {
+          if (
+            product.manualAvailability === undefined &&
+            product.availability !== undefined
+          ) {
+            product.manualAvailability = product.availability;
+          }
+          delete product.availability;
+        }
         const orphanedByEvent = new Map<string, any[]>();
         for (const product of products) {
           if (!product.categoryId) {
@@ -365,6 +395,8 @@ export class BackupService {
         if (categories.length)
           await tx.productCategory.createMany({ data: categories });
         if (products.length) await tx.product.createMany({ data: products });
+        if (data.inventoryStocks?.length)
+          await tx.inventoryStock.createMany({ data: data.inventoryStocks });
         if (data.optionGroups?.length)
           await tx.productOptionGroup.createMany({ data: data.optionGroups });
         if (data.options?.length)
@@ -375,6 +407,10 @@ export class BackupService {
           await tx.order.createMany({ data: data.orders });
         if (data.orderItems?.length)
           await tx.orderItem.createMany({ data: data.orderItems });
+        if (data.inventoryMovements?.length)
+          await tx.inventoryMovement.createMany({
+            data: data.inventoryMovements,
+          });
         // Issue #103 (B5/#100): ProductVoucher nach den Bestellpositionen
         // wiedereinspielen — orderId, orderItemId, productId, die zugehoerige
         // Kassensitzung und der ausstellende Benutzer sind an dieser Stelle

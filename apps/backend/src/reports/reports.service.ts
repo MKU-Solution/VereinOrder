@@ -1,5 +1,15 @@
-import { Injectable, Inject, BadRequestException } from "@nestjs/common";
-import { PrismaClient } from "@vereinorder/database";
+import {
+  Injectable,
+  Inject,
+  BadRequestException,
+  NotFoundException,
+} from "@nestjs/common";
+import {
+  OperationalDataMode,
+  PrismaClient,
+  ProductAvailability,
+} from "@vereinorder/database";
+import { isUUID } from "class-validator";
 import { PRISMA_CLIENT } from "../prisma/prisma.module";
 
 @Injectable()
@@ -8,6 +18,167 @@ export class ReportsService {
 
   private getEventFilter(eventId?: string) {
     return eventId ? { eventId } : {};
+  }
+
+  private operationalDataMode(event: {
+    status: string;
+    testMode: boolean;
+  }): OperationalDataMode | null {
+    if (event.status === "ACTIVE" && !event.testMode)
+      return OperationalDataMode.LIVE;
+    if (event.status === "TEST_MODE" && event.testMode)
+      return OperationalDataMode.TEST;
+    return null;
+  }
+
+  private availability(
+    manualAvailability: ProductAvailability,
+    stock: {
+      trackingEnabled: boolean;
+      stockQuantity: number;
+      lowStockThreshold: number;
+      manualBlocked: boolean;
+    } | null,
+  ): ProductAvailability {
+    if (manualAvailability === "DISABLED") return "DISABLED";
+    if (manualAvailability === "OUT_OF_STOCK" || stock?.manualBlocked)
+      return "OUT_OF_STOCK";
+    if (stock?.trackingEnabled && stock.stockQuantity === 0)
+      return "OUT_OF_STOCK";
+    if (
+      manualAvailability === "LOW_STOCK" ||
+      (stock?.trackingEnabled && stock.stockQuantity <= stock.lowStockThreshold)
+    )
+      return "LOW_STOCK";
+    return "AVAILABLE";
+  }
+
+  /**
+   * Erstellt den mengenbasierten Bestandsbericht ausschliesslich aus dem
+   * unveraenderlichen Ledger. Historische Bestellungen werden bewusst nicht
+   * nachtraeglich als Bewegungen interpretiert.
+   */
+  async getInventoryReport(eventId: string, dataMode: OperationalDataMode) {
+    if (!eventId || !dataMode)
+      throw new BadRequestException("eventId und dataMode sind erforderlich.");
+    if (!isUUID(eventId, "4"))
+      throw new BadRequestException(
+        "eventId muss eine UUID der Version 4 sein.",
+      );
+    if (!Object.values(OperationalDataMode).includes(dataMode))
+      throw new BadRequestException("Ungültiger dataMode.");
+
+    const event = await this.prisma.event.findUnique({
+      where: { id: eventId },
+      select: { status: true, testMode: true },
+    });
+    if (!event) throw new NotFoundException("Veranstaltung nicht gefunden.");
+    if (this.operationalDataMode(event) !== dataMode)
+      throw new BadRequestException(
+        "Betriebsmodus der Veranstaltung stimmt nicht mit dataMode überein.",
+      );
+
+    const [products, stocks, movements] = await Promise.all([
+      this.prisma.product.findMany({
+        where: { eventId },
+        select: { id: true, name: true, manualAvailability: true },
+        orderBy: [{ sortOrder: "asc" }, { name: "asc" }, { id: "asc" }],
+      }),
+      this.prisma.inventoryStock.findMany({
+        where: { eventId, dataMode },
+        select: {
+          productId: true,
+          trackingEnabled: true,
+          initialQuantity: true,
+          stockQuantity: true,
+          lowStockThreshold: true,
+          manualBlocked: true,
+        },
+      }),
+      this.prisma.inventoryMovement.findMany({
+        where: { eventId, dataMode },
+        select: { productId: true, type: true, quantityDelta: true },
+      }),
+    ]);
+
+    const stockByProduct = new Map(
+      stocks.map((stock) => [stock.productId, stock]),
+    );
+    const ledgerByProduct = new Map<
+      string,
+      {
+        initialQuantity: number;
+        grossSales: number;
+        cancellations: number;
+        correctionDelta: number;
+      }
+    >();
+    for (const movement of movements) {
+      const entry = ledgerByProduct.get(movement.productId) ?? {
+        initialQuantity: 0,
+        grossSales: 0,
+        cancellations: 0,
+        correctionDelta: 0,
+      };
+      if (movement.type === "INITIALIZATION")
+        entry.initialQuantity += movement.quantityDelta;
+      else if (movement.type === "SALE")
+        entry.grossSales += Math.abs(movement.quantityDelta);
+      else if (movement.type === "CANCELLATION")
+        entry.cancellations += movement.quantityDelta;
+      else if (movement.type === "CORRECTION")
+        entry.correctionDelta += movement.quantityDelta;
+      ledgerByProduct.set(movement.productId, entry);
+    }
+
+    return products.map((product) => {
+      const stock = stockByProduct.get(product.id) ?? null;
+      const inventoryTracked = stock?.trackingEnabled === true;
+      if (!inventoryTracked)
+        return {
+          productId: product.id,
+          name: product.name,
+          inventoryTracked: false,
+          initialQuantity: null,
+          grossSales: null,
+          cancellations: null,
+          correctionDelta: null,
+          expectedQuantity: null,
+          actualQuantity: null,
+          difference: null,
+          lowStockThreshold: null,
+          effectiveAvailability: this.availability(
+            product.manualAvailability,
+            stock,
+          ),
+        };
+
+      const ledger = ledgerByProduct.get(product.id) ?? {
+        initialQuantity: 0,
+        grossSales: 0,
+        cancellations: 0,
+        correctionDelta: 0,
+      };
+      const expectedQuantity =
+        ledger.initialQuantity - ledger.grossSales + ledger.cancellations;
+      return {
+        productId: product.id,
+        name: product.name,
+        inventoryTracked: true,
+        initialQuantity: ledger.initialQuantity,
+        grossSales: ledger.grossSales,
+        cancellations: ledger.cancellations,
+        correctionDelta: ledger.correctionDelta,
+        expectedQuantity,
+        actualQuantity: stock!.stockQuantity,
+        difference: stock!.stockQuantity - expectedQuantity,
+        lowStockThreshold: stock!.lowStockThreshold,
+        effectiveAvailability: this.availability(
+          product.manualAvailability,
+          stock,
+        ),
+      };
+    });
   }
 
   async getSummary(eventId?: string) {
@@ -334,11 +505,65 @@ export class ReportsService {
   }
 
   async exportCsv(
-    type: "orders" | "products" | "users" | "sessions" | "categories",
+    type:
+      | "orders"
+      | "products"
+      | "users"
+      | "sessions"
+      | "categories"
+      | "inventory",
     eventId?: string,
+    dataMode?: string,
   ): Promise<string> {
     const BOM = "\uFEFF";
     const whereEvent = this.getEventFilter(eventId);
+
+    if (type === "inventory") {
+      const inventory = await this.getInventoryReport(
+        eventId ?? "",
+        dataMode as OperationalDataMode,
+      );
+      const header = [
+        "Produkt-ID",
+        "Produkt",
+        "Bestandsführung aktiv",
+        "Anfangsbestand",
+        "Verkäufe (Abgänge)",
+        "Stornierungen",
+        "Korrektur-Differenz",
+        "Sollbestand",
+        "Istbestand",
+        "Differenz",
+        "Mindestbestand",
+        "Effektive Verfügbarkeit",
+      ].join(";");
+      const value = (input: string | number | boolean | null) =>
+        input === null
+          ? ""
+          : typeof input === "boolean"
+            ? input
+              ? "Ja"
+              : "Nein"
+            : String(input);
+      const quote = (input: string) => `"${input.replace(/"/g, '""')}"`;
+      const rows = inventory.map((row) =>
+        [
+          row.productId,
+          quote(row.name),
+          value(row.inventoryTracked),
+          value(row.initialQuantity),
+          value(row.grossSales),
+          value(row.cancellations),
+          value(row.correctionDelta),
+          value(row.expectedQuantity),
+          value(row.actualQuantity),
+          value(row.difference),
+          value(row.lowStockThreshold),
+          row.effectiveAvailability,
+        ].join(";"),
+      );
+      return BOM + [header, ...rows].join("\r\n");
+    }
 
     if (type === "products") {
       const products = await this.getProductsSummary(eventId);

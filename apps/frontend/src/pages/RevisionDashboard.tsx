@@ -81,6 +81,20 @@ interface EventItem {
   id: string;
   name: string;
   status: string;
+  testMode?: boolean;
+}
+
+interface InventoryReport {
+  productId: string;
+  name: string;
+  inventoryTracked: boolean;
+  initialQuantity: number | null;
+  grossSales: number | null;
+  cancellations: number | null;
+  expectedQuantity: number | null;
+  actualQuantity: number | null;
+  difference: number | null;
+  effectiveAvailability: string;
 }
 
 export const RevisionDashboard = () => {
@@ -88,7 +102,7 @@ export const RevisionDashboard = () => {
   const [selectedEventId, setSelectedEventId] = useState<string>("");
 
   const [activeTab, setActiveTab] = useState<
-    "overview" | "products" | "staff" | "sessions"
+    "overview" | "products" | "staff" | "sessions" | "inventory"
   >("overview");
 
   const [summary, setSummary] = useState<SummaryData>({
@@ -107,6 +121,7 @@ export const RevisionDashboard = () => {
   const [users, setUsers] = useState<UserReport[]>([]);
   const [hourly, setHourly] = useState<HourlyReport[]>([]);
   const [sessions, setSessions] = useState<SessionReport[]>([]);
+  const [inventory, setInventory] = useState<InventoryReport[]>([]);
 
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -139,15 +154,27 @@ export const RevisionDashboard = () => {
 
       try {
         const q = `?eventId=${selectedEventId}`;
-        const [sumRes, prodRes, catRes, userRes, hourRes, sessRes] =
-          await Promise.all([
-            api.get(`/reports/summary${q}`),
-            api.get(`/reports/products${q}`),
-            api.get(`/reports/categories${q}`),
-            api.get(`/reports/users${q}`),
-            api.get(`/reports/hourly${q}`),
-            api.get(`/reports/sessions${q}`),
-          ]);
+        const dataMode = events.find((event) => event.id === selectedEventId)
+          ?.testMode
+          ? "TEST"
+          : "LIVE";
+        const [
+          sumRes,
+          prodRes,
+          catRes,
+          userRes,
+          hourRes,
+          sessRes,
+          inventoryRes,
+        ] = await Promise.all([
+          api.get(`/reports/summary${q}`),
+          api.get(`/reports/products${q}`),
+          api.get(`/reports/categories${q}`),
+          api.get(`/reports/users${q}`),
+          api.get(`/reports/hourly${q}`),
+          api.get(`/reports/sessions${q}`),
+          api.get(`/reports/inventory${q}&dataMode=${dataMode}`),
+        ]);
 
         setSummary(sumRes.data);
         setProducts(prodRes.data);
@@ -155,6 +182,7 @@ export const RevisionDashboard = () => {
         setUsers(userRes.data);
         setHourly(hourRes.data);
         setSessions(sessRes.data);
+        setInventory(inventoryRes.data);
       } catch (err) {
         console.error("Failed to load report data", err);
       } finally {
@@ -162,7 +190,7 @@ export const RevisionDashboard = () => {
         setIsRefreshing(false);
       }
     },
-    [selectedEventId],
+    [selectedEventId, events],
   );
 
   useEffect(() => {
@@ -190,12 +218,18 @@ export const RevisionDashboard = () => {
   };
 
   const handleExport = async (
-    type: "orders" | "products" | "users" | "sessions" | "categories",
+    type:
+      | "orders"
+      | "products"
+      | "users"
+      | "sessions"
+      | "categories"
+      | "inventory",
   ) => {
     setExportingType(type);
     try {
       const res = await api.get(
-        `/reports/export/${type}?eventId=${selectedEventId}`,
+        `/reports/export/${type}?eventId=${selectedEventId}${type === "inventory" ? `&dataMode=${events.find((event) => event.id === selectedEventId)?.testMode ? "TEST" : "LIVE"}` : ""}`,
         {
           responseType: "blob",
         },
@@ -466,6 +500,18 @@ export const RevisionDashboard = () => {
             )}
             Kategorien
           </button>
+          <button
+            onClick={() => handleExport("inventory")}
+            disabled={exportingType !== null}
+            className="px-3.5 py-1.5 rounded-xl bg-slate-800/80 hover:bg-slate-700/80 text-xs font-semibold text-slate-200 border border-slate-700/60 transition-colors flex items-center gap-1.5"
+          >
+            {exportingType === "inventory" ? (
+              <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+            ) : (
+              <AlertTriangle className="w-3.5 h-3.5 text-amber-300" />
+            )}
+            Bestandsabgleich
+          </button>
         </div>
       </div>
 
@@ -476,6 +522,7 @@ export const RevisionDashboard = () => {
           { id: "products", label: "Produkte & Kategorien", icon: Package },
           { id: "staff", label: "Mitarbeiterabrechnung", icon: Users },
           { id: "sessions", label: "Kassensitzungen", icon: Wallet },
+          { id: "inventory", label: "Bestandsabgleich", icon: AlertTriangle },
         ].map((tab) => {
           const Icon = tab.icon;
           const isActive = activeTab === tab.id;
@@ -830,6 +877,79 @@ export const RevisionDashboard = () => {
                   <tr>
                     <td colSpan={8} className="text-center py-8 text-slate-500">
                       Noch keine Kassensitzungen eröffnet.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+      {activeTab === "inventory" && (
+        <div className="glass p-6 rounded-3xl space-y-4">
+          <div>
+            <h2 className="text-lg font-bold flex items-center gap-2">
+              <AlertTriangle className="w-5 h-5 text-amber-300" />
+              Bestandsabgleich
+            </h2>
+            <p className="mt-1 text-sm text-slate-400">
+              {events.find((event) => event.id === selectedEventId)?.testMode
+                ? "Testbetrieb"
+                : "Echtbetrieb"}{" "}
+              · Soll aus Bewegungen, Ist aus dem aktuellen Bestand.
+            </p>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[700px] text-left text-sm">
+              <thead>
+                <tr className="border-b border-slate-800 text-slate-400">
+                  <th className="pb-3">Produkt</th>
+                  <th className="pb-3 text-right">Anfang</th>
+                  <th className="pb-3 text-right">Verkauf</th>
+                  <th className="pb-3 text-right">Storno</th>
+                  <th className="pb-3 text-right">Soll</th>
+                  <th className="pb-3 text-right">Ist</th>
+                  <th className="pb-3 text-right">Differenz</th>
+                  <th className="pb-3">Zustand</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-800/60">
+                {inventory.map((row) => (
+                  <tr key={row.productId}>
+                    <td className="py-3 font-semibold text-slate-100">
+                      {row.name}
+                    </td>
+                    {!row.inventoryTracked ? (
+                      <td colSpan={7} className="py-3 text-slate-400">
+                        Nicht gezählt
+                      </td>
+                    ) : (
+                      <>
+                        <td className="py-3 text-right">
+                          {row.initialQuantity}
+                        </td>
+                        <td className="py-3 text-right">{row.grossSales}</td>
+                        <td className="py-3 text-right">{row.cancellations}</td>
+                        <td className="py-3 text-right font-bold">
+                          {row.expectedQuantity}
+                        </td>
+                        <td className="py-3 text-right font-bold">
+                          {row.actualQuantity}
+                        </td>
+                        <td className="py-3 text-right font-bold">
+                          {row.difference}
+                        </td>
+                        <td className="py-3 text-xs text-slate-300">
+                          {row.effectiveAvailability}
+                        </td>
+                      </>
+                    )}
+                  </tr>
+                ))}
+                {inventory.length === 0 && (
+                  <tr>
+                    <td colSpan={8} className="py-8 text-center text-slate-500">
+                      Keine Bestandsdaten für diese Betriebsart.
                     </td>
                   </tr>
                 )}

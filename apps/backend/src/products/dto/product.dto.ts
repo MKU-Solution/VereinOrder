@@ -77,7 +77,9 @@ class ProductFieldsDto {
   @IsNotEmpty()
   @MaxLength(2048)
   imageUrl?: string | null;
-  @IsOptional() @IsEnum(ProductAvailability) availability?: ProductAvailability;
+  @IsOptional()
+  @IsEnum(ProductAvailability)
+  manualAvailability?: ProductAvailability;
   @IsOptional() @IsUUID("4") categoryId?: string;
   @IsOptional() @IsUUID("4") targetStationId?: string | null;
   @IsOptional()

@@ -965,6 +965,8 @@ export class NativeBackupService implements OnModuleInit, OnModuleDestroy {
       voucherRows,
       valueVoucherRows,
       valueVoucherMovementRows,
+      inventoryStockRows,
+      inventoryMovementRows,
       auditRows,
     ] = await Promise.all([
       prisma.$queryRawUnsafe<Array<{ tableName: string }>>(
@@ -1008,6 +1010,23 @@ export class NativeBackupService implements OnModuleInit, OnModuleDestroy {
            FROM "ValueVoucherMovement" GROUP BY "dataMode"`,
       ),
       prisma.$queryRawUnsafe<
+        Array<{
+          dataMode: string;
+          quantity: bigint;
+          tracked: bigint;
+          blocked: bigint;
+        }>
+      >(`SELECT "dataMode"::text AS "dataMode",
+                COALESCE(SUM("stockQuantity"), 0)::bigint AS quantity,
+                COUNT(*) FILTER (WHERE "trackingEnabled")::bigint AS tracked,
+                COUNT(*) FILTER (WHERE "manualBlocked")::bigint AS blocked
+           FROM "InventoryStock" GROUP BY "dataMode"`),
+      prisma.$queryRawUnsafe<Array<{ dataMode: string; quantity: bigint }>>(
+        `SELECT "dataMode"::text AS "dataMode",
+                COALESCE(SUM("quantityDelta"), 0)::bigint AS quantity
+           FROM "InventoryMovement" GROUP BY "dataMode"`,
+      ),
+      prisma.$queryRawUnsafe<
         Array<{ total: bigint; withUser: bigint }>
       >(`SELECT COUNT(*)::bigint AS total,
                   COUNT(*) FILTER (WHERE "userId" IS NOT NULL)::bigint AS "withUser"
@@ -1035,6 +1054,10 @@ export class NativeBackupService implements OnModuleInit, OnModuleDestroy {
         valueVoucherBalance: 0,
         valueVoucherMovementBalance: 0,
         valueVoucherCount: {},
+        inventoryStockQuantity: 0,
+        inventoryMovementQuantity: 0,
+        inventoryTrackedCount: 0,
+        inventoryManualBlockedCount: 0,
       },
       TEST: {
         orderTotalAmount: 0,
@@ -1043,6 +1066,10 @@ export class NativeBackupService implements OnModuleInit, OnModuleDestroy {
         valueVoucherBalance: 0,
         valueVoucherMovementBalance: 0,
         valueVoucherCount: {},
+        inventoryStockQuantity: 0,
+        inventoryMovementQuantity: 0,
+        inventoryTrackedCount: 0,
+        inventoryManualBlockedCount: 0,
       },
     };
     const mode = (name: string) =>
@@ -1053,6 +1080,10 @@ export class NativeBackupService implements OnModuleInit, OnModuleDestroy {
         valueVoucherBalance: 0,
         valueVoucherMovementBalance: 0,
         valueVoucherCount: {},
+        inventoryStockQuantity: 0,
+        inventoryMovementQuantity: 0,
+        inventoryTrackedCount: 0,
+        inventoryManualBlockedCount: 0,
       });
     for (const row of orderRows)
       mode(row.dataMode).orderTotalAmount = this.safeNumber(row.amount);
@@ -1071,9 +1102,22 @@ export class NativeBackupService implements OnModuleInit, OnModuleDestroy {
       mode(row.dataMode).valueVoucherMovementBalance = this.safeNumber(
         row.balance,
       );
+    for (const row of inventoryStockRows) {
+      const sums = mode(row.dataMode);
+      sums.inventoryStockQuantity = this.safeNumber(row.quantity);
+      sums.inventoryTrackedCount = this.safeNumber(row.tracked);
+      sums.inventoryManualBlockedCount = this.safeNumber(row.blocked);
+    }
+    for (const row of inventoryMovementRows)
+      mode(row.dataMode).inventoryMovementQuantity = this.safeNumber(
+        row.quantity,
+      );
     for (const sums of Object.values(byDataMode)) {
       if (sums.valueVoucherBalance !== sums.valueVoucherMovementBalance) {
         throw new Error("VALUE_VOUCHER_BALANCE_MISMATCH");
+      }
+      if (sums.inventoryStockQuantity !== sums.inventoryMovementQuantity) {
+        throw new Error("INVENTORY_QUANTITY_MISMATCH");
       }
     }
 

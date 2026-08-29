@@ -170,6 +170,66 @@ export const StationSaleDashboard = () => {
     void loadContext();
   }, []);
 
+  useEffect(() => {
+    if (!selectedEventId) return;
+    // EventSource-Konstruktor gekapselt (analog Dashboard.tsx /
+    // TableSelectionModal.tsx): schlägt er fehl (z. B. Endgerät ohne
+    // EventSource-Unterstützung), darf das die Kasse nicht in der
+    // React-Commit-Phase zum Absturz bringen - sonst bleibt kein Produkt
+    // mehr sichtbar. Ohne Live-Push bleiben die zuletzt geladenen Bestände
+    // stehen, bis "Aktualisieren" oder der nächste Verkauf neu lädt.
+    let source: EventSource | null = null;
+    try {
+      source = new EventSource(`/realtime/stream?eventId=${selectedEventId}`);
+      source.onmessage = (event) => {
+        try {
+          const payload = JSON.parse(event.data);
+          if (
+            payload.type !== "PRODUCT_INVENTORY_CHANGED" &&
+            payload.type !== "PRODUCT_AVAILABILITY_CHANGED"
+          )
+            return;
+          setContexts((current) =>
+            current.map((context) =>
+              context.id !== selectedEventId
+                ? context
+                : {
+                    ...context,
+                    products: context.products.map((product) =>
+                      product.id === payload.data.productId
+                        ? {
+                            ...product,
+                            availability: payload.data.availability,
+                            ...(payload.data.stockQuantity !== undefined
+                              ? {
+                                  inventoryTracked: true,
+                                  stockQuantity: payload.data.stockQuantity,
+                                  lowStockThreshold:
+                                    payload.data.lowStockThreshold,
+                                  inventoryVersion: payload.data.version,
+                                }
+                              : {}),
+                          }
+                        : product,
+                    ),
+                  },
+            ),
+          );
+        } catch {
+          /* ungültige Fremdnachrichten werden ignoriert */
+        }
+      };
+    } catch (err) {
+      console.warn(
+        "Realtime EventSource not available, falling back to polling",
+        err,
+      );
+    }
+    return () => {
+      if (source) source.close();
+    };
+  }, [selectedEventId]);
+
   const context =
     contexts.find((event) => event.id === selectedEventId) || null;
   const stations = context?.stations || [];
@@ -720,6 +780,7 @@ export const StationSaleDashboard = () => {
                   <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-4">
                     {visibleOptions.map((option) => {
                       const disabled = option.availability === "OUT_OF_STOCK";
+                      const isLow = option.availability === "LOW_STOCK";
                       return (
                         <button
                           key={option.key}
@@ -756,6 +817,13 @@ export const StationSaleDashboard = () => {
                             <span className="absolute right-2 top-2 rounded-lg bg-rose-600 px-2 py-1 text-[10px] font-black uppercase">
                               Ausverkauft
                             </span>
+                          )}
+                          {isLow && (
+                            <div className="absolute top-1 right-1">
+                              <span className="bg-amber-400 text-slate-950 font-black text-[9px] px-1 py-0.5 rounded shadow-md uppercase">
+                                Knapp
+                              </span>
+                            </div>
                           )}
                         </button>
                       );
