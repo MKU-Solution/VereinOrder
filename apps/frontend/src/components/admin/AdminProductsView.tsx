@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Edit2, Layers, Package, Store, Tag, Trash2 } from "lucide-react";
+import { Edit2, Layers, Lock, Package, Store, Tag, Unlock } from "lucide-react";
 
 import { AdminEmptyState } from "./AdminEmptyState";
 import { AdminToolbar } from "./AdminToolbar";
@@ -13,7 +13,12 @@ export interface AdminProductsViewProps {
   onRefresh: () => void;
   onOpenCreate: () => void;
   onEdit: (product: any) => void;
-  onDelete: (id: string) => void;
+  // Issue #168: Produkte werden nicht gelöscht (jedes je bestellte Produkt
+  // ist per RESTRICT ohnehin unlöschbar, sonst wäre die Bestellhistorie
+  // nicht mehr lesbar), sondern über die vorhandene Verfügbarkeitsroute
+  // (manualAvailability = DISABLED, products.service.ts#updateAvailability)
+  // deaktiviert.
+  onToggleAvailability: (product: any) => void;
   isRefreshing?: boolean;
   eventId?: string;
   dataMode?: "TEST" | "LIVE";
@@ -26,7 +31,7 @@ export const AdminProductsView = ({
   onRefresh,
   onOpenCreate,
   onEdit,
-  onDelete,
+  onToggleAvailability,
   isRefreshing = false,
   eventId,
   dataMode,
@@ -299,12 +304,31 @@ export const AdminProductsView = ({
                             </button>
                             <button
                               type="button"
-                              onClick={() => onDelete(prod.id)}
-                              className="inline-flex min-h-9 min-w-9 items-center justify-center rounded-lg border border-rose-500/30 bg-rose-500/20 p-2 text-rose-300 hover:bg-rose-500/30 hover:text-rose-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-200"
-                              title="Produkt löschen"
-                              aria-label={`Produkt ${prod.name} löschen`}
+                              onClick={() => onToggleAvailability(prod)}
+                              className={
+                                prod.manualAvailability === "DISABLED"
+                                  ? "inline-flex min-h-9 min-w-9 items-center justify-center rounded-lg border border-emerald-500/30 bg-emerald-500/20 p-2 text-emerald-300 hover:bg-emerald-500/30 hover:text-emerald-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-200"
+                                  : "inline-flex min-h-9 min-w-9 items-center justify-center rounded-lg border border-rose-500/30 bg-rose-500/20 p-2 text-rose-300 hover:bg-rose-500/30 hover:text-rose-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-200"
+                              }
+                              title={
+                                prod.manualAvailability === "DISABLED"
+                                  ? "Produkt aktivieren"
+                                  : "Produkt deaktivieren"
+                              }
+                              aria-label={
+                                prod.manualAvailability === "DISABLED"
+                                  ? `Produkt ${prod.name} aktivieren`
+                                  : `Produkt ${prod.name} deaktivieren`
+                              }
                             >
-                              <Trash2 aria-hidden="true" className="h-4 w-4" />
+                              {prod.manualAvailability === "DISABLED" ? (
+                                <Unlock
+                                  aria-hidden="true"
+                                  className="h-4 w-4"
+                                />
+                              ) : (
+                                <Lock aria-hidden="true" className="h-4 w-4" />
+                              )}
                             </button>
                           </div>
                         </td>
@@ -424,12 +448,28 @@ export const AdminProductsView = ({
                       </button>
                       <button
                         type="button"
-                        onClick={() => onDelete(prod.id)}
-                        className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-xl border border-rose-500/30 bg-rose-500/20 p-2.5 text-rose-300 hover:bg-rose-500/30 focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-200"
-                        title="Produkt löschen"
-                        aria-label={`Produkt ${prod.name} löschen`}
+                        onClick={() => onToggleAvailability(prod)}
+                        className={
+                          prod.manualAvailability === "DISABLED"
+                            ? "inline-flex min-h-11 min-w-11 items-center justify-center rounded-xl border border-emerald-500/30 bg-emerald-500/20 p-2.5 text-emerald-300 hover:bg-emerald-500/30 focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-200"
+                            : "inline-flex min-h-11 min-w-11 items-center justify-center rounded-xl border border-rose-500/30 bg-rose-500/20 p-2.5 text-rose-300 hover:bg-rose-500/30 focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-200"
+                        }
+                        title={
+                          prod.manualAvailability === "DISABLED"
+                            ? "Produkt aktivieren"
+                            : "Produkt deaktivieren"
+                        }
+                        aria-label={
+                          prod.manualAvailability === "DISABLED"
+                            ? `Produkt ${prod.name} aktivieren`
+                            : `Produkt ${prod.name} deaktivieren`
+                        }
                       >
-                        <Trash2 aria-hidden="true" className="h-4 w-4" />
+                        {prod.manualAvailability === "DISABLED" ? (
+                          <Unlock aria-hidden="true" className="h-4 w-4" />
+                        ) : (
+                          <Lock aria-hidden="true" className="h-4 w-4" />
+                        )}
                       </button>
                     </div>
                   </div>

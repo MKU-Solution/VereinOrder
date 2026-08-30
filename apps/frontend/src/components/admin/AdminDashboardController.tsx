@@ -533,6 +533,11 @@ export const AdminDashboardController = ({
             shortName: (formData.shortName || "").trim() || null,
             printerId: formData.printerId || null,
             sortOrder: formData.sortOrder,
+            // Issue #168: Stationen werden statt gelöscht deaktiviert
+            // (Station.isActive existiert bereits im Schema und wird vom
+            // Backend unterstützt, stations.dto.ts/UpdateStationDto). Beim
+            // Anlegen bleibt der Serverdefault (aktiv) unangetastet.
+            ...(editingItem ? { isActive: formData.isActive } : {}),
           };
           if (editingItem) {
             await api.patch(`${endpoint}/${editingItem.id}`, payload);
@@ -1079,22 +1084,53 @@ export const AdminDashboardController = ({
     }
   };
 
+  // Issue #168: Löschen gibt es nur noch für Veranstaltungen und Bereiche -
+  // das sind die einzigen zwei Entitäten mit einer echten Backend-Route
+  // (events.controller.ts, areas.controller.ts). Für Stationen, Warengruppen,
+  // Produkte und Benutzer gab es hier vier tote Zweige: Der Aufruf lief ins
+  // Leere, weil serverseitig keine DELETE-Route existierte. Diese vier
+  // Entitäten werden stattdessen deaktiviert (siehe handleSaveModal für
+  // Stationen/Benutzer sowie handleToggleProductAvailability für Produkte);
+  // für Warengruppen fehlt dafür noch das Datenmodell (kein isActive-Feld).
   const handleDelete = async (id: string) => {
     if (!confirm("Diesen Eintrag wirklich unwiderruflich löschen?")) return;
     try {
-      let endpoint = "";
-      if (activeTab === "events") endpoint = `/events/${id}`;
-      if (activeTab === "areas") endpoint = `/areas/${id}`;
-      if (activeTab === "stations") endpoint = `/stations/${id}`;
-      if (activeTab === "categories") endpoint = `/categories/${id}`;
-      if (activeTab === "products") endpoint = `/products/${id}`;
-      if (activeTab === "users") endpoint = `/users/${id}`;
-
+      const endpoint =
+        activeTab === "events" ? `/events/${id}` : `/areas/${id}`;
       await api.delete(endpoint);
       fetchData();
     } catch (err) {
       console.error("Failed to delete item", err);
       alert(backendMessage(err, "Fehler beim Löschen"));
+    }
+  };
+
+  // Issue #168: Ersetzt den früheren (nicht funktionierenden) Löschknopf für
+  // Produkte. Die Route existiert bereits (products.controller.ts,
+  // PATCH /products/:id/availability -> products.service.ts#updateAvailability)
+  // und wird bislang nur von der Stationsansicht genutzt; hier wird sie in
+  // der Produktverwaltung erreichbar gemacht. Jedes je bestellte Produkt ist
+  // durch die RESTRICT-Fremdschlüsselregel ohnehin unlöschbar, sonst wäre die
+  // Bestellhistorie nicht mehr lesbar - Deaktivieren ist deshalb die richtige
+  // Antwort statt einer (unmöglichen) Löschroute.
+  const handleToggleProductAvailability = async (product: any) => {
+    const nextAvailability =
+      product.manualAvailability === "DISABLED" ? "AVAILABLE" : "DISABLED";
+    try {
+      await api.patch(`/products/${product.id}/availability`, {
+        availability: nextAvailability,
+      });
+      fetchData();
+    } catch (err) {
+      console.error("Failed to toggle product availability", err);
+      alert(
+        backendMessage(
+          err,
+          nextAvailability === "DISABLED"
+            ? "Fehler beim Deaktivieren des Produkts"
+            : "Fehler beim Aktivieren des Produkts",
+        ),
+      );
     }
   };
 
@@ -1321,7 +1357,6 @@ export const AdminDashboardController = ({
                 onRefresh={() => void fetchData()}
                 onOpenCreate={() => void handleOpenModal()}
                 onEdit={(item) => void handleOpenModal(item)}
-                onDelete={(id) => void handleDelete(id)}
                 isRefreshing={isLoading}
               />
             ) : activeTab === "categories" ? (
@@ -1331,7 +1366,6 @@ export const AdminDashboardController = ({
                 onRefresh={() => void fetchData()}
                 onOpenCreate={() => void handleOpenModal()}
                 onEdit={(item) => void handleOpenModal(item)}
-                onDelete={(id) => void handleDelete(id)}
                 isRefreshing={isLoading}
               />
             ) : activeTab === "products" ? (
@@ -1344,7 +1378,9 @@ export const AdminDashboardController = ({
                 onRefresh={() => void fetchData()}
                 onOpenCreate={() => void handleOpenModal()}
                 onEdit={(item) => void handleOpenModal(item)}
-                onDelete={(id) => void handleDelete(id)}
+                onToggleAvailability={(product) =>
+                  void handleToggleProductAvailability(product)
+                }
                 isRefreshing={isLoading}
               />
             ) : activeTab === "users" ? (
@@ -1353,7 +1389,6 @@ export const AdminDashboardController = ({
                 onRefresh={() => void fetchData()}
                 onOpenCreate={() => void handleOpenModal()}
                 onEdit={(item) => void handleOpenModal(item)}
-                onDelete={(id) => void handleDelete(id)}
                 isRefreshing={isLoading}
               />
             ) : null}
@@ -2588,6 +2623,21 @@ export const AdminDashboardController = ({
                       ))}
                     </select>
                   </div>
+                  {editingItem && (
+                    <label className="flex min-h-11 items-center gap-3 text-sm text-slate-200">
+                      <input
+                        type="checkbox"
+                        checked={formData.isActive}
+                        onChange={(e) =>
+                          setFormData({
+                            ...formData,
+                            isActive: e.target.checked,
+                          })
+                        }
+                      />
+                      Station ist aktiv
+                    </label>
+                  )}
                 </>
               )}
 

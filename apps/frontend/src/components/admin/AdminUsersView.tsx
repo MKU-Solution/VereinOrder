@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Edit2, Trash2, User, Users } from "lucide-react";
+import { Edit2, User, Users } from "lucide-react";
 
 import { AdminEmptyState } from "./AdminEmptyState";
 import { UserActiveBadge, UserRoleBadge } from "./AdminStatusBadge";
@@ -10,7 +10,6 @@ export interface AdminUsersViewProps {
   onRefresh: () => void;
   onOpenCreate: () => void;
   onEdit: (user: any) => void;
-  onDelete: (id: string) => void;
   isRefreshing?: boolean;
 }
 
@@ -19,7 +18,6 @@ export const AdminUsersView = ({
   onRefresh,
   onOpenCreate,
   onEdit,
-  onDelete,
   isRefreshing = false,
 }: AdminUsersViewProps) => {
   const [searchQuery, setSearchQuery] = useState("");
@@ -170,15 +168,6 @@ export const AdminUsersView = ({
                             >
                               <Edit2 aria-hidden="true" className="h-4 w-4" />
                             </button>
-                            <button
-                              type="button"
-                              onClick={() => onDelete(user.id)}
-                              className="inline-flex min-h-9 min-w-9 items-center justify-center rounded-lg border border-rose-500/30 bg-rose-500/20 p-2 text-rose-300 hover:bg-rose-500/30 hover:text-rose-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-200"
-                              title="Mitarbeiter löschen"
-                              aria-label={`Mitarbeiter ${username} löschen`}
-                            >
-                              <Trash2 aria-hidden="true" className="h-4 w-4" />
-                            </button>
                           </div>
                         </td>
                       </tr>
@@ -225,15 +214,6 @@ export const AdminUsersView = ({
                       aria-label={`Mitarbeiter ${username} bearbeiten`}
                     >
                       <Edit2 aria-hidden="true" className="h-4 w-4" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => onDelete(user.id)}
-                      className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-xl border border-rose-500/30 bg-rose-500/20 p-2.5 text-rose-300 hover:bg-rose-500/30 focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-200"
-                      title="Mitarbeiter löschen"
-                      aria-label={`Mitarbeiter ${username} löschen`}
-                    >
-                      <Trash2 aria-hidden="true" className="h-4 w-4" />
                     </button>
                   </div>
                 </article>

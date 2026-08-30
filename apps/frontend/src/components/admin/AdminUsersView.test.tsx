@@ -31,7 +31,6 @@ describe("AdminUsersView", () => {
         onRefresh={vi.fn()}
         onOpenCreate={vi.fn()}
         onEdit={vi.fn()}
-        onDelete={vi.fn()}
       />,
     );
 
@@ -55,7 +54,6 @@ describe("AdminUsersView", () => {
         onRefresh={vi.fn()}
         onOpenCreate={vi.fn()}
         onEdit={vi.fn()}
-        onDelete={vi.fn()}
       />,
     );
 
@@ -66,5 +64,26 @@ describe("AdminUsersView", () => {
 
     expect(screen.getAllByText("altkellner").length).toBeGreaterThan(0);
     expect(screen.queryByText("kellner1")).not.toBeInTheDocument();
+  });
+
+  // Issue #168: Der frühere Löschknopf traf ins Leere - im Backend gibt es
+  // keine DELETE-Route für Benutzer. RESTRICT-Fremdschlüssel verhindern das
+  // Löschen ohnehin, sobald jemand bestellt oder einen Gutschein ausgegeben
+  // hat, und ein SetNull auf AuditLog.userId würde Audit-Einträge
+  // anonymisieren. Der Knopf wurde ersatzlos entfernt; Deaktivieren über den
+  // Bearbeiten-Dialog (isActive) funktioniert bereits.
+  it("zeigt keinen Löschen-Knopf mehr (Issue #168)", () => {
+    render(
+      <AdminUsersView
+        users={mockUsers}
+        onRefresh={vi.fn()}
+        onOpenCreate={vi.fn()}
+        onEdit={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.queryByRole("button", { name: /löschen/i }),
+    ).not.toBeInTheDocument();
   });
 });
