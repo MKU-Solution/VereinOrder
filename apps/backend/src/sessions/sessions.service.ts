@@ -6,6 +6,7 @@ import {
 } from "@nestjs/common";
 import { Prisma, PrismaClient } from "@vereinorder/database";
 import { PRISMA_CLIENT } from "../prisma/prisma.module";
+import { resolveOperationalDataMode } from "../common/operational-data-mode";
 
 @Injectable()
 export class SessionsService {
@@ -68,12 +69,7 @@ export class SessionsService {
           SELECT "id", "status", "testMode" FROM "Event" WHERE "id" = ${eventId} FOR UPDATE
         `);
         const event = events[0];
-        const dataMode =
-          event?.status === "ACTIVE" && !event.testMode
-            ? "LIVE"
-            : event?.status === "TEST_MODE" && event.testMode
-              ? "TEST"
-              : null;
+        const dataMode = resolveOperationalDataMode(event);
         if (!dataMode)
           throw new BadRequestException(
             "Event is not active for cashier sessions",

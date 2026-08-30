@@ -10,6 +10,7 @@ import { createHash, randomBytes } from "crypto";
 import { Prisma, PrismaClient } from "@vereinorder/database";
 import { AuditService } from "../audit/audit.service";
 import { PRISMA_CLIENT } from "../prisma/prisma.module";
+import { resolveOperationalDataMode } from "../common/operational-data-mode";
 import {
   CancelValueVoucherDto,
   IssueValueVoucherDto,
@@ -564,12 +565,7 @@ export class ValueVouchersService {
       where: { id: eventId },
       select: { name: true, status: true, testMode: true },
     });
-    const dataMode: DataMode | null =
-      event?.status === "ACTIVE" && !event.testMode
-        ? "LIVE"
-        : event?.status === "TEST_MODE" && event.testMode
-          ? "TEST"
-          : null;
+    const dataMode: DataMode | null = resolveOperationalDataMode(event);
     if (!dataMode || session.dataMode !== dataMode)
       throw new BadRequestException(
         "Veranstaltung und Kassensitzung gehören nicht zum selben aktiven Betriebsmodus.",

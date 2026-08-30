@@ -9,6 +9,7 @@ import { PRISMA_CLIENT } from "../prisma/prisma.module";
 import { RealtimeService } from "../realtime/realtime.service";
 import { GroupInput, saveOptionGroups } from "./product-option-groups";
 import { productAtStationFilter } from "../common/target-station";
+import { resolveOperationalDataMode } from "../common/operational-data-mode";
 import { effectiveAvailability } from "../inventory/inventory.service";
 import {
   CreateCategoryDto,
@@ -118,12 +119,7 @@ export class ProductsService {
   ) {}
 
   private inventoryFacade(product: any) {
-    const mode =
-      product.event?.status === "ACTIVE" && !product.event?.testMode
-        ? "LIVE"
-        : product.event?.status === "TEST_MODE" && product.event?.testMode
-          ? "TEST"
-          : undefined;
+    const mode = resolveOperationalDataMode(product.event);
     const stock =
       product.inventoryStocks?.find((item: any) => item.dataMode === mode) ??
       null;

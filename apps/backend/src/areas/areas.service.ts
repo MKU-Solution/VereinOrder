@@ -7,6 +7,7 @@ import {
 import { Prisma, PrismaClient } from "@vereinorder/database";
 import { PRISMA_CLIENT } from "../prisma/prisma.module";
 import { RealtimeService } from "../realtime/realtime.service";
+import { resolveOperationalDataMode } from "../common/operational-data-mode";
 import {
   CreateAreaDto,
   FloorPlanElementDto,
@@ -99,12 +100,7 @@ export class AreasService {
       orderBy: { sortOrder: "asc" },
     });
     const areaIds = areas.map((area) => area.id);
-    const dataMode =
-      event.status === "ACTIVE" && !event.testMode
-        ? "LIVE"
-        : event.status === "TEST_MODE" && event.testMode
-          ? "TEST"
-          : null;
+    const dataMode = resolveOperationalDataMode(event);
     const orders =
       dataMode && areaIds.length > 0
         ? await this.prisma.order.findMany({

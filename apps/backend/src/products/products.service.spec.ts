@@ -301,4 +301,36 @@ describe("ProductsService – Eventgrenzen und Allowlists", () => {
       }),
     );
   });
+
+  // Issue #152: vor der zentralen Ableitung (resolveOperationalDataMode)
+  // fiel eine unmoegliche status/testMode-Kombination hier still auf
+  // "kein Modus" zurueck - der Bestand jeder Betriebsart blieb dadurch
+  // ungefunden, und ein ausverkauftes Produkt erschien der Kasse als
+  // verfuegbar (effectiveAvailability faellt ohne Bestandssatz auf den
+  // manuellen Uebersteuerungswert zurueck). Die Produktliste muss diesen
+  // Zustand jetzt laut ablehnen statt ihn stillschweigend falsch zu zeigen.
+  it("weist eine unmögliche status/testMode-Kombination in der Produktliste ab, statt Bestand stillschweigend zu ignorieren", async () => {
+    const { service, prisma } = createService();
+    prisma.product.findMany = jest.fn().mockResolvedValue([
+      {
+        ...product,
+        manualAvailability: "OUT_OF_STOCK",
+        event: { status: "ACTIVE", testMode: true },
+        inventoryStocks: [
+          {
+            dataMode: "LIVE",
+            trackingEnabled: true,
+            stockQuantity: 0,
+            lowStockThreshold: 2,
+            manualBlocked: false,
+            version: 1,
+          },
+        ],
+      },
+    ]);
+
+    await expect(service.findAllActive()).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+  });
 });

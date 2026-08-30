@@ -14,6 +14,7 @@ import {
 } from "@vereinorder/database";
 import { PRISMA_CLIENT } from "../prisma/prisma.module";
 import { RealtimeService } from "../realtime/realtime.service";
+import { resolveOperationalDataMode } from "../common/operational-data-mode";
 
 export type StockLike = {
   trackingEnabled: boolean;
@@ -89,21 +90,11 @@ export class InventoryService {
       select: { status: true, testMode: true },
     });
     if (!event) throw new NotFoundException("Veranstaltung nicht gefunden");
-    const actual = this.operationalDataMode(event);
+    const actual = resolveOperationalDataMode(event);
     if (!actual || actual !== dataMode)
       throw new BadRequestException(
         "Betriebsmodus der Veranstaltung stimmt nicht mit dataMode überein.",
       );
-  }
-  private operationalDataMode(event: {
-    status: string;
-    testMode: boolean;
-  }): OperationalDataMode | null {
-    if (event.status === "ACTIVE" && !event.testMode)
-      return OperationalDataMode.LIVE;
-    if (event.status === "TEST_MODE" && event.testMode)
-      return OperationalDataMode.TEST;
-    return null;
   }
   private async product(
     tx: Prisma.TransactionClient,
@@ -498,7 +489,7 @@ export class InventoryService {
     });
     if (!product || product.eventId !== eventId)
       throw new NotFoundException("Produkt nicht gefunden");
-    if (this.operationalDataMode(product.event) !== dataMode)
+    if (resolveOperationalDataMode(product.event) !== dataMode)
       throw new BadRequestException(
         "Betriebsmodus der Veranstaltung stimmt nicht mit dataMode überein.",
       );

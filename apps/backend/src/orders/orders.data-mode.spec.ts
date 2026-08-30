@@ -221,3 +221,35 @@ describe("OrdersService – eventgebundener Betriebsmodus", () => {
     expect(prisma.order.create).not.toHaveBeenCalled();
   });
 });
+
+describe("OrdersService – Kassenkontext (getQuickSaleContext)", () => {
+  // Issue #152: vor der zentralen Ableitung (resolveOperationalDataMode)
+  // fiel eine unmoegliche status/testMode-Kombination hier still auf
+  // dataMode=undefined zurueck. Kein Bestandssatz traegt dieses "undefined",
+  // also fand die Bestandssuche nie einen Treffer, und die effektive
+  // Verfuegbarkeit fiel auf den rohen manuellen Uebersteuerungswert zurueck
+  // - ein ausverkauftes Produkt erschien der Kasse als verfuegbar. Der
+  // Kassenkontext muss diesen Zustand jetzt laut ablehnen.
+  it("weist eine unmögliche status/testMode-Kombination im Kassenkontext ab, statt Bestand stillschweigend zu ignorieren", async () => {
+    const prisma: any = {
+      event: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: "event-1",
+            name: "Testfest",
+            status: "ACTIVE",
+            testMode: true,
+            products: [],
+          },
+        ]),
+      },
+      cashierSession: { findMany: jest.fn().mockResolvedValue([]) },
+      printer: { findFirst: jest.fn().mockResolvedValue(null) },
+    };
+    const service = new OrdersService(prisma, createAuditServiceStub() as any);
+
+    await expect(service.getQuickSaleContext("waiter-1")).rejects.toThrow(
+      BadRequestException,
+    );
+  });
+});
