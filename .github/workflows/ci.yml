@@ -186,6 +186,85 @@ jobs:
           test "$(docker run --rm "$image" pg_dump --version | grep -oE '[0-9]+' | head -1)" = "16"
           test "$(docker run --rm "$image" pg_restore --version | grep -oE '[0-9]+' | head -1)" = "16"
 
+  docker-compose-migration:
+    name: Docker-Bündel Migrationsstart
+    runs-on: ubuntu-latest
+    # Der Auftrag "docker" oben baut die Abbilder nur einzeln und prueft
+    # darin lediglich die PostgreSQL-Werkzeuge. Dieser Auftrag faehrt das
+    # gesamte Buendel wie im Festbetrieb hoch (#172) und belegt, dass
+    # "docker compose up -d" tatsaechlich ein migriertes Schema und ein
+    # antwortendes Backend ergibt - vorher blieb die Datenbank leer (B20 in
+    # docs/development/datensicherung.md:930).
+    #
+    # Bewusst nur amd64 und keine Matrix: ubuntu-latest-Runner sind x86_64,
+    # das Abbild selbst wird bereits im Auftrag "docker" fuer amd64 UND
+    # arm64 gebaut und geprueft. Ein zweiter, hier nachgebauter arm64-Lauf
+    # wuerde nur denselben Compose-Ablauf ein zweites Mal ausfuehren, ohne
+    # eine neue Aussage ueber die Migration selbst zu liefern - unnoetiger
+    # Ressourcenverbrauch fuer diesen Auftrag.
+    #
+    # Abweichung vom Umfang in #172: Dort wird zusaetzlich verlangt, den
+    # Anmeldeablauf aus #173 (Setup-Wizard, erster Administrator) bis zur
+    # erfolgreichen Anmeldung durchzuspielen. #173 ist zum Zeitpunkt dieser
+    # Aenderung noch nicht umgesetzt - es gibt weder einen Setup-Endpunkt
+    # noch einen anmeldbaren Benutzer. Dieser Auftrag prueft deshalb nur
+    # Migration und Erreichbarkeit; sobald #173 steht, gehoert hier ein
+    # weiterer Schritt hin, der den Setup-Endpunkt aufruft und sich
+    # anschliessend mit dem angelegten Administrator anmeldet.
+    steps:
+      - uses: actions/checkout@v4
+      - name: Ephemere Testgeheimnisse erzeugen
+        # docker-compose.yml:30 und :76 erzwingen PRINT_WORKER_TOKEN ueber
+        # "${...:?}" - ohne gesetzten Wert bricht "docker compose up" sofort
+        # ab. JWT_SECRET wird hier ebenfalls ausdruecklich gesetzt statt den
+        # Vorgabewert aus docker-compose.yml:29 zu verwenden (dessen
+        # Behandlung ist #175).
+        run: |
+          {
+            echo "PRINT_WORKER_TOKEN=$(openssl rand -hex 32)"
+            echo "JWT_SECRET=$(openssl rand -hex 32)"
+          } >> "$GITHUB_ENV"
+      - name: Bündel bauen und hochfahren
+        run: docker compose up -d --build
+      - name: Auf migriertes, antwortendes Backend warten
+        run: |
+          status=000
+          for i in $(seq 1 60); do
+            status=$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+              http://127.0.0.1:3000/auth/login \
+              -H 'Content-Type: application/json' \
+              -d '{"username":"ci-docker-smoke-check","pin":"0000"}') || status=000
+            # 401 heisst: Das Backend antwortet, die Tabelle "User" existiert
+            # und wurde erfolgreich abgefragt - nur eben kein solcher
+            # Benutzer gefunden. Vor der Migration lieferte derselbe Aufruf
+            # 500 (PrismaClientKnownRequestError: relation does not exist),
+            # siehe #172.
+            if [ "$status" = "401" ]; then
+              echo "Backend antwortet mit 401 - Schema ist vorhanden."
+              break
+            fi
+            sleep 2
+          done
+          if [ "$status" != "401" ]; then
+            echo "Backend antwortet nicht wie erwartet (letzter Status: $status)." >&2
+            docker compose logs
+            exit 1
+          fi
+      - name: Migrationsstand im Container prüfen
+        run: docker compose exec -T backend pnpm --filter @vereinorder/database exec prisma migrate status
+      - name: Tabellen in PostgreSQL prüfen
+        run: |
+          count=$(docker compose exec -T postgres psql -U postgres -d vereinorder -Atc \
+            "SELECT count(*) FROM information_schema.tables WHERE table_schema='public'")
+          echo "Öffentliche Tabellen nach der Migration: $count"
+          test "$count" -gt 0
+      - name: Bündelprotokolle bei Fehlschlag sichern
+        if: failure()
+        run: docker compose logs
+      - name: Bündel abbauen
+        if: always()
+        run: docker compose down -v
+
   secrets:
     name: Geheimnisprüfung
     runs-on: ubuntu-latest
