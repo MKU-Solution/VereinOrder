@@ -10,6 +10,8 @@ const DUPLICATE_DATABASE = "vereinorder_ci_test_duplicate";
 const INVALID_EVENT_DATABASE = "vereinorder_ci_test_invalid_event_refs";
 const EVENT_STATUS_TESTMODE_VIOLATION_DATABASE =
   "vereinorder_ci_test_event_status_testmode_violation";
+const PAYMENT_TENDER_VIOLATION_DATABASE =
+  "vereinorder_ci_test_payment_tender_violation";
 const repoRoot = resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const migrationsDir = resolve(repoRoot, "packages/database/prisma/migrations");
 const pnpmEntryPoint = process.env.npm_execpath;
@@ -171,6 +173,34 @@ const EVENT_STATUS_TESTMODE_VIOLATION_SEED = {
   eventId: "h0000000-0000-4000-8000-000000000001",
 };
 
+// Gueltiger Altstand fuer die Migration
+// "20260830100000_add_payment_tender_check" (Issue #165): je eine Zahlung
+// pro tatsaechlich vorkommender Kombination aus method und Bargeldfeldern -
+// CASH ohne Bargeldbeleg (Tischbestellung), CASH mit vollstaendigem Beleg
+// (Bon-/Stationskasse), CARD, VOUCHER und REFUND. Keine dieser fuenf Zeilen
+// darf vom neuen Constraint angefasst werden.
+const PAYMENT_TENDER_SEED = {
+  eventId: "i0000000-0000-4000-8000-000000000001",
+  userId: "i0000000-0000-4000-8000-000000000002",
+  orderId: "i0000000-0000-4000-8000-000000000003",
+  paymentCashNoTender: "i0000000-0000-4000-8000-000000000010",
+  paymentCashWithTender: "i0000000-0000-4000-8000-000000000011",
+  paymentCard: "i0000000-0000-4000-8000-000000000012",
+  paymentVoucher: "i0000000-0000-4000-8000-000000000013",
+  paymentRefund: "i0000000-0000-4000-8000-000000000014",
+};
+
+// Bestandsinstanz mit einer bereits verletzenden Zeile fuer dieselbe
+// Migration: eine CASH-Zahlung mit tenderedAmount unter dem Betrag, wie sie
+// vor Issue #165 einzig ueber das Einspielen einer alten JSON-Sicherung
+// entstehen konnte.
+const PAYMENT_TENDER_VIOLATION_SEED = {
+  eventId: "j0000000-0000-4000-8000-000000000001",
+  userId: "j0000000-0000-4000-8000-000000000002",
+  orderId: "j0000000-0000-4000-8000-000000000003",
+  paymentId: "j0000000-0000-4000-8000-000000000010",
+};
+
 function fail(message) {
   throw new Error(message);
 }
@@ -324,6 +354,7 @@ function recreateDatabase(target, database) {
       DUPLICATE_DATABASE,
       INVALID_EVENT_DATABASE,
       EVENT_STATUS_TESTMODE_VIOLATION_DATABASE,
+      PAYMENT_TENDER_VIOLATION_DATABASE,
     ].includes(database)
   ) {
     fail(`Unerlaubtes destruktives Datenbankziel: ${database}`);
@@ -1280,6 +1311,163 @@ VALUES ('${ids.eventId}', 'Migrationstest Betriebsart Verletzung', 'ACTIVE'::"Ev
 `;
 }
 
+// Fuegt den gueltigen Altstand fuer die Migration
+// "20260830100000_add_payment_tender_check" ein (Issue #165): eine
+// Veranstaltung, ein Benutzer, eine Bestellung und fuenf Zahlungen, je eine
+// pro tatsaechlich vorkommender Kombination. Muss vor der zugehoerigen
+// Migration laufen, sonst wuerde der neue CHECK-Constraint bereits beim
+// Einfuegen greifen.
+function seedLegacyPaymentTenderSql(ids) {
+  return `
+INSERT INTO "User" (id, username, "pinHash", role, "isActive", "createdAt", "updatedAt")
+VALUES ('${ids.userId}', 'migration-payment-tender-user', 'x', 'CASHIER'::"Role", true, now(), now());
+
+INSERT INTO "Event" (id, name, "testMode", status, "createdAt", "updatedAt")
+VALUES ('${ids.eventId}', 'Migration Zahlungs-Tenderregel', false, 'DRAFT'::"EventStatus", now(), now());
+
+INSERT INTO "Order" (
+  id, "totalAmount", "userId", "eventId", "dataMode", "createdAt", "updatedAt"
+) VALUES (
+  '${ids.orderId}', 700, '${ids.userId}', '${ids.eventId}', 'LIVE'::"OperationalDataMode", now(), now()
+);
+
+INSERT INTO "Payment" (
+  id, amount, "tenderedAmount", "changeAmount", method, status, "orderId", "createdAt", "updatedAt"
+) VALUES
+-- Tischbestellung ueber createOrder/addPaymentsToOrder/splitPaymentOrder:
+-- CASH ohne Bargeldbeleg.
+('${ids.paymentCashNoTender}', 700, NULL, 0, 'CASH'::"PaymentMethod", 'COMPLETED'::"PaymentStatus", '${ids.orderId}', now(), now()),
+-- Bon-/Stationskasse: CASH mit vollstaendigem Beleg samt Wechselgeld.
+('${ids.paymentCashWithTender}', 700, 1000, 300, 'CASH'::"PaymentMethod", 'COMPLETED'::"PaymentStatus", '${ids.orderId}', now(), now()),
+('${ids.paymentCard}', 700, NULL, 0, 'CARD'::"PaymentMethod", 'COMPLETED'::"PaymentStatus", '${ids.orderId}', now(), now()),
+('${ids.paymentVoucher}', 700, NULL, 0, 'VOUCHER'::"PaymentMethod", 'COMPLETED'::"PaymentStatus", '${ids.orderId}', now(), now()),
+('${ids.paymentRefund}', 200, NULL, 0, 'REFUND'::"PaymentMethod", 'COMPLETED'::"PaymentStatus", '${ids.orderId}', now(), now());
+`;
+}
+
+// Prueft nach "migrate deploy", dass alle fuenf Bestandszahlungen unveraendert
+// geblieben sind (der Constraint darf keine gueltige Zeile anfassen -
+// insbesondere nicht die CASH-Zahlung ohne Bargeldbeleg), dass der Constraint
+// tatsaechlich im Systemkatalog liegt und dass er sowohl unmoegliche
+// Kombinationen abweist als auch eine gueltige Aenderung an der
+// Bar-mit-Beleg-Zahlung weiterhin zulaesst.
+function verifyPaymentTenderMigrationSql(ids) {
+  return `
+-- 1. Alle fuenf Bestandszahlungen sind unveraendert vorhanden.
+DO $$
+DECLARE
+  mismatched int;
+BEGIN
+  SELECT count(*) INTO mismatched FROM (
+    VALUES
+      ('${ids.paymentCashNoTender}', 'CASH', NULL::int, 0),
+      ('${ids.paymentCashWithTender}', 'CASH', 1000, 300),
+      ('${ids.paymentCard}', 'CARD', NULL::int, 0),
+      ('${ids.paymentVoucher}', 'VOUCHER', NULL::int, 0),
+      ('${ids.paymentRefund}', 'REFUND', NULL::int, 0)
+  ) AS expected(id, method, "tenderedAmount", "changeAmount")
+  LEFT JOIN "Payment" p ON p.id = expected.id
+  WHERE p.id IS NULL
+     OR p.method::text <> expected.method
+     OR p."tenderedAmount" IS DISTINCT FROM expected."tenderedAmount"
+     OR p."changeAmount" IS DISTINCT FROM expected."changeAmount";
+  IF mismatched <> 0 THEN
+    RAISE EXCEPTION 'Der Tender-Constraint hat % Bestandszahlung(en) veraendert oder entfernt.', mismatched;
+  END IF;
+END $$;
+
+-- 2. Der Constraint liegt tatsaechlich im Systemkatalog.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'Payment_tender_check'
+  ) THEN
+    RAISE EXCEPTION 'Der CHECK-Constraint Payment_tender_check fehlt nach der Migration.';
+  END IF;
+END $$;
+
+-- 3. Unmoegliche Kombinationen werden abgewiesen, auch bei einem direkten
+--    Zugriff, der den Anwendungscode umgeht.
+DO $$
+DECLARE
+  card_with_tender_rejected boolean := false;
+  cash_without_tender_but_change_rejected boolean := false;
+  voucher_with_change_rejected boolean := false;
+BEGIN
+  BEGIN
+    UPDATE "Payment" SET "tenderedAmount" = 700 WHERE id = '${ids.paymentCard}';
+  EXCEPTION WHEN check_violation THEN
+    card_with_tender_rejected := true;
+  END;
+  IF NOT card_with_tender_rejected THEN
+    RAISE EXCEPTION 'CARD mit gesetztem tenderedAmount wurde von der Datenhaltung nicht abgewiesen.';
+  END IF;
+
+  BEGIN
+    UPDATE "Payment" SET "changeAmount" = 50 WHERE id = '${ids.paymentCashNoTender}';
+  EXCEPTION WHEN check_violation THEN
+    cash_without_tender_but_change_rejected := true;
+  END;
+  IF NOT cash_without_tender_but_change_rejected THEN
+    RAISE EXCEPTION 'CASH ohne tenderedAmount mit changeAmount ungleich 0 wurde von der Datenhaltung nicht abgewiesen.';
+  END IF;
+
+  BEGIN
+    UPDATE "Payment" SET "changeAmount" = 1 WHERE id = '${ids.paymentVoucher}';
+  EXCEPTION WHEN check_violation THEN
+    voucher_with_change_rejected := true;
+  END;
+  IF NOT voucher_with_change_rejected THEN
+    RAISE EXCEPTION 'VOUCHER mit changeAmount ungleich 0 wurde von der Datenhaltung nicht abgewiesen.';
+  END IF;
+END $$;
+
+-- 4. Der Gegenbeweis: eine gueltige Aenderung an der Bar-mit-Beleg-Zahlung
+--    (hoeherer Tenderbetrag, entsprechend angepasstes Wechselgeld) bleibt
+--    erlaubt. Ohne diesen Nachweis waere nicht erkennbar, ob der Constraint
+--    versehentlich jede Aenderung an einer CASH-Zahlung blockiert statt nur
+--    die unmoeglichen Kombinationen.
+DO $$
+BEGIN
+  UPDATE "Payment" SET "tenderedAmount" = 1500, "changeAmount" = 800
+    WHERE id = '${ids.paymentCashWithTender}';
+  UPDATE "Payment" SET "tenderedAmount" = 1000, "changeAmount" = 300
+    WHERE id = '${ids.paymentCashWithTender}';
+
+  IF (SELECT "changeAmount" FROM "Payment" WHERE id = '${ids.paymentCashWithTender}') <> 300 THEN
+    RAISE EXCEPTION 'Eine gueltige Aenderung an der Bar-mit-Beleg-Zahlung wurde faelschlich abgewiesen.';
+  END IF;
+END $$;
+`;
+}
+
+// Fuegt eine bereits verletzende Zahlung ein (method=CASH,
+// tenderedAmount < amount), wie sie vor Issue #165 einzig ueber das
+// Einspielen einer alten JSON-Sicherung entstehen konnte. Wird eingespielt,
+// bevor der neue CHECK-Constraint existiert - danach wuerde schon das INSERT
+// selbst abgewiesen.
+function seedPaymentTenderViolationSql(ids) {
+  return `
+INSERT INTO "User" (id, username, "pinHash", role, "isActive", "createdAt", "updatedAt")
+VALUES ('${ids.userId}', 'migration-payment-tender-violation-user', 'x', 'CASHIER'::"Role", true, now(), now());
+
+INSERT INTO "Event" (id, name, "testMode", status, "createdAt", "updatedAt")
+VALUES ('${ids.eventId}', 'Migrationstest Zahlungs-Tenderregel Verletzung', false, 'DRAFT'::"EventStatus", now(), now());
+
+INSERT INTO "Order" (
+  id, "totalAmount", "userId", "eventId", "dataMode", "createdAt", "updatedAt"
+) VALUES (
+  '${ids.orderId}', 700, '${ids.userId}', '${ids.eventId}', 'LIVE'::"OperationalDataMode", now(), now()
+);
+
+INSERT INTO "Payment" (
+  id, amount, "tenderedAmount", "changeAmount", method, status, "orderId", "createdAt", "updatedAt"
+) VALUES (
+  '${ids.paymentId}', 700, 500, 0, 'CASH'::"PaymentMethod", 'COMPLETED'::"PaymentStatus", '${ids.orderId}', now(), now()
+);
+`;
+}
+
 function dropDatabase(target, database) {
   const literal = database.replaceAll("'", "''");
   psql(
@@ -1362,6 +1550,15 @@ const DATA_MIGRATION_CHECKS = [
     verify: () =>
       verifyEventStatusTestModeMigrationSql(EVENT_STATUS_TESTMODE_SEED),
   },
+  {
+    migration: "20260830100000_add_payment_tender_check",
+    seedLabel:
+      "gültigen Altstand für die Zahlungs-Tenderregel einspielen (CASH mit und ohne Bargeldbeleg, CARD, VOUCHER, REFUND)",
+    seed: () => seedLegacyPaymentTenderSql(PAYMENT_TENDER_SEED),
+    verifyLabel:
+      "Tender-Constraint greift, ohne gültige Bestandszahlungen abzuweisen",
+    verify: () => verifyPaymentTenderMigrationSql(PAYMENT_TENDER_SEED),
+  },
 ];
 
 for (const check of DATA_MIGRATION_CHECKS) {
@@ -1396,6 +1593,13 @@ const eventStatusTestModeMigrationIndex = migrationNames.indexOf(
 );
 if (eventStatusTestModeMigrationIndex < 0) {
   fail(`Migration ${eventStatusTestModeMigration} fehlt.`);
+}
+const paymentTenderMigration = "20260830100000_add_payment_tender_check";
+const paymentTenderMigrationIndex = migrationNames.indexOf(
+  paymentTenderMigration,
+);
+if (paymentTenderMigrationIndex < 0) {
+  fail(`Migration ${paymentTenderMigration} fehlt.`);
 }
 
 try {
@@ -1617,7 +1821,66 @@ try {
   );
 
   console.log(
-    "Migrationstest erfolgreich: leerer Stand, Upgrade-Stand und verständliche Abbrüche bei Duplikaten, veranstaltungsfremden Referenzen sowie einer bestehenden Betriebsart/Testflag-Verletzung sind geprüft.",
+    `Migrationstest auf ${target.hostname}: vorhandene Zahlungs-Tenderregel-Verletzung (Issue #165)`,
+  );
+  recreateDatabase(target, PAYMENT_TENDER_VIOLATION_DATABASE);
+  for (const migrationName of migrationNames.slice(
+    0,
+    paymentTenderMigrationIndex,
+  )) {
+    const sql = readFileSync(
+      resolve(migrationsDir, migrationName, "migration.sql"),
+      "utf8",
+    );
+    psql(target, PAYMENT_TENDER_VIOLATION_DATABASE, sql);
+  }
+  psql(
+    target,
+    PAYMENT_TENDER_VIOLATION_DATABASE,
+    seedPaymentTenderViolationSql(PAYMENT_TENDER_VIOLATION_SEED),
+  );
+  const paymentTenderOutput = psqlExpectFailure(
+    target,
+    PAYMENT_TENDER_VIOLATION_DATABASE,
+    readFileSync(
+      resolve(migrationsDir, paymentTenderMigration, "migration.sql"),
+      "utf8",
+    ),
+    "Der Tender-Constraint fuer Zahlungen kann nicht aktiviert werden",
+  );
+  for (const expectedDetail of [
+    PAYMENT_TENDER_VIOLATION_SEED.paymentId,
+    "method=CASH",
+  ]) {
+    if (!paymentTenderOutput.includes(expectedDetail)) {
+      fail(
+        `Der verständliche Migrationsabbruch nennt das erwartete Detail nicht: ${expectedDetail}`,
+      );
+    }
+  }
+  psql(
+    target,
+    PAYMENT_TENDER_VIOLATION_DATABASE,
+    `DO $$
+     BEGIN
+       IF EXISTS (
+         SELECT 1 FROM pg_constraint WHERE conname = 'Payment_tender_check'
+       ) THEN
+         RAISE EXCEPTION 'Nach dem erwarteten Migrationsabbruch wurde der Constraint dennoch angelegt.';
+       END IF;
+       IF NOT EXISTS (
+         SELECT 1 FROM "Payment"
+         WHERE id = '${PAYMENT_TENDER_VIOLATION_SEED.paymentId}'
+           AND method = 'CASH'::"PaymentMethod"
+           AND "tenderedAmount" = 500
+       ) THEN
+         RAISE EXCEPTION 'Der Migrationsabbruch hat den absichtlich ungültigen Altbestand verändert.';
+       END IF;
+     END $$;`,
+  );
+
+  console.log(
+    "Migrationstest erfolgreich: leerer Stand, Upgrade-Stand und verständliche Abbrüche bei Duplikaten, veranstaltungsfremden Referenzen sowie einer bestehenden Betriebsart/Testflag- und Zahlungs-Tenderregel-Verletzung sind geprüft.",
   );
 } finally {
   dropDatabase(target, EMPTY_DATABASE);
@@ -1625,4 +1888,5 @@ try {
   dropDatabase(target, DUPLICATE_DATABASE);
   dropDatabase(target, INVALID_EVENT_DATABASE);
   dropDatabase(target, EVENT_STATUS_TESTMODE_VIOLATION_DATABASE);
+  dropDatabase(target, PAYMENT_TENDER_VIOLATION_DATABASE);
 }

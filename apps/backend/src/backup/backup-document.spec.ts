@@ -521,4 +521,434 @@ describe("Backup-Dokumentgrenze (Issue #69)", () => {
       BadRequestException,
     );
   });
+
+  // Issue #165: CashierSession.status gegen closingBalance/endTime.
+  describe("CashierSession: status gegen Abschlussfelder (Issue #165)", () => {
+    function sessionRow(overrides: Record<string, unknown>) {
+      return {
+        id: "session-1",
+        userId: "user-1",
+        eventId: "event-1",
+        dataMode: "LIVE",
+        status: "ACTIVE",
+        ...overrides,
+      };
+    }
+    function withSession(session: Record<string, unknown>) {
+      return {
+        ...emptyTables,
+        events: [{ id: "event-1", name: "Fest" }],
+        users: [{ id: "user-1", username: "kassa" }],
+        sessions: [session],
+      };
+    }
+
+    it("verwirft ACTIVE mit bereits gesetztem closingBalance (zweite Schließung würde die erste überschreiben)", () => {
+      expect(() =>
+        parseBackupDocument(
+          document(
+            withSession(
+              sessionRow({
+                status: "ACTIVE",
+                closingBalance: 5000,
+                endTime: "2026-08-29T20:00:00.000Z",
+              }),
+            ),
+          ),
+        ),
+      ).toThrow(BadRequestException);
+    });
+
+    it("verwirft ACTIVE mit gesetztem endTime, aber ohne closingBalance", () => {
+      expect(() =>
+        parseBackupDocument(
+          document(
+            withSession(
+              sessionRow({
+                status: "ACTIVE",
+                endTime: "2026-08-29T20:00:00.000Z",
+              }),
+            ),
+          ),
+        ),
+      ).toThrow(BadRequestException);
+    });
+
+    it("verwirft CLOSED ohne endTime", () => {
+      expect(() =>
+        parseBackupDocument(
+          document(
+            withSession(sessionRow({ status: "CLOSED", closingBalance: 5000 })),
+          ),
+        ),
+      ).toThrow(BadRequestException);
+    });
+
+    it("verwirft CLOSED ohne closingBalance", () => {
+      expect(() =>
+        parseBackupDocument(
+          document(
+            withSession(
+              sessionRow({
+                status: "CLOSED",
+                endTime: "2026-08-29T20:00:00.000Z",
+              }),
+            ),
+          ),
+        ),
+      ).toThrow(BadRequestException);
+    });
+
+    it("akzeptiert ACTIVE ohne jeden Abschluss (offene Sitzung)", () => {
+      const parsed = parseBackupDocument(
+        document(withSession(sessionRow({ status: "ACTIVE" }))),
+      );
+      expect(parsed.data.sessions[0]).toMatchObject({ status: "ACTIVE" });
+    });
+
+    it("akzeptiert CLOSED mit vollständigem Abschluss", () => {
+      const parsed = parseBackupDocument(
+        document(
+          withSession(
+            sessionRow({
+              status: "CLOSED",
+              closingBalance: 0,
+              endTime: "2026-08-29T20:00:00.000Z",
+            }),
+          ),
+        ),
+      );
+      expect(parsed.data.sessions[0]).toMatchObject({ status: "CLOSED" });
+    });
+
+    it("akzeptiert eine alte Sicherung ohne das Statusfeld überhaupt", () => {
+      const parsed = parseBackupDocument(
+        document(
+          withSession({
+            id: "session-1",
+            userId: "user-1",
+            eventId: "event-1",
+          }),
+        ),
+      );
+      expect(parsed.data.sessions).toHaveLength(1);
+    });
+  });
+
+  // Issue #165: Payment.method gegen tenderedAmount/changeAmount.
+  describe("Payment: Zahlungsart gegen Bargeldfelder (Issue #165)", () => {
+    function withPayment(payment: Record<string, unknown>) {
+      return {
+        ...emptyTables,
+        events: [{ id: "event-1", name: "Fest" }],
+        orders: [{ id: "order-1", eventId: "event-1" }],
+        payments: [{ id: "payment-1", orderId: "order-1", ...payment }],
+      };
+    }
+
+    it("verwirft CASH mit tenderedAmount unter dem Betrag", () => {
+      expect(() =>
+        parseBackupDocument(
+          document(
+            withPayment({
+              amount: 700,
+              method: "CASH",
+              tenderedAmount: 500,
+              changeAmount: 0,
+            }),
+          ),
+        ),
+      ).toThrow(BadRequestException);
+    });
+
+    it("verwirft CASH mit falschem Wechselgeld", () => {
+      expect(() =>
+        parseBackupDocument(
+          document(
+            withPayment({
+              amount: 700,
+              method: "CASH",
+              tenderedAmount: 1000,
+              changeAmount: 999,
+            }),
+          ),
+        ),
+      ).toThrow(BadRequestException);
+    });
+
+    it("verwirft CASH ohne tenderedAmount, aber mit changeAmount ungleich 0", () => {
+      expect(() =>
+        parseBackupDocument(
+          document(
+            withPayment({
+              amount: 700,
+              method: "CASH",
+              tenderedAmount: null,
+              changeAmount: 50,
+            }),
+          ),
+        ),
+      ).toThrow(BadRequestException);
+    });
+
+    it.each(["CARD", "VOUCHER", "REFUND"])(
+      "verwirft %s mit gesetztem tenderedAmount",
+      (method) => {
+        expect(() =>
+          parseBackupDocument(
+            document(
+              withPayment({
+                amount: 700,
+                method,
+                tenderedAmount: 700,
+                changeAmount: 0,
+              }),
+            ),
+          ),
+        ).toThrow(BadRequestException);
+      },
+    );
+
+    it.each(["CARD", "VOUCHER", "REFUND"])(
+      "verwirft %s mit changeAmount ungleich 0",
+      (method) => {
+        expect(() =>
+          parseBackupDocument(
+            document(
+              withPayment({
+                amount: 700,
+                method,
+                tenderedAmount: null,
+                changeAmount: 1,
+              }),
+            ),
+          ),
+        ).toThrow(BadRequestException);
+      },
+    );
+
+    it("akzeptiert CASH ohne Bargeldbeleg (Tischbestellung über addPaymentsToOrder/splitPaymentOrder)", () => {
+      const parsed = parseBackupDocument(
+        document(
+          withPayment({
+            amount: 700,
+            method: "CASH",
+            tenderedAmount: null,
+            changeAmount: 0,
+          }),
+        ),
+      );
+      expect(parsed.data.payments[0]).toMatchObject({ method: "CASH" });
+    });
+
+    it("akzeptiert CASH mit vollständigem Bargeldbeleg (Bon-/Stationskasse) inklusive Wechselgeld", () => {
+      const parsed = parseBackupDocument(
+        document(
+          withPayment({
+            amount: 700,
+            method: "CASH",
+            tenderedAmount: 1000,
+            changeAmount: 300,
+          }),
+        ),
+      );
+      expect(parsed.data.payments[0]).toMatchObject({ tenderedAmount: 1000 });
+    });
+
+    it("akzeptiert CASH mit passgenauem Bargeldbeleg ohne Wechselgeld", () => {
+      const parsed = parseBackupDocument(
+        document(
+          withPayment({
+            amount: 350,
+            method: "CASH",
+            tenderedAmount: 350,
+            changeAmount: 0,
+          }),
+        ),
+      );
+      expect(parsed.data.payments[0]).toMatchObject({ changeAmount: 0 });
+    });
+
+    it("akzeptiert CARD ohne Bargeldfelder", () => {
+      const parsed = parseBackupDocument(
+        document(withPayment({ amount: 700, method: "CARD" })),
+      );
+      expect(parsed.data.payments[0]).toMatchObject({ method: "CARD" });
+    });
+
+    it("akzeptiert VOUCHER ohne Bargeldfelder (Wertgutschein-Einlösung)", () => {
+      const parsed = parseBackupDocument(
+        document(withPayment({ amount: 700, method: "VOUCHER" })),
+      );
+      expect(parsed.data.payments[0]).toMatchObject({ method: "VOUCHER" });
+    });
+
+    it("akzeptiert REFUND ohne Bargeldfelder (Pfandauszahlung über dem Bestellwert)", () => {
+      const parsed = parseBackupDocument(
+        document(
+          withPayment({ amount: 200, method: "REFUND", changeAmount: 0 }),
+        ),
+      );
+      expect(parsed.data.payments[0]).toMatchObject({ method: "REFUND" });
+    });
+  });
+
+  // Issue #165: Order.paymentStatus gegen die Summe abgeschlossener Zahlungen.
+  describe("Order: paymentStatus gegen Zahlungssumme (Issue #165)", () => {
+    function order(overrides: Record<string, unknown>) {
+      return { id: "order-1", eventId: "event-1", ...overrides };
+    }
+    function payment(overrides: Record<string, unknown>) {
+      return {
+        id: "payment-1",
+        orderId: "order-1",
+        method: "CARD",
+        status: "COMPLETED",
+        ...overrides,
+      };
+    }
+    function withOrder(
+      orderRow: Record<string, unknown>,
+      payments: Record<string, unknown>[] = [],
+    ) {
+      return {
+        ...emptyTables,
+        events: [{ id: "event-1", name: "Fest" }],
+        orders: [order(orderRow)],
+        payments,
+      };
+    }
+
+    it("verwirft PAID ohne jede Zahlung (der Kernfall aus Issue #165)", () => {
+      expect(() =>
+        parseBackupDocument(
+          document(withOrder({ totalAmount: 700, paymentStatus: "PAID" })),
+        ),
+      ).toThrow(BadRequestException);
+    });
+
+    it("verwirft OPEN trotz vollständig deckender Zahlung", () => {
+      expect(() =>
+        parseBackupDocument(
+          document(
+            withOrder({ totalAmount: 700, paymentStatus: "OPEN" }, [
+              payment({ amount: 700 }),
+            ]),
+          ),
+        ),
+      ).toThrow(BadRequestException);
+    });
+
+    it("verwirft PARTIALLY_PAID, obwohl die Zahlungen den Betrag bereits voll decken", () => {
+      expect(() =>
+        parseBackupDocument(
+          document(
+            withOrder({ totalAmount: 700, paymentStatus: "PARTIALLY_PAID" }, [
+              payment({ amount: 700 }),
+            ]),
+          ),
+        ),
+      ).toThrow(BadRequestException);
+    });
+
+    it("akzeptiert OPEN ohne jede Zahlung", () => {
+      const parsed = parseBackupDocument(
+        document(withOrder({ totalAmount: 700, paymentStatus: "OPEN" })),
+      );
+      expect(parsed.data.orders[0]).toMatchObject({ paymentStatus: "OPEN" });
+    });
+
+    it("akzeptiert PARTIALLY_PAID mit einer Teilzahlung (Splitzahlung)", () => {
+      const parsed = parseBackupDocument(
+        document(
+          withOrder({ totalAmount: 700, paymentStatus: "PARTIALLY_PAID" }, [
+            payment({ amount: 300 }),
+          ]),
+        ),
+      );
+      expect(parsed.data.orders[0]).toMatchObject({
+        paymentStatus: "PARTIALLY_PAID",
+      });
+    });
+
+    it("akzeptiert PAID mit exakt deckender Zahlung", () => {
+      const parsed = parseBackupDocument(
+        document(
+          withOrder({ totalAmount: 700, paymentStatus: "PAID" }, [
+            payment({ amount: 700 }),
+          ]),
+        ),
+      );
+      expect(parsed.data.orders[0]).toMatchObject({ paymentStatus: "PAID" });
+    });
+
+    it("akzeptiert PAID mit CASH- und REFUND-Zeile zusammen (Pfandauszahlung über dem Bestellwert)", () => {
+      const parsed = parseBackupDocument(
+        document(
+          withOrder({ totalAmount: 500, paymentStatus: "PAID" }, [
+            payment({ id: "payment-1", method: "CASH", amount: 500 }),
+            payment({
+              id: "payment-2",
+              method: "REFUND",
+              amount: 200,
+            }),
+          ]),
+        ),
+      );
+      expect(parsed.data.orders[0]).toMatchObject({ paymentStatus: "PAID" });
+    });
+
+    it("akzeptiert eine stornierte Bestellung, deren paymentStatus vom Storno unberührt bleibt (PAID bleibt PAID)", () => {
+      const parsed = parseBackupDocument(
+        document(
+          withOrder(
+            {
+              totalAmount: 700,
+              paymentStatus: "PAID",
+              lifecycleStatus: "CANCELLED",
+            },
+            [payment({ amount: 700 })],
+          ),
+        ),
+      );
+      expect(parsed.data.orders[0]).toMatchObject({
+        lifecycleStatus: "CANCELLED",
+        paymentStatus: "PAID",
+      });
+    });
+
+    it("akzeptiert PAID mit mehreren Zahlungen (Bar- und Kartenanteil), deren Summe exakt trifft", () => {
+      const parsed = parseBackupDocument(
+        document(
+          withOrder({ totalAmount: 1000, paymentStatus: "PAID" }, [
+            payment({
+              id: "payment-1",
+              method: "CASH",
+              amount: 400,
+              tenderedAmount: 400,
+              changeAmount: 0,
+            }),
+            payment({ id: "payment-2", method: "CARD", amount: 600 }),
+          ]),
+        ),
+      );
+      expect(parsed.data.orders[0]).toMatchObject({ paymentStatus: "PAID" });
+    });
+
+    it("akzeptiert paymentStatus REFUNDED unabhängig von der Zahlungssumme (kein Schreibpfad bekannt, bleibt ungeprüft)", () => {
+      const parsed = parseBackupDocument(
+        document(withOrder({ totalAmount: 700, paymentStatus: "REFUNDED" })),
+      );
+      expect(parsed.data.orders[0]).toMatchObject({
+        paymentStatus: "REFUNDED",
+      });
+    });
+
+    it("akzeptiert eine alte Bestellung ohne paymentStatus-Feld überhaupt", () => {
+      const parsed = parseBackupDocument(
+        document(withOrder({ totalAmount: 700 })),
+      );
+      expect(parsed.data.orders[0]).not.toHaveProperty("paymentStatus");
+    });
+  });
 });

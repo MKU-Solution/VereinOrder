@@ -519,6 +519,23 @@ enum PaymentStatus {
   REFUNDED
 }
 
+// Die Migration 20260830100000_add_payment_tender_check legt auf dieser
+// Tabelle den CHECK-Constraint "Payment_tender_check" an: fuer CASH ist
+// tenderedAmount ENTWEDER NULL (dann muss changeAmount 0 sein) ODER >=
+// amount (dann muss changeAmount die exakte Differenz sein); CARD, VOUCHER
+// und REFUND duerfen tenderedAmount nie setzen und changeAmount muss 0
+// bleiben. Das ist bewusst schwaecher als "CASH verlangt immer
+// tenderedAmount": orders.service.ts erfasst eine Barzahlung ueber
+// createOrder (Tischbestellung), addPaymentsToOrder und splitPaymentOrder
+// ausdruecklich ohne Bargeldbeleg (tenderedAmount bleibt weg), waehrend
+// createQuickSale/createStationSale (Bon-/Stationskasse) und die
+// Restzahlung in value-vouchers.service.ts ihn immer vollstaendig
+// mitschreiben (siehe Issue #165). Eine strengere Regel wuerde die
+// alltaegliche Tischbestellung als Defekt ablehnen - siehe dazu die
+// fachliche Pruefung in backup-document.ts, deren Formel hier woertlich in
+// SQL uebersetzt ist. Prisma kennt keine CHECK-Constraints und stellt ihn
+// im Schema nicht dar. Nicht wegmigrieren, sondern bei einer Aenderung an
+// den Schreibpfaden ausdruecklich neu setzen.
 model Payment {
   id             String        @id @default(uuid())
   amount         Int // charged amount in cents

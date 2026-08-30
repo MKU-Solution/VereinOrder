@@ -478,6 +478,27 @@ function validateReferences(data: Record<TableName, BackupRow[]>) {
   for (const row of data.sessions) {
     if (typeof row.userId === "string" && !users.has(row.userId)) invalid();
   }
+  // Fachliche Konsistenzprüfung für CashierSession.status gegen die
+  // Abschlussfelder (Issue #165). sessions.service.ts kennt genau zwei
+  // Schreibpfade: startSession legt eine Zeile ausschließlich mit
+  // status=ACTIVE und ohne closingBalance/endTime an; closeSession setzt
+  // status=CLOSED, closingBalance und endTime immer gemeinsam in einem
+  // einzigen update(). Kein Pfad ändert eines der drei Felder unabhängig
+  // von den anderen - jede andere Kombination (ACTIVE mit bereits gesetztem
+  // Abschluss, oder CLOSED ohne vollständigen Abschluss) ist unmöglich und
+  // würde sonst eine zweite Schließung an "status: ACTIVE" vorbeischleusen
+  // (siehe Issue-Beschreibung: getActiveSession/startSession filtern nur auf
+  // status).
+  for (const row of data.sessions) {
+    if (typeof row.status !== "string") continue;
+    const closed = row.closingBalance != null || row.endTime != null;
+    if (row.status === "ACTIVE" && closed) invalid();
+    if (
+      row.status === "CLOSED" &&
+      (row.closingBalance == null || row.endTime == null)
+    )
+      invalid();
+  }
   for (const row of data.orders) {
     if (typeof row.userId === "string" && !users.has(row.userId)) invalid();
     if (typeof row.areaId === "string" && areas.get(row.areaId) !== row.eventId)
@@ -505,6 +526,85 @@ function validateReferences(data: Record<TableName, BackupRow[]>) {
       !sessions.has(row.cashierSessionId)
     )
       invalid();
+  }
+  // Fachliche Tender-Regel für Payment.method gegen tenderedAmount/
+  // changeAmount (Issue #165), aus allen Schreibpfaden abgeleitet:
+  // - orders.service.ts createOrder (Tischbestellung), addPaymentsToOrder
+  //   und splitPaymentOrder erfassen CASH/CARD ohne tenderedAmount zu
+  //   setzen - dort bleiben beide Felder leer (changeAmount fällt auf den
+  //   Datenbank-Default 0 zurück), auch bei CASH.
+  // - createQuickSale/createStationSale (Bon-/Stationskasse) und die
+  //   Restzahlung in value-vouchers.service.ts (redeemValueVoucher) belegen
+  //   CASH dagegen immer vollständig: tenderedAmount >= amount und
+  //   changeAmount als exakte Differenz.
+  // - CARD, VOUCHER und REFUND tragen tenderedAmount an keinem Schreibpfad
+  //   je einen Wert; changeAmount bleibt für sie immer 0.
+  // CASH ist also NICHT auf "tenderedAmount immer gesetzt" einschränkbar -
+  // das würde die alltägliche Tischbestellung ohne Bargeldbeleg (siehe oben)
+  // als Defekt ablehnen. Erlaubt sind für CASH deshalb zwei Formen; für
+  // CARD/VOUCHER/REFUND nur die beleglose.
+  for (const row of data.payments) {
+    if (typeof row.method !== "string") continue;
+    const tendered = row.tenderedAmount;
+    const change = row.changeAmount ?? 0;
+    const hasTender = tendered != null;
+    if (row.method === "CASH") {
+      if (hasTender) {
+        if (
+          !Number.isInteger(tendered) ||
+          !Number.isInteger(row.amount) ||
+          tendered < row.amount ||
+          change !== tendered - row.amount
+        )
+          invalid();
+      } else if (change !== 0) {
+        invalid();
+      }
+    } else if (["CARD", "VOUCHER", "REFUND"].includes(row.method)) {
+      if (hasTender || change !== 0) invalid();
+    }
+  }
+  // Fachliche Konsistenzprüfung für Order.paymentStatus gegen die Summe der
+  // abgeschlossenen Zahlungen (Issue #165). paymentStatus wird nie
+  // unabhängig geschrieben: createOrder setzt den Anfangszustand exakt nach
+  // dieser Regel (totalPaid >= totalAmount ? PAID : totalPaid > 0 ?
+  // PARTIALLY_PAID : OPEN), createQuickSale/createStationSale setzen PAID
+  // nur zusammen mit einer Zahlung über den vollen (bereits um
+  // depositRefundTotal reduzierten) totalAmount, und
+  // addPaymentsToOrder/splitPaymentOrder sowie
+  // value-vouchers.service.ts (redeemValueVoucher) wenden dieselbe
+  // ">= totalAmount"-Schwelle beim Nachtragen weiterer Zahlungen an. Eine
+  // REFUND-Zeile darf in der Summe mitgezählt werden: sie kommt laut
+  // Schreibpfad ausschließlich zusammen mit einer im selben Schritt bereits
+  // auf PAID gesetzten Bestellung vor und kann die Summe daher nur über
+  // totalAmount heben, nie unter sie drücken. OrderPaymentStatus kennt
+  // zusätzlich REFUNDED; kein Schreibpfad setzt diesen Wert, seine Semantik
+  // ist ungeklärt - er bleibt hier bewusst ungeprüft statt geraten.
+  const completedPaymentSumByOrder = new Map<string, number>();
+  for (const payment of data.payments) {
+    if (
+      typeof payment.orderId !== "string" ||
+      payment.status !== "COMPLETED" ||
+      !Number.isInteger(payment.amount)
+    )
+      continue;
+    completedPaymentSumByOrder.set(
+      payment.orderId,
+      (completedPaymentSumByOrder.get(payment.orderId) ?? 0) + payment.amount,
+    );
+  }
+  for (const order of data.orders) {
+    if (
+      typeof order.paymentStatus !== "string" ||
+      order.paymentStatus === "REFUNDED" ||
+      !Number.isInteger(order.totalAmount) ||
+      typeof order.id !== "string"
+    )
+      continue;
+    const sum = completedPaymentSumByOrder.get(order.id) ?? 0;
+    const expected =
+      sum >= order.totalAmount ? "PAID" : sum > 0 ? "PARTIALLY_PAID" : "OPEN";
+    if (order.paymentStatus !== expected) invalid();
   }
   for (const row of data.vouchers) {
     if (typeof row.productId === "string" && !products.has(row.productId))
