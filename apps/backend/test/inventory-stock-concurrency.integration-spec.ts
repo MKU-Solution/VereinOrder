@@ -17,6 +17,8 @@ type Fixture = {
   eventId: string;
   userId: string;
   categoryId: string;
+  printerId: string;
+  cashierSessionId: string;
 };
 
 type Settled<T> =
@@ -39,10 +41,32 @@ function settle<T>(promise: Promise<T>): Promise<Settled<T>> {
 }
 
 /**
- * PostgreSQL-Waechtertest fuer Issue #141. Jede parallele Bestellung bekommt
- * einen eigenen Prisma-Client, damit Locks nicht nur innerhalb einer einzigen
- * Verbindung simuliert werden. Die Datenbank wird ausschliesslich unter dem
- * exakt guard-geprueften Namen angelegt und im Anschluss entfernt.
+ * PostgreSQL-Waechtertest fuer Issue #141, erweitert um Issue #153. Jede
+ * parallele Bestellung bekommt einen eigenen Prisma-Client, damit Locks nicht
+ * nur innerhalb einer einzigen Verbindung simuliert werden. Die Datenbank
+ * wird ausschliesslich unter dem exakt guard-geprueften Namen angelegt und im
+ * Anschluss entfernt.
+ *
+ * Wichtiger Vorbehalt (Issue #153): Die Faelle "Verkauf gegen Verkauf" weiter
+ * unten (Bestand 1, 20 parallele Verkaeufe, A/B-Deadlockvermeidung,
+ * Idempotenzschluessel, Warnschwelle) haengen faktisch an der
+ * Veranstaltungssperre in OrdersService (`SELECT ... FROM "Event" ...
+ * FOR UPDATE`, siehe orders.service.ts createOrder/createQuickSale): Diese
+ * serialisiert ohnehin jeden Verkauf derselben Veranstaltung, bevor
+ * InventoryService.reserveSale ueberhaupt erreicht wird. Empirisch belegt in
+ * #141: mit entfernter Sperre in reserveSale blieben alle acht damaligen
+ * Faelle gruen. Faellt die Veranstaltungssperre irgendwann weg - etwa aus
+ * Gruenden des Durchsatzes -, bemerkt KEINER dieser Faelle die dann
+ * entstehende Luecke zwischen zwei gleichzeitigen Verkaeufen. Die einzigen
+ * Faelle, die reserveSale ohne diese Maskierung pruefen, sind die
+ * Korrektur-/Einstellungs-/Doppelkorrektur-Faelle weiter unten (sie nehmen
+ * die Veranstaltungssperre nicht) sowie der Fall "erzwingt echten Wettlauf
+ * zwischen zwei direkten reserveSale-Aufrufen", der reserveSale bewusst ohne
+ * jede Serviceschicht aufruft und damit auch das Szenario "Veranstaltungs-
+ * sperre entfernt" fuer die Nicht-Negativitaet abdeckt. Ein Vorschlag fuer
+ * einen Hinweiskommentar direkt an der Sperre in orders.service.ts steht im
+ * Abschlussbericht zu Issue #153; die Entscheidung darueber liegt bei der
+ * Projektleitung.
  */
 describe("Bestandsfuehrung – PostgreSQL-Nebenläufigkeit (#141)", () => {
   const controlUrl = process.env.DATABASE_URL;
@@ -85,7 +109,28 @@ describe("Bestandsfuehrung – PostgreSQL-Nebenläufigkeit (#141)", () => {
     const category = await prisma.productCategory.create({
       data: { name: `Inventory category ${suffix}`, eventId: event.id },
     });
-    fixture = { eventId: event.id, userId: user.id, categoryId: category.id };
+    const printer = await prisma.printer.create({
+      data: {
+        name: `Inventory printer ${suffix}`,
+        type: "CONSOLE",
+        isActive: true,
+      },
+    });
+    const cashierSession = await prisma.cashierSession.create({
+      data: {
+        userId: user.id,
+        eventId: event.id,
+        dataMode: "TEST",
+        startingBalance: 0,
+      },
+    });
+    fixture = {
+      eventId: event.id,
+      userId: user.id,
+      categoryId: category.id,
+      printerId: printer.id,
+      cashierSessionId: cashierSession.id,
+    };
   }, 120_000);
 
   afterAll(async () => {
@@ -604,6 +649,288 @@ describe("Bestandsfuehrung – PostgreSQL-Nebenläufigkeit (#141)", () => {
     await expectStockAndLedger(product.id, 0, 3);
   }, 60_000);
 
+  /**
+   * Issue #153, Nachbarpfad 1: InventoryService.settings (manualBlocked)
+   * nimmt wie mutate keine Veranstaltungssperre. Ein Verkauf, der waehrend
+   * einer laufenden Sperrung in die Warteschlange derselben Bestandszeile
+   * geraet, darf den vor der Sperrung gelesenen Bestand nicht nutzen -
+   * reserveSale muss manualBlocked nach dem Erhalt des Zeilenlocks frisch
+   * lesen, nicht aus einem fruehen, ungesicherten Schnappschuss.
+   */
+  it("laesst eine waehrend des Verkaufs gesetzte manuelle Sperre nicht am parallelen Verkauf vorbeirechnen", async () => {
+    const product = await productWithStock("settings-race", 1);
+    const gate = await holdInventoryRowLock(product.id);
+
+    const settings = settle(
+      settingsOnSeparateConnection(product.id, { manualBlocked: true }),
+    );
+    const blockedAfterSettings = await waitForBlockedBackends(
+      1,
+      "Sperrung wartet auf die Bestandszeile",
+    );
+    const sale = settle(
+      createOrderOnSeparateConnection(
+        product.id,
+        [{ productId: product.id, quantity: 1 }],
+        `settings-race-${randomUUID()}`,
+      ),
+    );
+    const blockedDuringRace = await waitForBlockedBackends(
+      2,
+      "Sperrung und Verkauf warten gleichzeitig auf dieselbe Bestandszeile",
+    );
+    await gate.release();
+    const [settingsResult, saleResult] = await Promise.all([settings, sale]);
+
+    expect(blockedAfterSettings).toBeGreaterThanOrEqual(1);
+    expect(blockedDuringRace).toBeGreaterThanOrEqual(2);
+    // Die Sperrung haelt den Lock zuerst und gewinnt daher; der Verkauf muss
+    // sie danach beim erneuten Lesen unter dem Zeilenlock sehen.
+    expect(settingsResult.status).toBe("fulfilled");
+    expect(saleResult.status).toBe("rejected");
+    expect(
+      saleResult.status === "rejected"
+        ? saleResult.reason?.getResponse?.()?.code
+        : null,
+    ).toBe("PRODUCT_UNAVAILABLE");
+
+    const stock = await prisma.inventoryStock.findUniqueOrThrow({
+      where: {
+        productId_eventId_dataMode: {
+          productId: product.id,
+          eventId: fixture.eventId,
+          dataMode: "TEST",
+        },
+      },
+    });
+    expect(stock.manualBlocked).toBe(true);
+    expect(stock.stockQuantity).toBe(1);
+    expect(
+      await prisma.inventoryMovement.count({
+        where: { productId: product.id, type: "SALE" },
+      }),
+    ).toBe(0);
+    expect(
+      await prisma.orderItem.count({ where: { productId: product.id } }),
+    ).toBe(0);
+  }, 60_000);
+
+  /**
+   * Issue #153, Nachbarpfad 3: zwei gleichzeitige Korrekturen desselben
+   * Produkts. mutate() laeuft unter Serializable-Isolation; ohne sie wuerde
+   * die zuerst blockierte Korrektur beim spaeteren Entsperren einfach mit
+   * veraltetem "before" weiterschreiben (letzter Schreiber gewinnt, ohne
+   * Fehler) und die Ledgerkette risse zwischen den beiden Bewegungen. Unter
+   * Serializable muss stattdessen genau eine der beiden mit einem
+   * Serialisierungskonflikt scheitern.
+   */
+  it("laesst von zwei gleichzeitigen Korrekturen genau eine gewinnen und die andere mit Serialisierungskonflikt scheitern", async () => {
+    const product = await productWithStock("double-correction", 1);
+    const gate = await holdInventoryRowLock(product.id);
+
+    const correctionA = settle(
+      correctStockOnSeparateConnection(product.id, 10, "Korrektur A"),
+    );
+    const blockedAfterFirst = await waitForBlockedBackends(
+      1,
+      "erste Korrektur wartet auf die Bestandszeile",
+    );
+    const correctionB = settle(
+      correctStockOnSeparateConnection(product.id, 20, "Korrektur B"),
+    );
+    const blockedDuringRace = await waitForBlockedBackends(
+      2,
+      "beide Korrekturen warten gleichzeitig auf dieselbe Bestandszeile",
+    );
+    await gate.release();
+    const [resultA, resultB] = await Promise.all([correctionA, correctionB]);
+
+    expect(blockedAfterFirst).toBeGreaterThanOrEqual(1);
+    expect(blockedDuringRace).toBeGreaterThanOrEqual(2);
+    const settled = [resultA, resultB];
+    expect(
+      settled.filter((result) => result.status === "fulfilled"),
+    ).toHaveLength(1);
+    expect(
+      settled.filter((result) => result.status === "rejected"),
+    ).toHaveLength(1);
+
+    const movements = await prisma.inventoryMovement.findMany({
+      where: {
+        productId: product.id,
+        eventId: fixture.eventId,
+        dataMode: "TEST",
+        type: "CORRECTION",
+      },
+      orderBy: { createdAt: "asc" },
+    });
+    // Genau eine Korrektur darf ihre Bewegung geschrieben haben - die
+    // scheiternde Transaktion wird vollstaendig zurueckgerollt.
+    expect(movements).toHaveLength(1);
+    expect(movements[0].quantityBefore).toBe(1);
+    const stock = await prisma.inventoryStock.findUniqueOrThrow({
+      where: {
+        productId_eventId_dataMode: {
+          productId: product.id,
+          eventId: fixture.eventId,
+          dataMode: "TEST",
+        },
+      },
+    });
+    // Der Endstand muss exakt dem Ergebnis der gewinnenden Korrektur
+    // entsprechen (10 oder 20) - kein stiller Mittelwert, kein Verlust.
+    expect(movements[0].quantityAfter).toBe(stock.stockQuantity);
+    expect([10, 20]).toContain(stock.stockQuantity);
+  }, 60_000);
+
+  /**
+   * Issue #153, Nachbarpfad 4: Gegenstueck zum Fall "correction-race" weiter
+   * oben, diesmal ueber die Bonkasse (createQuickSale) statt ueber
+   * createOrder. Beide Verkaufswege rufen InventoryService.reserveSale
+   * gleich auf, aber ueber unterschiedlichen umgebenden Code - ein
+   * kuenftiger Unterschied dort waere sonst blind.
+   */
+  it("laesst eine Bestandskorrektur ohne Veranstaltungssperre auch nicht am parallelen Bonverkauf vorbeirechnen", async () => {
+    const product = await productWithStock("quicksale-correction-race", 1);
+    const gate = await holdInventoryRowLock(product.id);
+
+    const correction = settle(
+      correctStockOnSeparateConnection(
+        product.id,
+        5,
+        "Nachlieferung waehrend des Bonverkaufs",
+      ),
+    );
+    const blockedAfterCorrection = await waitForBlockedBackends(
+      1,
+      "Korrektur wartet auf die Bestandszeile",
+    );
+    const sale = settle(
+      createQuickSaleOnSeparateConnection(
+        [{ productId: product.id, quantity: 1 }],
+        `quicksale-correction-race-${randomUUID()}`,
+      ),
+    );
+    const blockedDuringRace = await waitForBlockedBackends(
+      2,
+      "Korrektur und Bonverkauf warten gleichzeitig auf dieselbe Bestandszeile",
+    );
+    await gate.release();
+    const [correctionResult, saleResult] = await Promise.all([
+      correction,
+      sale,
+    ]);
+
+    expect(blockedAfterCorrection).toBeGreaterThanOrEqual(1);
+    expect(blockedDuringRace).toBeGreaterThanOrEqual(2);
+    expect(correctionResult.status).toBe("fulfilled");
+    expect(saleResult.status).toBe("fulfilled");
+
+    const movements = await prisma.inventoryMovement.findMany({
+      where: {
+        productId: product.id,
+        eventId: fixture.eventId,
+        dataMode: "TEST",
+      },
+      orderBy: { createdAt: "asc" },
+    });
+    expect(
+      movements.filter((movement) => movement.type === "CORRECTION"),
+    ).toEqual([
+      expect.objectContaining({
+        quantityBefore: 1,
+        quantityDelta: 4,
+        quantityAfter: 5,
+      }),
+    ]);
+    expect(movements.filter((movement) => movement.type === "SALE")).toEqual([
+      expect.objectContaining({
+        quantityBefore: 5,
+        quantityDelta: -1,
+        quantityAfter: 4,
+      }),
+    ]);
+    await expectStockAndLedger(product.id, 4, 1);
+  }, 60_000);
+
+  /**
+   * Issue #153, Nachbarpfad 5 (Nicht-Negativitaet): reserveSale wird hier
+   * bewusst OHNE OrdersService aufgerufen, also ohne die Veranstaltungssperre,
+   * die in #141 alle acht Faelle maskierte. Das ist die einzige Stelle in
+   * dieser Datei, an der zwei Verkaeufe wirklich unmaskiert um dieselbe
+   * Bestandszeile konkurrieren - und damit der Fall, der sich meldet, sollte
+   * die Veranstaltungssperre je aus Durchsatzgruenden entfallen.
+   *
+   * Befund aus dem Rot-Beweis (Abschlussbericht zu #153): Bestand ist
+   * DREIFACH abgesichert, nicht nur durch reserveSale. Neben dem
+   * Zeilenlock+Vor-Check und der Mengenbedingung im atomaren UPDATE (beide
+   * einzeln bereits hinreichend) existiert zusaetzlich ein
+   * Datenbank-Check-Constraint ("InventoryStock_quantities_nonnegative_check",
+   * Migration 20260829100000) direkt auf der Spalte. Werden BEIDE
+   * Anwendungssicherungen zugleich entfernt, faengt dieser Constraint den
+   * Schreibversuch trotzdem ab - der Bestand faellt nie unter null. Die
+   * zweite Anfrage scheitert dann aber nicht mehr mit der sauberen
+   * INVENTORY_INSUFFICIENT-Ablehnung, sondern mit einem rohen, unbehandelten
+   * Postgres-Fehler (Prisma P2010 / SQLSTATE 23514) ohne getResponse().
+   * Genau das ist der Rot-Beweis dieses Falls: nicht "Bestand negativ",
+   * sondern "Ablehnung nicht mehr sauber typisiert" - fuer Aufrufer
+   * ohne Sonderbehandlung waere das ein unerwarteter 500 statt eines
+   * geordneten 409. Der Datenbank-Constraint selbst wird hier bewusst NICHT
+   * angetastet (Schemaaenderung waere ausserhalb des Testrahmens); er bleibt
+   * die tatsaechlich unbedingte letzte Instanz.
+   */
+  it("erzwingt echten Wettlauf zwischen zwei direkten reserveSale-Aufrufen und verhindert negativen Bestand", async () => {
+    const product = await productWithStock("reserve-sale-direct-race", 1);
+    const gate = await holdInventoryRowLock(product.id);
+
+    const first = settle(reserveSaleOnSeparateConnection(product.id, 1));
+    const blockedAfterFirst = await waitForBlockedBackends(
+      1,
+      "erste reserveSale-Anfrage wartet auf die Bestandszeile",
+    );
+    const second = settle(reserveSaleOnSeparateConnection(product.id, 1));
+    const blockedDuringRace = await waitForBlockedBackends(
+      2,
+      "beide reserveSale-Anfragen warten gleichzeitig auf dieselbe Bestandszeile",
+    );
+    await gate.release();
+    const [resultFirst, resultSecond] = await Promise.all([first, second]);
+
+    expect(blockedAfterFirst).toBeGreaterThanOrEqual(1);
+    expect(blockedDuringRace).toBeGreaterThanOrEqual(2);
+    const settled = [resultFirst, resultSecond];
+    expect(
+      settled.filter((result) => result.status === "fulfilled"),
+    ).toHaveLength(1);
+    const rejected = settled.filter((result) => result.status === "rejected");
+    expect(rejected).toHaveLength(1);
+    // Die Ablehnung muss eine saubere, typisierte Geschaeftsausnahme sein -
+    // kein roher, unbehandelter Datenbankfehler. Nur diese Zeile
+    // unterscheidet den Rot- vom Gruen-Zustand: der Endbestand selbst bleibt
+    // in beiden Faellen bei 0, weil der Datenbank-Check-Constraint als
+    // dritte, unbedingte Schicht ohnehin eingreift (siehe Kopfkommentar).
+    expect(
+      rejected[0].status === "rejected"
+        ? rejected[0].reason?.getResponse?.()?.code
+        : null,
+    ).toBe("INVENTORY_INSUFFICIENT");
+
+    const stock = await prisma.inventoryStock.findUniqueOrThrow({
+      where: {
+        productId_eventId_dataMode: {
+          productId: product.id,
+          eventId: fixture.eventId,
+          dataMode: "TEST",
+        },
+      },
+    });
+    // Beobachtung, kein alleiniger Beweis (siehe oben): der Bestand darf
+    // niemals unter null fallen, auch nicht voruebergehend innerhalb der
+    // erzwungenen Warteschlange.
+    expect(stock.stockQuantity).toBe(0);
+    expect(stock.stockQuantity).toBeGreaterThanOrEqual(0);
+  }, 60_000);
+
   function inventoryBroadcasts(productId: string, fromIndex = 0) {
     return realtimeEvents
       .slice(fromIndex)
@@ -705,6 +1032,96 @@ describe("Bestandsfuehrung – PostgreSQL-Nebenläufigkeit (#141)", () => {
         },
         fixture.userId,
       );
+    } finally {
+      await connection.$disconnect();
+    }
+  }
+
+  async function settingsOnSeparateConnection(
+    productId: string,
+    input: { lowStockThreshold?: number; manualBlocked?: boolean },
+  ) {
+    const connection = new PrismaClient({
+      datasources: { db: { url: targetUrl } },
+    });
+    try {
+      await connection.$connect();
+      const inventory = new InventoryService(connection, realtime as any);
+      return await inventory.settings(
+        productId,
+        {
+          eventId: fixture.eventId,
+          dataMode: "TEST",
+          ...input,
+        },
+        fixture.userId,
+      );
+    } finally {
+      await connection.$disconnect();
+    }
+  }
+
+  /**
+   * Ruft InventoryService.reserveSale direkt auf, ohne OrdersService und
+   * damit ohne die Veranstaltungssperre. Die Reservierung wird sofort in
+   * einer eigenen, leeren Transaktion committet - fuer den Nachweis der
+   * Nicht-Negativitaet reicht der Effekt auf "InventoryStock" allein, ein
+   * vollstaendiger Verkauf mit Bestellung und SALE-Ledger ist hier nicht der
+   * Pruefgegenstand.
+   */
+  async function reserveSaleOnSeparateConnection(
+    productId: string,
+    quantity: number,
+  ) {
+    const connection = new PrismaClient({
+      datasources: { db: { url: targetUrl } },
+    });
+    try {
+      await connection.$connect();
+      const inventory = new InventoryService(connection, realtime as any);
+      return await connection.$transaction(
+        (tx) =>
+          inventory.reserveSale(tx, {
+            eventId: fixture.eventId,
+            dataMode: "TEST",
+            lines: [
+              {
+                productId,
+                quantity,
+                productName: "reserve-sale-direct-race",
+                manualAvailability: "AVAILABLE",
+              },
+            ],
+          }),
+        { timeout: 30_000, maxWait: 30_000 },
+      );
+    } finally {
+      await connection.$disconnect();
+    }
+  }
+
+  async function createQuickSaleOnSeparateConnection(
+    items: { productId: string; quantity: number }[],
+    idempotencyKey: string,
+  ) {
+    const connection = new PrismaClient({
+      datasources: { db: { url: targetUrl } },
+    });
+    try {
+      await connection.$connect();
+      const inventory = new InventoryService(connection, realtime as any);
+      const service = new OrdersService(
+        connection,
+        new AuditService(connection),
+        inventory,
+      );
+      return await service.createQuickSale(fixture.userId, {
+        eventId: fixture.eventId,
+        idempotencyKey,
+        items,
+        paymentMethod: "CASH",
+        tenderedAmount: items.length * 100,
+      } as any);
     } finally {
       await connection.$disconnect();
     }
