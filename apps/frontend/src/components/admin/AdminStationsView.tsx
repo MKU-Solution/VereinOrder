@@ -1,8 +1,9 @@
 import { useMemo, useState } from "react";
-import { Edit2, Printer, Store, Trash2 } from "lucide-react";
+import { Edit2, Printer, Store } from "lucide-react";
 
 import { AdminEmptyState } from "./AdminEmptyState";
 import { AdminToolbar } from "./AdminToolbar";
+import { UserActiveBadge } from "./AdminStatusBadge";
 
 export interface AdminStationsViewProps {
   stations: any[];
@@ -10,7 +11,6 @@ export interface AdminStationsViewProps {
   onRefresh: () => void;
   onOpenCreate: () => void;
   onEdit: (station: any) => void;
-  onDelete: (id: string) => void;
   isRefreshing?: boolean;
 }
 
@@ -20,7 +20,6 @@ export const AdminStationsView = ({
   onRefresh,
   onOpenCreate,
   onEdit,
-  onDelete,
   isRefreshing = false,
 }: AdminStationsViewProps) => {
   const [searchQuery, setSearchQuery] = useState("");
@@ -112,6 +111,7 @@ export const AdminStationsView = ({
                     <th className="px-5 py-3.5">Station</th>
                     <th className="px-4 py-3.5">Kurzbezeichnung</th>
                     <th className="px-4 py-3.5">Bondrucker</th>
+                    <th className="px-4 py-3.5">Status</th>
                     <th className="px-4 py-3.5">Sortierung</th>
                     <th className="px-5 py-3.5 text-right">Aktionen</th>
                   </tr>
@@ -162,6 +162,11 @@ export const AdminStationsView = ({
                             </span>
                           )}
                         </td>
+                        <td className="px-4 py-4">
+                          <UserActiveBadge
+                            isActive={station.isActive ?? true}
+                          />
+                        </td>
                         <td className="px-4 py-4 text-xs font-mono text-slate-400">
                           Reihenfolge: {station.sortOrder ?? 0}
                         </td>
@@ -175,15 +180,6 @@ export const AdminStationsView = ({
                               aria-label={`Station ${station.name} bearbeiten`}
                             >
                               <Edit2 aria-hidden="true" className="h-4 w-4" />
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => onDelete(station.id)}
-                              className="inline-flex min-h-9 min-w-9 items-center justify-center rounded-lg border border-rose-500/30 bg-rose-500/20 p-2 text-rose-300 hover:bg-rose-500/30 hover:text-rose-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-200"
-                              title="Station löschen"
-                              aria-label={`Station ${station.name} löschen`}
-                            >
-                              <Trash2 aria-hidden="true" className="h-4 w-4" />
                             </button>
                           </div>
                         </td>
@@ -225,6 +221,9 @@ export const AdminStationsView = ({
                           </span>
                         </div>
                       )}
+                      <div className="mt-1.5">
+                        <UserActiveBadge isActive={station.isActive ?? true} />
+                      </div>
                     </div>
 
                     <div className="flex shrink-0 items-center gap-2">
@@ -236,15 +235,6 @@ export const AdminStationsView = ({
                         aria-label={`Station ${station.name} bearbeiten`}
                       >
                         <Edit2 aria-hidden="true" className="h-4 w-4" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => onDelete(station.id)}
-                        className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-xl border border-rose-500/30 bg-rose-500/20 p-2.5 text-rose-300 hover:bg-rose-500/30 focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-200"
-                        title="Station löschen"
-                        aria-label={`Station ${station.name} löschen`}
-                      >
-                        <Trash2 aria-hidden="true" className="h-4 w-4" />
                       </button>
                     </div>
                   </div>

@@ -30,7 +30,6 @@ describe("AdminCategoriesView", () => {
         onRefresh={vi.fn()}
         onOpenCreate={vi.fn()}
         onEdit={vi.fn()}
-        onDelete={vi.fn()}
       />,
     );
 
@@ -46,5 +45,25 @@ describe("AdminCategoriesView", () => {
 
     expect(screen.getAllByText("Getränke").length).toBeGreaterThan(0);
     expect(screen.queryByText("Speisen")).not.toBeInTheDocument();
+  });
+
+  // Issue #168: Warengruppen haben kein isActive-Feld und keine
+  // Backend-Löschroute; der frühere Löschknopf traf ins Leere und wurde
+  // ersatzlos entfernt. Eine Deaktivierung bräuchte eine Schemaänderung
+  // (eigenes Issue), sie wird hier bewusst nicht mitgebaut.
+  it("zeigt keinen Löschen-Knopf mehr (Issue #168)", () => {
+    render(
+      <AdminCategoriesView
+        categories={mockCategories}
+        stationsList={mockStations}
+        onRefresh={vi.fn()}
+        onOpenCreate={vi.fn()}
+        onEdit={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.queryByRole("button", { name: /löschen/i }),
+    ).not.toBeInTheDocument();
   });
 });

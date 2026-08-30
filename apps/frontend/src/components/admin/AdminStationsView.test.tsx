@@ -32,7 +32,6 @@ describe("AdminStationsView", () => {
         onRefresh={vi.fn()}
         onOpenCreate={vi.fn()}
         onEdit={vi.fn()}
-        onDelete={vi.fn()}
       />,
     );
 
@@ -47,5 +46,42 @@ describe("AdminStationsView", () => {
 
     expect(screen.getAllByText("Schank").length).toBeGreaterThan(0);
     expect(screen.queryByText("Kaffee & Kuchen")).not.toBeInTheDocument();
+  });
+
+  // Issue #168: Der frühere Löschknopf traf ins Leere - im Backend gibt es
+  // keine DELETE-Route für Stationen (nur PATCH mit isActive). Der Knopf
+  // wurde ersatzlos entfernt, siehe stattdessen den Status in der Tabelle.
+  it("zeigt keinen Löschen-Knopf mehr (Issue #168)", () => {
+    render(
+      <AdminStationsView
+        stations={mockStations}
+        printersList={mockPrinters}
+        onRefresh={vi.fn()}
+        onOpenCreate={vi.fn()}
+        onEdit={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.queryByRole("button", { name: /löschen/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("zeigt den Aktiv/Inaktiv-Status der Station an (Issue #168)", () => {
+    render(
+      <AdminStationsView
+        stations={[
+          { ...mockStations[0], isActive: true },
+          { ...mockStations[1], isActive: false },
+        ]}
+        printersList={mockPrinters}
+        onRefresh={vi.fn()}
+        onOpenCreate={vi.fn()}
+        onEdit={vi.fn()}
+      />,
+    );
+
+    expect(screen.getAllByText("Aktiv").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Inaktiv").length).toBeGreaterThan(0);
   });
 });

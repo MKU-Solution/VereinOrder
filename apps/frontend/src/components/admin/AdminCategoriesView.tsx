@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Edit2, Store, Tag, Trash2 } from "lucide-react";
+import { Edit2, Store, Tag } from "lucide-react";
 
 import { AdminEmptyState } from "./AdminEmptyState";
 import { AdminToolbar } from "./AdminToolbar";
@@ -10,7 +10,6 @@ export interface AdminCategoriesViewProps {
   onRefresh: () => void;
   onOpenCreate: () => void;
   onEdit: (category: any) => void;
-  onDelete: (id: string) => void;
   isRefreshing?: boolean;
 }
 
@@ -20,7 +19,6 @@ export const AdminCategoriesView = ({
   onRefresh,
   onOpenCreate,
   onEdit,
-  onDelete,
   isRefreshing = false,
 }: AdminCategoriesViewProps) => {
   const [searchQuery, setSearchQuery] = useState("");
@@ -171,15 +169,6 @@ export const AdminCategoriesView = ({
                             >
                               <Edit2 aria-hidden="true" className="h-4 w-4" />
                             </button>
-                            <button
-                              type="button"
-                              onClick={() => onDelete(cat.id)}
-                              className="inline-flex min-h-9 min-w-9 items-center justify-center rounded-lg border border-rose-500/30 bg-rose-500/20 p-2 text-rose-300 hover:bg-rose-500/30 hover:text-rose-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-200"
-                              title="Kategorie löschen"
-                              aria-label={`Kategorie ${cat.name} löschen`}
-                            >
-                              <Trash2 aria-hidden="true" className="h-4 w-4" />
-                            </button>
                           </div>
                         </td>
                       </tr>
@@ -229,15 +218,6 @@ export const AdminCategoriesView = ({
                         aria-label={`Kategorie ${cat.name} bearbeiten`}
                       >
                         <Edit2 aria-hidden="true" className="h-4 w-4" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => onDelete(cat.id)}
-                        className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-xl border border-rose-500/30 bg-rose-500/20 p-2.5 text-rose-300 hover:bg-rose-500/30 focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-200"
-                        title="Kategorie löschen"
-                        aria-label={`Kategorie ${cat.name} löschen`}
-                      >
-                        <Trash2 aria-hidden="true" className="h-4 w-4" />
                       </button>
                     </div>
                   </div>

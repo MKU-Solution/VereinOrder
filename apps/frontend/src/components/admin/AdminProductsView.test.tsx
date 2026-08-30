@@ -51,7 +51,7 @@ describe("AdminProductsView", () => {
         onRefresh={vi.fn()}
         onOpenCreate={vi.fn()}
         onEdit={vi.fn()}
-        onDelete={vi.fn()}
+        onToggleAvailability={vi.fn()}
       />,
     );
 
@@ -92,10 +92,80 @@ describe("AdminProductsView", () => {
         onRefresh={vi.fn()}
         onOpenCreate={vi.fn()}
         onEdit={vi.fn()}
-        onDelete={vi.fn()}
+        onToggleAvailability={vi.fn()}
       />,
     );
 
     expect(screen.getAllByText("+ € 1,00 Pfand").length).toBeGreaterThan(0);
+  });
+
+  // Issue #168: Der frühere Löschknopf traf ins Leere - jedes je bestellte
+  // Produkt ist per RESTRICT ohnehin unlöschbar, sonst wäre die
+  // Bestellhistorie nicht mehr lesbar. Er wurde durch den bereits
+  // vorhandenen Verfügbarkeitsweg (manualAvailability = DISABLED) ersetzt.
+  it("zeigt keinen Löschen-Knopf mehr, sondern einen Deaktivieren-Knopf (Issue #168)", () => {
+    render(
+      <AdminProductsView
+        products={mockProducts}
+        categoriesList={mockCategories}
+        stationsList={mockStations}
+        onRefresh={vi.fn()}
+        onOpenCreate={vi.fn()}
+        onEdit={vi.fn()}
+        onToggleAvailability={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.queryByRole("button", { name: /löschen/i }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getAllByRole("button", { name: /Bier 0,5l deaktivieren/i }).length,
+    ).toBeGreaterThan(0);
+  });
+
+  it("ruft onToggleAvailability beim Klick auf den Deaktivieren-Knopf auf", () => {
+    const onToggleAvailability = vi.fn();
+    render(
+      <AdminProductsView
+        products={mockProducts}
+        categoriesList={mockCategories}
+        stationsList={mockStations}
+        onRefresh={vi.fn()}
+        onOpenCreate={vi.fn()}
+        onEdit={vi.fn()}
+        onToggleAvailability={onToggleAvailability}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getAllByRole("button", { name: /Bier 0,5l deaktivieren/i })[0],
+    );
+
+    expect(onToggleAvailability).toHaveBeenCalledTimes(1);
+    expect(onToggleAvailability).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "prod-1" }),
+    );
+  });
+
+  it("zeigt einen Aktivieren-Knopf für bereits deaktivierte Produkte", () => {
+    const disabledProduct = [
+      { ...mockProducts[0], manualAvailability: "DISABLED" },
+    ];
+    render(
+      <AdminProductsView
+        products={disabledProduct}
+        categoriesList={mockCategories}
+        stationsList={mockStations}
+        onRefresh={vi.fn()}
+        onOpenCreate={vi.fn()}
+        onEdit={vi.fn()}
+        onToggleAvailability={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getAllByRole("button", { name: /Bier 0,5l aktivieren/i }).length,
+    ).toBeGreaterThan(0);
   });
 });
