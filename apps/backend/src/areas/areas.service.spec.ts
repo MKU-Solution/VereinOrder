@@ -137,4 +137,48 @@ describe("AreasService – grafischer Raumplan (Issue #138)", () => {
       }),
     );
   });
+
+  // Issue #152: vor der zentralen Ableitung (resolveOperationalDataMode)
+  // fiel eine unmoegliche status/testMode-Kombination hier still auf
+  // dataMode=null zurueck - dieselbe Behandlung wie eine Veranstaltung, die
+  // gerade nicht laeuft. areaIds.length > 0 && !dataMode liess die
+  // Bestellabfrage aus, und jeder Tisch erschien als frei, obwohl offene
+  // Bestellungen existieren koennten. Der Raumplan muss diesen Zustand
+  // jetzt laut ablehnen statt jeden Tisch als frei zu zeigen.
+  it("weist eine unmögliche status/testMode-Kombination ab, statt jeden Tisch als frei zu zeigen", async () => {
+    const prisma = {
+      event: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: "event-1",
+          status: "ACTIVE",
+          testMode: true,
+        }),
+      },
+      area: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: "area-1",
+            name: "Zelt",
+            sortOrder: 0,
+            floorPlan: {
+              version: 1,
+              width: 1000,
+              height: 700,
+              elements: [table()],
+            },
+          },
+        ]),
+      },
+      order: { findMany: jest.fn() },
+    };
+    const service = new AreasService(
+      prisma as any,
+      { broadcast: jest.fn() } as any,
+    );
+
+    await expect(service.findFloorPlans("event-1")).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+    expect(prisma.order.findMany).not.toHaveBeenCalled();
+  });
 });

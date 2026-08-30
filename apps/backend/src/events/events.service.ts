@@ -5,12 +5,7 @@ import {
   BadRequestException,
   ConflictException,
 } from "@nestjs/common";
-import {
-  PrismaClient,
-  EventStatus,
-  Prisma,
-  OperationalDataMode,
-} from "@vereinorder/database";
+import { PrismaClient, EventStatus, Prisma } from "@vereinorder/database";
 import { PRISMA_CLIENT } from "../prisma/prisma.module";
 import { createHash } from "crypto";
 import { planFallbackCategory } from "../common/fallback-category";
@@ -28,17 +23,6 @@ export class EventsService {
     );
     if (!rows[0]) throw new NotFoundException("Event not found");
     return rows[0];
-  }
-
-  private dataMode(event: {
-    status: EventStatus;
-    testMode: boolean;
-  }): OperationalDataMode {
-    if (event.status === "ACTIVE" && !event.testMode) return "LIVE";
-    if (event.status === "TEST_MODE" && event.testMode) return "TEST";
-    throw new BadRequestException(
-      "Die Veranstaltung ist nicht in einem konsistenten Betriebsmodus.",
-    );
   }
 
   private requireIdempotencyKey(key?: string) {

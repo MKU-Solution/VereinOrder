@@ -11,6 +11,7 @@ import { PrismaClient, Prisma } from "@vereinorder/database";
 import { PRISMA_CLIENT } from "../prisma/prisma.module";
 import { randomBytes } from "crypto";
 import { resolveTargetStationId } from "../common/target-station";
+import { resolveOperationalDataMode } from "../common/operational-data-mode";
 import { drawPickupNumber } from "../common/pickup-number";
 import { AuditService } from "../audit/audit.service";
 import {
@@ -413,19 +414,14 @@ export class OrdersService {
     );
 
     return events.map((event) => {
-      // Dieselbe Ableitung wie an den uebrigen neun Stellen im Backend
-      // (u.a. weiter unten in createQuickSale/createOrder derselben Datei,
-      // sowie inventory.service.ts, products.service.ts) - bewusst nicht in
-      // eine zehnte gemeinsame Funktion ausgelagert, sondern hier direkt
-      // angewendet: nur die Betriebsart, in der die Veranstaltung GERADE
-      // laeuft, darf ueber ihren Bestand entscheiden; die andere bleibt
-      // fuer diese Anzeige unsichtbar (Issue #141, Fehler A).
-      const dataMode =
-        event.status === "ACTIVE" && !event.testMode
-          ? "LIVE"
-          : event.status === "TEST_MODE" && event.testMode
-            ? "TEST"
-            : undefined;
+      // Einzige Ableitung im Backend (Issue #152, common/operational-data-mode.ts):
+      // nur die Betriebsart, in der die Veranstaltung GERADE laeuft, darf
+      // ueber ihren Bestand entscheiden; die andere bleibt fuer diese
+      // Anzeige unsichtbar (Issue #141, Fehler A). Eine unmoegliche
+      // Kombination aus status und testMode wirft hier statt still auf den
+      // manuellen Uebersteuerungswert zurueckzufallen - genau das machte ein
+      // ausverkauftes Produkt frueher als verfuegbar sichtbar.
+      const dataMode = resolveOperationalDataMode(event);
       return {
         ...event,
         activeSession: sessionsByEvent.get(event.id) || null,
@@ -805,12 +801,7 @@ export class OrdersService {
         SELECT "id", "status", "testMode" FROM "Event" WHERE "id" = ${dto.eventId} FOR UPDATE
       `);
         const event = eventRows[0];
-        const dataMode =
-          event?.status === "ACTIVE" && !event.testMode
-            ? "LIVE"
-            : event?.status === "TEST_MODE" && event.testMode
-              ? "TEST"
-              : null;
+        const dataMode = resolveOperationalDataMode(event);
         if (!dataMode)
           throw new BadRequestException(
             ORDER_REJECTION_MESSAGES.EVENT_NOT_ACTIVE_FOR_SALES,
@@ -1497,12 +1488,19 @@ export class OrdersService {
           Prisma.sql`SELECT "status", "testMode" FROM "Event" WHERE "id" = ${dto.eventId} FOR UPDATE`,
         );
         const event = eventRows[0];
-        const orderDataMode =
-          event?.status === "ACTIVE" && !event.testMode
-            ? "LIVE"
-            : event?.status === "TEST_MODE" && event.testMode
-              ? "TEST"
-              : null;
+        // Diese Schreibsperre lehnte "Veranstaltung laeuft nicht" und die
+        // unmoegliche status/testMode-Kombination schon vor Issue #152
+        // einheitlich mit demselben EVENT_MODE-Ablehnungscode ab (siehe
+        // orders.data-mode.spec.ts). resolveOperationalDataMode bleibt die
+        // einzige Ableitung der Betriebsart; nur die Reaktion auf ihren Wurf
+        // ist hier ausnahmsweise dieselbe wie auf null, damit sich am
+        // bestehenden Ablehnungsvertrag fuer Clients nichts aendert.
+        let orderDataMode: ReturnType<typeof resolveOperationalDataMode>;
+        try {
+          orderDataMode = resolveOperationalDataMode(event);
+        } catch {
+          orderDataMode = null;
+        }
         if (!orderDataMode)
           throw new BadRequestException(
             orderRejection(

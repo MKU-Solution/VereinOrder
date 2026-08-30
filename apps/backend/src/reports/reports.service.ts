@@ -11,6 +11,7 @@ import {
 } from "@vereinorder/database";
 import { isUUID } from "class-validator";
 import { PRISMA_CLIENT } from "../prisma/prisma.module";
+import { resolveOperationalDataMode } from "../common/operational-data-mode";
 
 @Injectable()
 export class ReportsService {
@@ -18,17 +19,6 @@ export class ReportsService {
 
   private getEventFilter(eventId?: string) {
     return eventId ? { eventId } : {};
-  }
-
-  private operationalDataMode(event: {
-    status: string;
-    testMode: boolean;
-  }): OperationalDataMode | null {
-    if (event.status === "ACTIVE" && !event.testMode)
-      return OperationalDataMode.LIVE;
-    if (event.status === "TEST_MODE" && event.testMode)
-      return OperationalDataMode.TEST;
-    return null;
   }
 
   private availability(
@@ -73,7 +63,7 @@ export class ReportsService {
       select: { status: true, testMode: true },
     });
     if (!event) throw new NotFoundException("Veranstaltung nicht gefunden.");
-    if (this.operationalDataMode(event) !== dataMode)
+    if (resolveOperationalDataMode(event) !== dataMode)
       throw new BadRequestException(
         "Betriebsmodus der Veranstaltung stimmt nicht mit dataMode überein.",
       );
