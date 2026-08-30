@@ -795,6 +795,13 @@ export class OrdersService {
         );
         if (idempotentResult) return idempotentResult;
 
+        // Diese Sperre serialisiert nebenbei auch alle Verkaeufe derselben
+        // Veranstaltung untereinander und ist damit die tatsaechliche
+        // Verteidigung gegen parallele Verkaeufe auf demselben Bestand -
+        // nicht die Sperre in InventoryService.reserveSale (Issue #153).
+        // Faellt sie kuenftig weg, etwa aus Gruenden des Durchsatzes, muss
+        // reserveSale seinen eigenen Schutz neu nachweisen. Siehe dazu den
+        // Kopfkommentar in test/inventory-stock-concurrency.integration-spec.ts.
         const eventRows = await prisma.$queryRaw<
           { id: string; status: string; testMode: boolean }[]
         >(Prisma.sql`
@@ -1482,6 +1489,13 @@ export class OrdersService {
     let inventoryChanges: InventoryChange[] = [];
     try {
       const result = await this.prisma.$transaction(async (prisma) => {
+        // Diese Sperre serialisiert nebenbei auch alle Verkaeufe derselben
+        // Veranstaltung untereinander und ist damit die tatsaechliche
+        // Verteidigung gegen parallele Verkaeufe auf demselben Bestand -
+        // nicht die Sperre in InventoryService.reserveSale (Issue #153).
+        // Faellt sie kuenftig weg, etwa aus Gruenden des Durchsatzes, muss
+        // reserveSale seinen eigenen Schutz neu nachweisen. Siehe dazu den
+        // Kopfkommentar in test/inventory-stock-concurrency.integration-spec.ts.
         const eventRows = await prisma.$queryRaw<
           { status: string; testMode: boolean }[]
         >(
