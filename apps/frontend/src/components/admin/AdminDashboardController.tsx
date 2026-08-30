@@ -622,7 +622,7 @@ export const AdminDashboardController = ({
           ),
         );
       } else if (activeTab === "events") {
-        alert("Fehler beim Speichern");
+        alert(backendMessage(err, "Fehler beim Speichern"));
       } else {
         setModalError(
           "Speichern fehlgeschlagen. Bitte prüfe die Eingaben und versuche es erneut.",
@@ -836,7 +836,7 @@ export const AdminDashboardController = ({
       fetchData();
     } catch (err) {
       console.error("Failed to create backup", err);
-      alert("Fehler bei der Erstellung des Backups");
+      alert(backendMessage(err, "Fehler bei der Erstellung des Backups"));
     } finally {
       setIsBackingUp(false);
     }
@@ -856,7 +856,7 @@ export const AdminDashboardController = ({
       link.remove();
     } catch (err) {
       console.error("Failed to download backup", err);
-      alert("Fehler beim Herunterladen des Backups");
+      alert(backendMessage(err, "Fehler beim Herunterladen des Backups"));
     }
   };
 
@@ -874,7 +874,9 @@ export const AdminDashboardController = ({
       fetchData();
     } catch (err) {
       console.error("Failed to restore backup", err);
-      alert("Fehler bei der Wiederherstellung des Backups");
+      alert(
+        backendMessage(err, "Fehler bei der Wiederherstellung des Backups"),
+      );
     }
   };
 
@@ -888,7 +890,10 @@ export const AdminDashboardController = ({
     } catch (err) {
       console.error("Failed to verify backup restoration", err);
       alert(
-        "Die Wiederherstellungsprüfung ist fehlgeschlagen. Die Festdatenbank wurde nicht verändert.",
+        backendMessage(
+          err,
+          "Die Wiederherstellungsprüfung ist fehlgeschlagen. Die Festdatenbank wurde nicht verändert.",
+        ),
       );
     }
   };
@@ -978,7 +983,7 @@ export const AdminDashboardController = ({
       link.remove();
     } catch (err) {
       console.error("Failed to export audit log", err);
-      alert("Fehler beim Exportieren des Audit-Logs");
+      alert(backendMessage(err, "Fehler beim Exportieren des Audit-Logs"));
     }
   };
 
@@ -991,7 +996,7 @@ export const AdminDashboardController = ({
       fetchData();
     } catch (err) {
       console.error("Failed to retry print jobs", err);
-      alert("Fehler beim Wiederholen der Druckaufträge");
+      alert(backendMessage(err, "Fehler beim Wiederholen der Druckaufträge"));
     } finally {
       setIsRetryingJobs(false);
     }
@@ -1089,7 +1094,7 @@ export const AdminDashboardController = ({
       fetchData();
     } catch (err) {
       console.error("Failed to delete item", err);
-      alert("Fehler beim Löschen");
+      alert(backendMessage(err, "Fehler beim Löschen"));
     }
   };
 
