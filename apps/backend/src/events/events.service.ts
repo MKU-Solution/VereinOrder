@@ -289,6 +289,26 @@ export class EventsService {
           );
         }
       }
+      if (status === "TEST_MODE") {
+        // Issue #158: Spiegelbild der TEST-Pruefung beim Weg in den
+        // Echtbetrieb oben. Ohne diese Sperre koennten in einer Veranstaltung
+        // ueberhaupt erst LIVE- und TEST-Daten nebeneinander entstehen, die
+        // z.B. die Zusteller-Warteschlange nicht mehr trennen kann. Eine
+        // Veranstaltung ohne Echtbestellungen darf jederzeit zurueck in den
+        // Testbetrieb wechseln.
+        if (
+          (await tx.order.count({
+            where: { eventId: id, dataMode: "LIVE" },
+          })) ||
+          (await tx.cashierSession.count({
+            where: { eventId: id, dataMode: "LIVE" },
+          }))
+        ) {
+          throw new ConflictException(
+            "Der Testbetrieb kann nicht aktiviert werden, solange echte Bestellungen oder Kassensitzungen dieser Veranstaltung vorliegen.",
+          );
+        }
+      }
       if (
         (status === "ACTIVE" || status === "TEST_MODE") &&
         (await tx.cashierSession.count({

@@ -8,6 +8,7 @@ import {
 import { Prisma, PrismaClient } from "@vereinorder/database";
 import { PRISMA_CLIENT } from "../prisma/prisma.module";
 import { deriveFulfillmentStatus } from "../orders/fulfillment-status";
+import { resolveOperationalDataMode } from "../common/operational-data-mode";
 
 interface RunnerPrincipal {
   id?: string;
@@ -66,16 +67,36 @@ export class RunnerService {
     return { event, areas };
   }
 
+  // Issue #158: die Warteschlangen duerfen Test- und Echtbetrieb nicht
+  // vermischen. Die Betriebsart wird ausschliesslich ueber
+  // resolveOperationalDataMode aus der aufgeloesten Veranstaltung abgeleitet
+  // (einzige Ableitung im Backend, Issue #152) - niemals ueber eine eigene
+  // Kopie der Formel. Laeuft die Veranstaltung nicht, liefert die Funktion
+  // null; die Warteschlange ist dann leer, statt ungefiltert ueber beide
+  // Betriebsarten zu lesen.
+  private async resolveQueueDataMode(eventId?: string) {
+    const event = eventId
+      ? await this.prisma.event.findUnique({
+          where: { id: eventId },
+          select: { id: true, status: true, testMode: true },
+        })
+      : await this.resolveEvent();
+    const dataMode = resolveOperationalDataMode(event);
+    if (!dataMode || !event) return null;
+    return { eventId: event.id, dataMode };
+  }
+
   async listOrders(user: RunnerPrincipal, eventId?: string, areaId?: string) {
     this.requireRunner(user);
-    const resolvedEventId = eventId || (await this.resolveEvent()).id;
+    const context = await this.resolveQueueDataMode(eventId);
+    if (!context) return [];
     return this.prisma.order.findMany({
       where: {
-        eventId: resolvedEventId,
+        eventId: context.eventId,
+        dataMode: context.dataMode,
         ...(areaId ? { areaId } : {}),
         claimedByUserId: null,
         lifecycleStatus: { not: "CANCELLED" },
-        event: operationalEvent,
         items: { some: { status: "READY" } },
       },
       include: queueInclude,
@@ -85,14 +106,15 @@ export class RunnerService {
 
   async listMine(user: RunnerPrincipal, eventId?: string, areaId?: string) {
     const userId = this.requireRunner(user);
-    const resolvedEventId = eventId || (await this.resolveEvent()).id;
+    const context = await this.resolveQueueDataMode(eventId);
+    if (!context) return [];
     return this.prisma.order.findMany({
       where: {
-        eventId: resolvedEventId,
+        eventId: context.eventId,
+        dataMode: context.dataMode,
         ...(areaId ? { areaId } : {}),
         claimedByUserId: userId,
         lifecycleStatus: { not: "CANCELLED" },
-        event: operationalEvent,
         items: { some: { status: { in: ["READY", "IN_DELIVERY"] } } },
       },
       include: queueInclude,

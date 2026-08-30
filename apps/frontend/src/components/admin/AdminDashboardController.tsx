@@ -1111,7 +1111,9 @@ export const AdminDashboardController = ({
       fetchData();
     } catch (err) {
       console.error("Activation failed", err);
-      alert("Fehler bei der Aktivierung der Veranstaltung!");
+      alert(
+        backendMessage(err, "Fehler bei der Aktivierung der Veranstaltung!"),
+      );
     } finally {
       setIsActivating(false);
     }
@@ -1123,7 +1125,7 @@ export const AdminDashboardController = ({
       fetchData();
     } catch (err) {
       console.error("Failed to set test mode", err);
-      alert("Fehler beim Aktivieren des Testmodus");
+      alert(backendMessage(err, "Fehler beim Aktivieren des Testmodus"));
     }
   };
 
@@ -1133,6 +1135,7 @@ export const AdminDashboardController = ({
       fetchData();
     } catch (err) {
       console.error("Failed to pause event", err);
+      alert(backendMessage(err, "Fehler beim Pausieren der Veranstaltung."));
     }
   };
 
@@ -1172,7 +1175,7 @@ export const AdminDashboardController = ({
       fetchData();
     } catch (err) {
       console.error("Failed to complete event", err);
-      alert("Fehler beim Abschließen der Veranstaltung.");
+      alert(backendMessage(err, "Fehler beim Abschließen der Veranstaltung."));
     } finally {
       setIsCompletingEvent(false);
     }
