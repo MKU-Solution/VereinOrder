@@ -201,6 +201,12 @@ describe("BackupService.restoreBackup – Wiederherstellung gegen echtes Postgre
         userId: cashier.id,
         dataMode: "LIVE",
         totalAmount: 700,
+        // Issue #165: paymentStatus wird an jedem Schreibpfad aus der Summe
+        // der abgeschlossenen Zahlungen abgeleitet; die Backup-Dokumentgrenze
+        // prüft das inzwischen nach. Die direkt gesäte Zeile hier muss diese
+        // Ableitung von Hand nachbilden, sonst würde die eigene Sicherung
+        // dieses Wächtertests an der neuen Prüfung scheitern.
+        paymentStatus: "PAID",
         pickupNumber: 1,
         stationId: station.id,
         cashierSessionId: session.id,
@@ -227,6 +233,8 @@ describe("BackupService.restoreBackup – Wiederherstellung gegen echtes Postgre
         userId: cashier.id,
         dataMode: "LIVE",
         totalAmount: 350,
+        // Issue #165: siehe Kommentar bei order1.
+        paymentStatus: "PAID",
         pickupNumber: 2,
         stationId: station.id,
         cashierSessionId: session.id,
@@ -626,5 +634,292 @@ describe("BackupService.restoreBackup – Wiederherstellung gegen echtes Postgre
       },
     });
     expect(subsequentOrder.orderNumber).toBe(restoredOrderNumber + 1);
+  }, 30_000);
+
+  // Issue #165: Sicherheitsnetz für die drei neuen Fachprüfungen in
+  // backup-document.ts (CashierSession.status, Payment-Tenderregel,
+  // Order.paymentStatus). Eine Sicherung, die das System selbst aus einem
+  // realistischen Bestand erzeugt, muss diese Prüfungen immer bestehen -
+  // dieser Test ist der Nachweis dafür, nicht nur ein weiterer Regressions-
+  // schutz. Der Bestand enthält bewusst alle in Issue #165 genannten
+  // schwierigen Fälle: eine Barzahlung mit Wechselgeld, eine Kartenzahlung,
+  // eine Teilzahlung, eine Rückerstattung (Pfandauszahlung über dem
+  // Bestellwert), eine geschlossene und eine offene Kassensitzung sowie eine
+  // stornierte Bestellung.
+  it("akzeptiert und übernimmt eine realistische Sicherung mit Bar-, Karten-, Teil- und Rückerstattungszahlungen, offener/geschlossener Kassensitzung und einer stornierten Bestellung (Issue #165)", async () => {
+    const admin = await prisma.user.create({
+      data: {
+        username: `waechtertest-165-admin-${randomUUID()}`,
+        pinHash: "x",
+        role: "ADMINISTRATOR",
+      },
+    });
+    const cashier = await prisma.user.create({
+      data: {
+        username: `waechtertest-165-cashier-${randomUUID()}`,
+        pinHash: "x",
+        role: "CASHIER",
+      },
+    });
+    cleanupUserIds.push(admin.id, cashier.id);
+
+    const event = await prisma.event.create({
+      data: {
+        name: `Wächtertest Issue 165 ${randomUUID()}`,
+        status: "ACTIVE",
+        testMode: false,
+      },
+    });
+    cleanupEventIds.push(event.id);
+
+    const category = await prisma.productCategory.create({
+      data: { name: "Getränke", eventId: event.id },
+    });
+    const product = await prisma.product.create({
+      data: {
+        name: "Bier",
+        price: 500,
+        eventId: event.id,
+        categoryId: category.id,
+      },
+    });
+
+    // Geschlossene Kassensitzung: status, closingBalance und endTime wurden
+    // gemeinsam von closeSession gesetzt (sessions.service.ts).
+    const closedSession = await prisma.cashierSession.create({
+      data: {
+        userId: cashier.id,
+        eventId: event.id,
+        dataMode: "LIVE",
+        status: "CLOSED",
+        startingBalance: 10000,
+        closingBalance: 15000,
+        endTime: new Date(),
+      },
+    });
+    // Offene Kassensitzung: startSession hat weder closingBalance noch
+    // endTime je gesetzt.
+    const openSession = await prisma.cashierSession.create({
+      data: {
+        userId: cashier.id,
+        eventId: event.id,
+        dataMode: "LIVE",
+        status: "ACTIVE",
+        startingBalance: 5000,
+      },
+    });
+
+    // 1. Barzahlung mit Wechselgeld (Bon-/Stationskasse: tenderedAmount und
+    // changeAmount vollständig belegt).
+    const cashOrder = await prisma.order.create({
+      data: {
+        eventId: event.id,
+        userId: cashier.id,
+        dataMode: "LIVE",
+        totalAmount: 1000,
+        paymentStatus: "PAID",
+        cashierSessionId: closedSession.id,
+        items: {
+          create: [{ productId: product.id, quantity: 2, priceAtTime: 500 }],
+        },
+        payments: {
+          create: [
+            {
+              amount: 1000,
+              method: "CASH",
+              tenderedAmount: 1200,
+              changeAmount: 200,
+              status: "COMPLETED",
+              cashierSessionId: closedSession.id,
+            },
+          ],
+        },
+      },
+    });
+
+    // 2. Kartenzahlung (tenderedAmount/changeAmount bleiben leer bzw. 0).
+    const cardOrder = await prisma.order.create({
+      data: {
+        eventId: event.id,
+        userId: cashier.id,
+        dataMode: "LIVE",
+        totalAmount: 500,
+        paymentStatus: "PAID",
+        cashierSessionId: closedSession.id,
+        items: {
+          create: [{ productId: product.id, quantity: 1, priceAtTime: 500 }],
+        },
+        payments: {
+          create: [
+            {
+              amount: 500,
+              method: "CARD",
+              status: "COMPLETED",
+              cashierSessionId: closedSession.id,
+            },
+          ],
+        },
+      },
+    });
+
+    // 3. Teilzahlung (Splitzahlung über addPaymentsToOrder/
+    // splitPaymentOrder: CASH ohne Bargeldbeleg, Summe bleibt unter
+    // totalAmount).
+    const partialOrder = await prisma.order.create({
+      data: {
+        eventId: event.id,
+        userId: cashier.id,
+        dataMode: "LIVE",
+        totalAmount: 900,
+        paymentStatus: "PARTIALLY_PAID",
+        cashierSessionId: openSession.id,
+        items: {
+          create: [{ productId: product.id, quantity: 1, priceAtTime: 900 }],
+        },
+        payments: {
+          create: [
+            {
+              amount: 400,
+              method: "CASH",
+              status: "COMPLETED",
+              cashierSessionId: openSession.id,
+            },
+          ],
+        },
+      },
+    });
+
+    // 4. Rückerstattung: Pfandauszahlung über dem Bestellwert, wie sie
+    // createQuickSale/createStationSale erzeugen (CASH deckt totalAmount,
+    // REFUND zahlt den Überhang bar aus).
+    const refundOrder = await prisma.order.create({
+      data: {
+        eventId: event.id,
+        userId: cashier.id,
+        dataMode: "LIVE",
+        totalAmount: 300,
+        paymentStatus: "PAID",
+        cashierSessionId: closedSession.id,
+        payments: {
+          create: [
+            {
+              amount: 300,
+              method: "CASH",
+              tenderedAmount: 300,
+              changeAmount: 0,
+              status: "COMPLETED",
+              cashierSessionId: closedSession.id,
+            },
+            {
+              amount: 150,
+              method: "REFUND",
+              status: "COMPLETED",
+              cashierSessionId: closedSession.id,
+            },
+          ],
+        },
+      },
+    });
+
+    // 5. Stornierte Bestellung: cancelOrder ändert lifecycleStatus, lässt
+    // paymentStatus aber unberührt - PAID bleibt PAID.
+    const cancelledOrder = await prisma.order.create({
+      data: {
+        eventId: event.id,
+        userId: cashier.id,
+        dataMode: "LIVE",
+        totalAmount: 500,
+        paymentStatus: "PAID",
+        lifecycleStatus: "CANCELLED",
+        cashierSessionId: closedSession.id,
+        payments: {
+          create: [
+            {
+              amount: 500,
+              method: "CARD",
+              status: "COMPLETED",
+              cashierSessionId: closedSession.id,
+            },
+          ],
+        },
+      },
+    });
+
+    const backup = await backupService.createBackup(admin.id);
+
+    // Der eigentliche Nachweis: das System-eigene Backup darf an den drei
+    // neuen Prüfungen niemals scheitern.
+    await expect(
+      backupService.restoreBackup(backup.filename, admin.id),
+    ).resolves.toMatchObject({ success: true });
+
+    const [
+      restoredClosedSession,
+      restoredOpenSession,
+      restoredCashOrder,
+      restoredCardOrder,
+      restoredPartialOrder,
+      restoredRefundOrder,
+      restoredCancelledOrder,
+    ] = await Promise.all([
+      prisma.cashierSession.findUnique({ where: { id: closedSession.id } }),
+      prisma.cashierSession.findUnique({ where: { id: openSession.id } }),
+      prisma.order.findUnique({
+        where: { id: cashOrder.id },
+        include: { payments: true },
+      }),
+      prisma.order.findUnique({
+        where: { id: cardOrder.id },
+        include: { payments: true },
+      }),
+      prisma.order.findUnique({
+        where: { id: partialOrder.id },
+        include: { payments: true },
+      }),
+      prisma.order.findUnique({
+        where: { id: refundOrder.id },
+        include: { payments: true },
+      }),
+      prisma.order.findUnique({ where: { id: cancelledOrder.id } }),
+    ]);
+
+    expect(restoredClosedSession).toMatchObject({
+      status: "CLOSED",
+      closingBalance: 15000,
+    });
+    expect(restoredClosedSession?.endTime).not.toBeNull();
+    expect(restoredOpenSession).toMatchObject({
+      status: "ACTIVE",
+      closingBalance: null,
+      endTime: null,
+    });
+
+    expect(restoredCashOrder?.paymentStatus).toBe("PAID");
+    expect(restoredCashOrder?.payments).toMatchObject([
+      { method: "CASH", tenderedAmount: 1200, changeAmount: 200 },
+    ]);
+
+    expect(restoredCardOrder?.paymentStatus).toBe("PAID");
+    expect(restoredCardOrder?.payments).toMatchObject([
+      { method: "CARD", tenderedAmount: null, changeAmount: 0 },
+    ]);
+
+    expect(restoredPartialOrder?.paymentStatus).toBe("PARTIALLY_PAID");
+    expect(restoredPartialOrder?.payments).toMatchObject([
+      { method: "CASH", tenderedAmount: null, changeAmount: 0, amount: 400 },
+    ]);
+
+    expect(restoredRefundOrder?.paymentStatus).toBe("PAID");
+    expect(restoredRefundOrder?.payments).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ method: "CASH", amount: 300 }),
+        expect.objectContaining({ method: "REFUND", amount: 150 }),
+      ]),
+    );
+
+    expect(restoredCancelledOrder).toMatchObject({
+      lifecycleStatus: "CANCELLED",
+      paymentStatus: "PAID",
+    });
   }, 30_000);
 });
