@@ -8,6 +8,8 @@ const EMPTY_DATABASE = "vereinorder_ci_test_empty";
 const UPGRADE_DATABASE = "vereinorder_ci_test_upgrade";
 const DUPLICATE_DATABASE = "vereinorder_ci_test_duplicate";
 const INVALID_EVENT_DATABASE = "vereinorder_ci_test_invalid_event_refs";
+const EVENT_STATUS_TESTMODE_VIOLATION_DATABASE =
+  "vereinorder_ci_test_event_status_testmode_violation";
 const repoRoot = resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const migrationsDir = resolve(repoRoot, "packages/database/prisma/migrations");
 const pnpmEntryPoint = process.env.npm_execpath;
@@ -147,6 +149,26 @@ const INVENTORY_SEED = {
     OUT_OF_STOCK: "f0000000-0000-4000-8000-000000000012",
     DISABLED: "f0000000-0000-4000-8000-000000000013",
   },
+};
+
+// Gueltiger Altstand fuer die Migration
+// "20260830090000_add_event_status_testmode_check" (Issue #157): eine
+// Echtveranstaltung, eine Testveranstaltung und eine Veranstaltung, die aus
+// TEST_MODE nach PAUSED gewechselt ist und dabei testMode=true behaelt - ein
+// voellig normaler Zustand, der vom neuen CHECK-Constraint ausdruecklich NICHT
+// abgewiesen werden darf.
+const EVENT_STATUS_TESTMODE_SEED = {
+  liveEventId: "g0000000-0000-4000-8000-000000000001",
+  testEventId: "g0000000-0000-4000-8000-000000000002",
+  pausedFromTestEventId: "g0000000-0000-4000-8000-000000000003",
+};
+
+// Bestandsinstanz mit einer bereits verletzenden Zeile fuer dieselbe
+// Migration: eine Veranstaltung mit status=ACTIVE und testMode=true, wie sie
+// nach der Untersuchung zu #152 einzig ueber das Einspielen einer alten
+// JSON-Sicherung vor der Behebung von Issue #157 entstehen konnte.
+const EVENT_STATUS_TESTMODE_VIOLATION_SEED = {
+  eventId: "h0000000-0000-4000-8000-000000000001",
 };
 
 function fail(message) {
@@ -301,6 +323,7 @@ function recreateDatabase(target, database) {
       UPGRADE_DATABASE,
       DUPLICATE_DATABASE,
       INVALID_EVENT_DATABASE,
+      EVENT_STATUS_TESTMODE_VIOLATION_DATABASE,
     ].includes(database)
   ) {
     fail(`Unerlaubtes destruktives Datenbankziel: ${database}`);
@@ -1149,6 +1172,114 @@ END $$;
 `;
 }
 
+// Fuegt den gueltigen Altstand fuer die Migration
+// "20260830090000_add_event_status_testmode_check" ein (Issue #157): eine
+// Echt-, eine Test- und eine aus TEST_MODE nach PAUSED gewechselte
+// Veranstaltung. Muss vor der zugehoerigen Migration laufen, sonst wuerde der
+// neue CHECK-Constraint bereits beim Einfuegen greifen.
+function seedLegacyEventStatusTestModeSql(ids) {
+  return `
+INSERT INTO "Event" (id, name, status, "testMode", "createdAt", "updatedAt") VALUES
+('${ids.liveEventId}', 'Migration Betriebsart Echtbetrieb', 'ACTIVE'::"EventStatus", false, now(), now()),
+('${ids.testEventId}', 'Migration Betriebsart Testbetrieb', 'TEST_MODE'::"EventStatus", true, now(), now()),
+('${ids.pausedFromTestEventId}', 'Migration Betriebsart pausiert aus Testbetrieb', 'PAUSED'::"EventStatus", true, now(), now());
+`;
+}
+
+// Prueft nach "migrate deploy", dass die drei Bestandsveranstaltungen
+// unveraendert geblieben sind (der Constraint darf keine gueltige Zeile
+// anfassen - insbesondere nicht die pausierte Veranstaltung mit
+// testMode=true), dass der Constraint tatsaechlich im Systemkatalog liegt und
+// dass er beide unmoeglichen Kombinationen abweist, ohne eine gueltige
+// Statusaenderung zu blockieren.
+function verifyEventStatusTestModeMigrationSql(ids) {
+  return `
+-- 1. Alle drei Bestandsveranstaltungen sind unveraendert vorhanden.
+DO $$
+DECLARE
+  mismatched int;
+BEGIN
+  SELECT count(*) INTO mismatched FROM (
+    VALUES
+      ('${ids.liveEventId}', 'ACTIVE', false),
+      ('${ids.testEventId}', 'TEST_MODE', true),
+      ('${ids.pausedFromTestEventId}', 'PAUSED', true)
+  ) AS expected(id, status, "testMode")
+  LEFT JOIN "Event" e ON e.id = expected.id
+  WHERE e.id IS NULL
+     OR e.status::text <> expected.status
+     OR e."testMode" <> expected."testMode";
+  IF mismatched <> 0 THEN
+    RAISE EXCEPTION 'Der Betriebsart-Constraint hat % Bestandsveranstaltung(en) veraendert oder entfernt.', mismatched;
+  END IF;
+END $$;
+
+-- 2. Der Constraint liegt tatsaechlich im Systemkatalog.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'Event_status_testMode_check'
+  ) THEN
+    RAISE EXCEPTION 'Der CHECK-Constraint Event_status_testMode_check fehlt nach der Migration.';
+  END IF;
+END $$;
+
+-- 3. Beide unmoeglichen Kombinationen werden abgewiesen, auch bei einem
+--    direkten Zugriff, der den Anwendungscode umgeht.
+DO $$
+DECLARE
+  active_rejected boolean := false;
+  test_mode_rejected boolean := false;
+BEGIN
+  BEGIN
+    UPDATE "Event" SET "testMode" = true WHERE id = '${ids.liveEventId}';
+  EXCEPTION WHEN check_violation THEN
+    active_rejected := true;
+  END;
+  IF NOT active_rejected THEN
+    RAISE EXCEPTION 'ACTIVE mit testMode=true wurde von der Datenhaltung nicht abgewiesen.';
+  END IF;
+
+  BEGIN
+    UPDATE "Event" SET "testMode" = false WHERE id = '${ids.testEventId}';
+  EXCEPTION WHEN check_violation THEN
+    test_mode_rejected := true;
+  END;
+  IF NOT test_mode_rejected THEN
+    RAISE EXCEPTION 'TEST_MODE mit testMode=false wurde von der Datenhaltung nicht abgewiesen.';
+  END IF;
+END $$;
+
+-- 4. Der Gegenbeweis: ein Wechsel zwischen PAUSED und TEST_MODE bei
+--    unveraendertem testMode=true bleibt erlaubt. Ohne diesen Nachweis waere
+--    nicht erkennbar, ob der Constraint versehentlich jede Kombination mit
+--    testMode=true blockiert statt nur die beiden unmoeglichen.
+DO $$
+BEGIN
+  UPDATE "Event" SET status = 'TEST_MODE'::"EventStatus"
+    WHERE id = '${ids.pausedFromTestEventId}';
+  UPDATE "Event" SET status = 'PAUSED'::"EventStatus"
+    WHERE id = '${ids.pausedFromTestEventId}';
+
+  IF (SELECT status FROM "Event" WHERE id = '${ids.pausedFromTestEventId}') <> 'PAUSED' THEN
+    RAISE EXCEPTION 'Der Wechsel zwischen PAUSED und TEST_MODE bei gleichbleibendem testMode=true wurde faelschlich abgewiesen.';
+  END IF;
+END $$;
+`;
+}
+
+// Fuegt eine bereits verletzende Veranstaltung ein (status=ACTIVE,
+// testMode=true), wie sie vor Issue #157 einzig ueber das Einspielen einer
+// alten JSON-Sicherung entstehen konnte. Wird eingespielt, bevor der neue
+// CHECK-Constraint existiert - danach wuerde schon das INSERT selbst
+// abgewiesen.
+function seedEventStatusTestModeViolationSql(ids) {
+  return `
+INSERT INTO "Event" (id, name, status, "testMode", "createdAt", "updatedAt")
+VALUES ('${ids.eventId}', 'Migrationstest Betriebsart Verletzung', 'ACTIVE'::"EventStatus", true, now(), now());
+`;
+}
+
 function dropDatabase(target, database) {
   const literal = database.replaceAll("'", "''");
   psql(
@@ -1221,6 +1352,16 @@ const DATA_MIGRATION_CHECKS = [
       "Verlustfreiheit der Overrides und ausbleibende Mengenerfindung prüfen",
     verify: () => verifyInventoryMigrationSql(INVENTORY_SEED),
   },
+  {
+    migration: "20260830090000_add_event_status_testmode_check",
+    seedLabel:
+      "gültigen Altstand für Betriebsart/Testflag einspielen (u.a. PAUSED mit testMode=true)",
+    seed: () => seedLegacyEventStatusTestModeSql(EVENT_STATUS_TESTMODE_SEED),
+    verifyLabel:
+      "Betriebsart-Constraint greift, ohne gültige Bestandsdaten oder PAUSED/testMode=true abzuweisen",
+    verify: () =>
+      verifyEventStatusTestModeMigrationSql(EVENT_STATUS_TESTMODE_SEED),
+  },
 ];
 
 for (const check of DATA_MIGRATION_CHECKS) {
@@ -1247,6 +1388,14 @@ const eventIntegrityMigrationIndex = migrationNames.indexOf(
 );
 if (eventIntegrityMigrationIndex < 0) {
   fail(`Migration ${eventIntegrityMigration} fehlt.`);
+}
+const eventStatusTestModeMigration =
+  "20260830090000_add_event_status_testmode_check";
+const eventStatusTestModeMigrationIndex = migrationNames.indexOf(
+  eventStatusTestModeMigration,
+);
+if (eventStatusTestModeMigrationIndex < 0) {
+  fail(`Migration ${eventStatusTestModeMigration} fehlt.`);
 }
 
 try {
@@ -1409,11 +1558,71 @@ try {
   );
 
   console.log(
-    "Migrationstest erfolgreich: leerer Stand, Upgrade-Stand und verständliche Abbrüche bei Duplikaten sowie veranstaltungsfremden Referenzen sind geprüft.",
+    `Migrationstest auf ${target.hostname}: vorhandene Betriebsart/Testflag-Verletzung (Issue #157)`,
+  );
+  recreateDatabase(target, EVENT_STATUS_TESTMODE_VIOLATION_DATABASE);
+  for (const migrationName of migrationNames.slice(
+    0,
+    eventStatusTestModeMigrationIndex,
+  )) {
+    const sql = readFileSync(
+      resolve(migrationsDir, migrationName, "migration.sql"),
+      "utf8",
+    );
+    psql(target, EVENT_STATUS_TESTMODE_VIOLATION_DATABASE, sql);
+  }
+  psql(
+    target,
+    EVENT_STATUS_TESTMODE_VIOLATION_DATABASE,
+    seedEventStatusTestModeViolationSql(EVENT_STATUS_TESTMODE_VIOLATION_SEED),
+  );
+  const eventStatusTestModeOutput = psqlExpectFailure(
+    target,
+    EVENT_STATUS_TESTMODE_VIOLATION_DATABASE,
+    readFileSync(
+      resolve(migrationsDir, eventStatusTestModeMigration, "migration.sql"),
+      "utf8",
+    ),
+    "Der Betriebsart-Constraint fuer Veranstaltungen kann nicht aktiviert werden",
+  );
+  for (const expectedDetail of [
+    EVENT_STATUS_TESTMODE_VIOLATION_SEED.eventId,
+    "status=ACTIVE, testMode=t",
+  ]) {
+    if (!eventStatusTestModeOutput.includes(expectedDetail)) {
+      fail(
+        `Der verständliche Migrationsabbruch nennt das erwartete Detail nicht: ${expectedDetail}`,
+      );
+    }
+  }
+  psql(
+    target,
+    EVENT_STATUS_TESTMODE_VIOLATION_DATABASE,
+    `DO $$
+     BEGIN
+       IF EXISTS (
+         SELECT 1 FROM pg_constraint WHERE conname = 'Event_status_testMode_check'
+       ) THEN
+         RAISE EXCEPTION 'Nach dem erwarteten Migrationsabbruch wurde der Constraint dennoch angelegt.';
+       END IF;
+       IF NOT EXISTS (
+         SELECT 1 FROM "Event"
+         WHERE id = '${EVENT_STATUS_TESTMODE_VIOLATION_SEED.eventId}'
+           AND status = 'ACTIVE'::"EventStatus"
+           AND "testMode"
+       ) THEN
+         RAISE EXCEPTION 'Der Migrationsabbruch hat den absichtlich ungültigen Altbestand verändert.';
+       END IF;
+     END $$;`,
+  );
+
+  console.log(
+    "Migrationstest erfolgreich: leerer Stand, Upgrade-Stand und verständliche Abbrüche bei Duplikaten, veranstaltungsfremden Referenzen sowie einer bestehenden Betriebsart/Testflag-Verletzung sind geprüft.",
   );
 } finally {
   dropDatabase(target, EMPTY_DATABASE);
   dropDatabase(target, UPGRADE_DATABASE);
   dropDatabase(target, DUPLICATE_DATABASE);
   dropDatabase(target, INVALID_EVENT_DATABASE);
+  dropDatabase(target, EVENT_STATUS_TESTMODE_VIOLATION_DATABASE);
 }

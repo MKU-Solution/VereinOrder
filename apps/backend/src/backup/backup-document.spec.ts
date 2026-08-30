@@ -92,6 +92,33 @@ describe("Backup-Dokumentgrenze (Issue #69)", () => {
         },
       },
     ],
+    [
+      "Veranstaltung ACTIVE mit testMode true (Issue #157)",
+      {
+        data: {
+          ...emptyTables,
+          events: [
+            { id: "event-1", name: "Fest", status: "ACTIVE", testMode: true },
+          ],
+        },
+      },
+    ],
+    [
+      "Veranstaltung TEST_MODE mit testMode false (Issue #157)",
+      {
+        data: {
+          ...emptyTables,
+          events: [
+            {
+              id: "event-1",
+              name: "Fest",
+              status: "TEST_MODE",
+              testMode: false,
+            },
+          ],
+        },
+      },
+    ],
   ])("verwirft %s vor der Wiederherstellung", (_label, mutation) => {
     const base = JSON.parse(document()) as Record<string, unknown>;
     const input = JSON.stringify({ ...base, ...mutation });
@@ -113,6 +140,20 @@ describe("Backup-Dokumentgrenze (Issue #69)", () => {
     expect(parsed.data.valueVoucherAllocations).toEqual([]);
     expect(parsed.data.inventoryStocks).toEqual([]);
     expect(parsed.data.inventoryMovements).toEqual([]);
+  });
+
+  it("akzeptiert PAUSED mit gesetztem testMode - kein Defekt, sondern ein Statuswechsel aus TEST_MODE (Issue #157)", () => {
+    const parsed = parseBackupDocument(
+      document({
+        ...emptyTables,
+        events: [
+          { id: "event-1", name: "Fest", status: "PAUSED", testMode: true },
+        ],
+      }),
+    );
+    expect(parsed.data.events).toEqual([
+      { id: "event-1", name: "Fest", status: "PAUSED", testMode: true },
+    ]);
   });
 
   it("akzeptiert frisch exportierte Bestellungen mit allen persistenten Feldern", () => {

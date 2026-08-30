@@ -62,6 +62,22 @@ enum OperationalDataMode {
   LIVE
 }
 
+// Pruefbedingung, die Prisma NICHT abbilden kann.
+//
+// Die Migration 20260830090000_add_event_status_testmode_check legt auf
+// dieser Tabelle den CHECK-Constraint "Event_status_testMode_check" an:
+//   NOT ((status = 'ACTIVE' AND "testMode") OR (status = 'TEST_MODE' AND NOT "testMode"))
+//
+// Er ist die woertliche Umsetzung der Ableitung in
+// apps/backend/src/common/operational-data-mode.ts (Issue #152): nur ACTIVE
+// mit testMode=true und TEST_MODE mit testMode=false sind unmoegliche
+// Kombinationen, jeder andere Status (u.a. PAUSED nach einem Wechsel aus
+// TEST_MODE) traegt testMode frei. Vor Issue #157 war das Einspielen einer
+// alten JSON-Sicherung der einzige nachgewiesene Weg, auf dem eine solche
+// Zeile trotzdem entstehen konnte; der Constraint macht die Regel an der
+// Datenhaltung selbst bindend. Prisma kennt keine CHECK-Constraints und
+// stellt ihn im Schema nicht dar. Nicht wegmigrieren, sondern bei einer
+// Aenderung an der Ableitung ausdruecklich neu setzen.
 model Event {
   id        String      @id @default(uuid())
   name      String
