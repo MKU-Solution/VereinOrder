@@ -410,6 +410,15 @@ function validateReferences(data: Record<TableName, BackupRow[]>) {
       .map((row) => [row.id as string, row.eventId]),
   );
 
+  // Fachliche Konsistenzprüfung fuer Event.status/testMode, woertlich aus der
+  // Ableitung in resolveOperationalDataMode (Issue #152) uebernommen: nur die
+  // Kombinationen ACTIVE+testMode=true und TEST_MODE+testMode=false sind
+  // unmoeglich - jeder andere Status traegt testMode frei (Issue #157).
+  for (const event of data.events) {
+    if (event.status === "ACTIVE" && event.testMode === true) invalid();
+    if (event.status === "TEST_MODE" && event.testMode === false) invalid();
+  }
+
   for (const row of [
     ...data.areas,
     ...data.stations,
