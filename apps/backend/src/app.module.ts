@@ -19,6 +19,7 @@ import { RunnerModule } from "./runner/runner.module";
 import { MaintenanceModule } from "./maintenance/maintenance.module";
 import { ValueVouchersModule } from "./value-vouchers/value-vouchers.module";
 import { InventoryModule } from "./inventory/inventory.module";
+import { SetupModule } from "./setup/setup.module";
 
 @Module({
   imports: [
@@ -39,6 +40,10 @@ import { InventoryModule } from "./inventory/inventory.module";
     PrintJobsModule,
     EventsModule,
     UsersModule,
+    // Issue #173: Ersteinrichtung. Eigenes Modul neben UsersModule, weil der
+    // Weg unangemeldet erreichbar ist und nur existiert, solange die
+    // Benutzertabelle leer ist - siehe setup.module.ts.
+    SetupModule,
     AreasModule,
     SessionsModule,
     RealtimeModule,
