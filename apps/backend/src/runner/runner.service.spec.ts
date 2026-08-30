@@ -30,6 +30,10 @@ describe("RunnerService – Wächtertests für Issue #50", () => {
   beforeEach(() => {
     prisma = {
       $transaction: jest.fn((callback) => callback(prisma)),
+      event: {
+        findUnique: jest.fn(),
+        findFirst: jest.fn(),
+      },
       order: {
         findMany: jest.fn(),
         findFirst: jest.fn(),
@@ -43,6 +47,14 @@ describe("RunnerService – Wächtertests für Issue #50", () => {
         create: jest.fn(),
       },
     };
+    // Issue #158: listOrders/listMine leiten die Betriebsart der
+    // Veranstaltung ab, um die Warteschlange darauf einzuschränken. Die
+    // meisten Tests hier prüfen anderes Verhalten und laufen im Echtbetrieb.
+    prisma.event.findUnique.mockResolvedValue({
+      id: "event-1",
+      status: "ACTIVE",
+      testMode: false,
+    });
     service = new RunnerService(prisma);
   });
 
@@ -266,5 +278,71 @@ describe("RunnerService – Wächtertests für Issue #50", () => {
       service.deliverOrder(secondRunner, "order-1"),
     ).rejects.toBeInstanceOf(ForbiddenException);
     expect(prisma.orderItem.updateMany).not.toHaveBeenCalled();
+  });
+
+  // Issue #158: Der Runner leitete keine Betriebsart ab und zeigte damit
+  // TEST- und LIVE-Bestellungen desselben Events ungetrennt nebeneinander.
+  describe("Betriebsartentrennung (Issue #158)", () => {
+    it("schränkt die READY-Warteschlange auf die Betriebsart der Veranstaltung ein", async () => {
+      prisma.event.findUnique.mockResolvedValue({
+        id: "event-1",
+        status: "ACTIVE",
+        testMode: false,
+      });
+      prisma.order.findMany.mockResolvedValue([]);
+
+      await service.listOrders(runner, "event-1");
+
+      expect(prisma.order.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            eventId: "event-1",
+            dataMode: "LIVE",
+          }),
+        }),
+      );
+    });
+
+    it("schränkt die Übernahme-Liste (listMine) ebenfalls auf die Betriebsart der Veranstaltung ein", async () => {
+      prisma.event.findUnique.mockResolvedValue({
+        id: "event-1",
+        status: "TEST_MODE",
+        testMode: true,
+      });
+      prisma.order.findMany.mockResolvedValue([]);
+
+      await service.listMine(runner, "event-1");
+
+      expect(prisma.order.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            eventId: "event-1",
+            dataMode: "TEST",
+          }),
+        }),
+      );
+    });
+
+    it("liefert eine leere READY-Warteschlange, statt Bestellungen einer nicht laufenden Veranstaltung zu zeigen", async () => {
+      prisma.event.findUnique.mockResolvedValue({
+        id: "event-1",
+        status: "PAUSED",
+        testMode: false,
+      });
+
+      await expect(service.listOrders(runner, "event-1")).resolves.toEqual([]);
+      expect(prisma.order.findMany).not.toHaveBeenCalled();
+    });
+
+    it("liefert eine leere Übernahme-Liste, statt Bestellungen einer nicht laufenden Veranstaltung zu zeigen", async () => {
+      prisma.event.findUnique.mockResolvedValue({
+        id: "event-1",
+        status: "COMPLETED",
+        testMode: false,
+      });
+
+      await expect(service.listMine(runner, "event-1")).resolves.toEqual([]);
+      expect(prisma.order.findMany).not.toHaveBeenCalled();
+    });
   });
 });

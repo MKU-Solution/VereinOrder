@@ -1,4 +1,5 @@
 import { BadRequestException, ConflictException } from "@nestjs/common";
+import type { EventStatus } from "@vereinorder/database";
 import { EventsService } from "./events.service";
 
 type EventManagementServiceContract = {
@@ -1079,5 +1080,92 @@ describe("EventsService – Wächtervertrag für Issue #53", () => {
       contract.importConfig("admin-1", "import-depth-key", payload),
     ).rejects.toBeInstanceOf(BadRequestException);
     expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  // Issue #158: Der Weg IN den Echtbetrieb lehnt vorhandene TEST-Bestellungen
+  // und TEST-Kassensitzungen ab. Fuer den Rueckweg auf TEST_MODE fehlte die
+  // spiegelbildliche Pruefung gegen LIVE-Bestellungen/-Kassensitzungen -
+  // ohne sie koennten in einer Veranstaltung ueberhaupt erst gemischte Daten
+  // entstehen, die z.B. die Zusteller-Warteschlange nicht mehr trennen kann.
+  describe("changeStatus – symmetrische Betriebsartensperre (Issue #158)", () => {
+    it("lehnt den Rückweg auf TEST_MODE ab, wenn für die Veranstaltung bereits LIVE-Bestellungen existieren", async () => {
+      tx.$queryRaw.mockResolvedValueOnce([
+        { id: "event-live", name: "Fest", status: "ACTIVE", testMode: false },
+      ]);
+      tx.order.count.mockImplementation(({ where }: any) =>
+        Promise.resolve(where?.dataMode === "LIVE" ? 1 : 0),
+      );
+      tx.cashierSession.count.mockResolvedValue(0);
+      tx.event.update.mockResolvedValue({
+        id: "event-live",
+        status: "TEST_MODE",
+        testMode: true,
+      });
+
+      await expect(
+        service.changeStatus(
+          "event-live",
+          "TEST_MODE" as EventStatus,
+          "admin-1",
+        ),
+      ).rejects.toBeInstanceOf(ConflictException);
+      expect(tx.event.update).not.toHaveBeenCalled();
+    });
+
+    it("lehnt den Rückweg auf TEST_MODE ab, wenn für die Veranstaltung bereits eine LIVE-Kassensitzung existiert", async () => {
+      tx.$queryRaw.mockResolvedValueOnce([
+        { id: "event-live", name: "Fest", status: "ACTIVE", testMode: false },
+      ]);
+      tx.order.count.mockResolvedValue(0);
+      tx.cashierSession.count.mockImplementation(({ where }: any) =>
+        Promise.resolve(where?.dataMode === "LIVE" ? 1 : 0),
+      );
+      tx.event.update.mockResolvedValue({
+        id: "event-live",
+        status: "TEST_MODE",
+        testMode: true,
+      });
+
+      await expect(
+        service.changeStatus(
+          "event-live",
+          "TEST_MODE" as EventStatus,
+          "admin-1",
+        ),
+      ).rejects.toBeInstanceOf(ConflictException);
+      expect(tx.event.update).not.toHaveBeenCalled();
+    });
+
+    it("erlaubt den Rückweg auf TEST_MODE, wenn keine LIVE-Bestellungen oder -Kassensitzungen existieren", async () => {
+      tx.$queryRaw.mockResolvedValueOnce([
+        { id: "event-live", name: "Fest", status: "ACTIVE", testMode: false },
+      ]);
+      tx.order.count.mockResolvedValue(0);
+      tx.cashierSession.count.mockResolvedValue(0);
+      tx.event.update.mockResolvedValue({
+        id: "event-live",
+        status: "TEST_MODE",
+        testMode: true,
+      });
+
+      await expect(
+        service.changeStatus(
+          "event-live",
+          "TEST_MODE" as EventStatus,
+          "admin-1",
+        ),
+      ).resolves.toEqual(
+        expect.objectContaining({ status: "TEST_MODE", testMode: true }),
+      );
+      expect(tx.event.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: "event-live" },
+          data: expect.objectContaining({
+            status: "TEST_MODE",
+            testMode: true,
+          }),
+        }),
+      );
+    });
   });
 });

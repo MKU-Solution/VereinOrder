@@ -8,6 +8,7 @@ import { PrismaClient } from "@vereinorder/database";
 import { PRISMA_CLIENT } from "../prisma/prisma.module";
 import { deriveFulfillmentStatus } from "../orders/fulfillment-status";
 import { productAtStationFilter } from "../common/target-station";
+import { resolveOperationalDataMode } from "../common/operational-data-mode";
 import {
   CreateStationDto,
   MutableStationItemStatus,
@@ -102,11 +103,29 @@ export class StationsService {
         "Die gewählte Veranstaltung existiert nicht.",
       );
   }
+  // Issue #158: die Stationsanzeige bekommt nur die Stations-ID und darf
+  // trotzdem nicht ueber Veranstaltungen oder Betriebsarten hinweg lesen.
+  // Die Station kennt ihre Veranstaltung selbst (Station.eventId); die
+  // Betriebsart wird ausschliesslich ueber resolveOperationalDataMode
+  // abgeleitet (einzige Ableitung im Backend, Issue #152). Laeuft die
+  // Veranstaltung nicht, liefert die Funktion null und die Liste ist leer.
   async getPendingItems(stationId: string) {
+    const station = await this.prisma.station.findUnique({
+      where: { id: stationId },
+      select: {
+        eventId: true,
+        event: { select: { status: true, testMode: true } },
+      },
+    });
+    if (!station) return [];
+    const dataMode = resolveOperationalDataMode(station.event);
+    if (!dataMode) return [];
+
     return this.prisma.orderItem.findMany({
       where: {
         status: { in: ["PENDING", "PREPARING"] },
         product: productAtStationFilter(stationId),
+        order: { eventId: station.eventId, dataMode },
       },
       include: {
         product: true,
