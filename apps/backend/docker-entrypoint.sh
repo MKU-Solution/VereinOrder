@@ -32,7 +32,19 @@ else
   fi
 
   printf 'docker-entrypoint: Migrationsstand nach dem Deploy:\n'
-  pnpm --filter @vereinorder/database exec prisma migrate status
+  # Bewusst NICHT scharf, anders als "deploy" oben: "migrate status" dient
+  # laut #172 nur dazu, den angewandten Stand im Containerprotokoll sichtbar
+  # zu machen. Sein Rueckgabewert ist nicht nur bei ausstehenden Migrationen
+  # ungleich null, sondern auch bei einer Schema-Abweichung (drift) - etwa
+  # nach einer Wiederherstellung ueber apps/backend/src/backup/*, die die
+  # Datenbank durch eine Sicherung ersetzt. "deploy" direkt darueber ist zu
+  # diesem Zeitpunkt bereits erfolgreich durchgelaufen; wuerde dieser rein
+  # informative Aufruf unter "set -eu" das Skript trotzdem abbrechen, stuerbe
+  # der Container an einem Protokollbefehl und liefe unter "restart: always"
+  # in einer Neustartschleife, obwohl das Schema laengst auf dem
+  # gewuenschten Stand ist. "|| true" faengt den Rueckgabewert ab, die
+  # Ausgabe von "migrate status" selbst wird trotzdem protokolliert.
+  pnpm --filter @vereinorder/database exec prisma migrate status || true
 fi
 
 # "exec" ersetzt den Shell-Prozess durch den eigentlichen CMD-Prozess, damit
