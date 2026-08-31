@@ -60,6 +60,13 @@ COPY --from=builder /app/apps/backend/dist ./apps/backend/dist
 # Create backup directory
 RUN mkdir -p /app/backups
 
+# Entrypoint (#172): fuehrt "prisma migrate deploy" vor dem Anwendungsstart
+# aus. Endet mit "exec \"$@\"", damit CMD unveraendert bleibt und Signale
+# durchgereicht werden (wichtig fuer RESTORE_EXIT_AFTER_SWAP).
+COPY apps/backend/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
+
 EXPOSE 3000
 
 CMD ["node", "apps/backend/dist/main"]

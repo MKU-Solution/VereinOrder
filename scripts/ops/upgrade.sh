@@ -34,9 +34,16 @@ done
 curl --fail --silent --show-error --request POST --header "$AUTH_HEADER" \
   "${API_BASE_URL}/backup/pre-migration" >/dev/null
 
-docker compose run --rm --no-deps backend \
+# SKIP_AUTO_MIGRATE=1 haelt den Entrypoint (#172, apps/backend/docker-entrypoint.sh)
+# davon ab, hier zusaetzlich selbst zu migrieren - er wuerde sonst vor dem
+# untenstehenden, ausdruecklich uebergebenen Befehl laufen und "migrate
+# deploy" doppelt ausfuehren. "set -eu" am Kopf dieses Skripts sorgt weiterhin
+# dafuer, dass ein Fehlschlag von "docker compose run" (z. B. weil die
+# Migration fehlschlaegt) das Skript sofort abbricht, bevor "maintenance/end"
+# erreicht wird.
+docker compose run --rm --no-deps -e SKIP_AUTO_MIGRATE=1 backend \
   pnpm --filter @vereinorder/database exec prisma migrate deploy
-docker compose run --rm --no-deps backend \
+docker compose run --rm --no-deps -e SKIP_AUTO_MIGRATE=1 backend \
   pnpm --filter @vereinorder/database exec prisma migrate status
 
 curl --fail --silent --show-error --request POST --header "$AUTH_HEADER" \

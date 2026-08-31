@@ -1,0 +1,19 @@
+# Erzwungene LF-Zeilenenden fuer Dateien, die per Shebang von einer Shell
+# ausgefuehrt werden oder deren CRLF-Verunreinigung ein Docker-Abbild kaputt
+# macht (#172-Nachbesserung).
+#
+# Ohne diese Datei wandelt "core.autocrlf=true" beim Auschecken auf Windows
+# LF in CRLF um, unabhaengig davon, wie die Datei im Blob gespeichert ist.
+# Ein so ausgechecktes Entrypoint baut fehlerfrei (Docker liest Bytes ohne
+# Rueckrechnung), stirbt aber beim Containerstart mit
+# "exec ...: no such file or directory", weil "/bin/sh\r" kein gueltiger
+# Interpreter-Pfad ist - und das in einer "restart: always"-Schleife ohne
+# hilfreiche Meldung. "eol=lf" verhindert das: Git checkt diese Dateien immer
+# mit LF aus, unabhaengig von "core.autocrlf" auf der jeweiligen Maschine.
+
+*.sh text eol=lf
+
+# Multi-Zeilen-RUN-Befehle mit Backslash-Fortsetzung (z. B.
+# apps/backend/Dockerfile) sind auf CRLF nach dem Backslash ebenfalls
+# empfindlich - dieselbe Zusicherung deshalb auch fuer alle Dockerfiles.
+Dockerfile text eol=lf
