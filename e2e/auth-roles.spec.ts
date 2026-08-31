@@ -8,7 +8,7 @@ const viewports = [
 
 async function login(page: Page, username: string) {
   await page.goto("/login");
-  await page.getByPlaceholder("z.B. admin").fill(username);
+  await page.getByPlaceholder("Benutzername").fill(username);
   await page.getByPlaceholder("••••").fill("1234");
   await page.getByRole("button", { name: "Anmelden" }).click();
   await expect(page).toHaveURL(/\/$/);
