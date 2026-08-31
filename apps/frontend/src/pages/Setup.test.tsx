@@ -8,7 +8,7 @@ import {
   SetupStatusProvider,
   SetupStatusTestProvider,
 } from "../lib/SetupStatusProvider";
-import { AuthGuard } from "../components/layout/AuthGuard";
+import { RequireSetupComplete } from "../components/layout/RequireSetupComplete";
 import { useAuthStore } from "../store/useAuthStore";
 
 vi.mock("../lib/api");
@@ -163,15 +163,15 @@ describe("Ersteinrichtung", () => {
    * Browsertest gegen ein frisches Docker-Bündel auffiel: Mit dem ECHTEN
    * `SetupStatusProvider` (der `GET /setup/status` nur EINMAL beim
    * Einhängen abfragt) blieb der Kontext nach einer erfolgreichen Anlage
-   * bei "required" stehen, und `AuthGuard` schickte den gerade frisch
+   * bei "required" stehen, und der Routenwächter schickte den gerade frisch
    * angemeldeten Administrator sofort wieder auf `/setup` zurück - eine
    * Endlosschleife aus Sicht der Bedienung. `renderSetup` oben verwendet
    * `SetupStatusTestProvider` mit einem FESTEN Wert und kann diesen Fehler
    * strukturell nicht sehen, weil dessen `markCompleted` wirkungslos ist.
    * Dieser Test verdrahtet deshalb bewusst den echten Provider mit
-   * `AuthGuard`.
+   * `RequireSetupComplete` - genau wie `App.tsx` es tut.
    */
-  it("lässt AuthGuard nach der Anlage nicht auf /setup zurückverweisen", async () => {
+  it("lässt RequireSetupComplete nach der Anlage nicht auf /setup zurückverweisen", async () => {
     vi.mocked(api.get).mockResolvedValue({
       data: { setupRequired: true },
     } as any);
@@ -196,8 +196,8 @@ describe("Ersteinrichtung", () => {
         <MemoryRouter initialEntries={["/setup"]}>
           <Routes>
             <Route path="/setup" element={<Setup />} />
-            <Route path="/login" element={<div>LOGIN-SEITE</div>} />
-            <Route element={<AuthGuard />}>
+            <Route element={<RequireSetupComplete />}>
+              <Route path="/login" element={<div>LOGIN-SEITE</div>} />
               <Route path="/" element={<div>DASHBOARD-SEITE</div>} />
             </Route>
           </Routes>

@@ -19,18 +19,24 @@ import { expect, test } from "@playwright/test";
  *
  * Was sich in dieser gemeinsamen Umgebung ehrlich und ohne Seiteneffekt auf
  * andere Specs prüfen lässt, ist die andere Hälfte des Vertrags aus #174:
- * Ist die Ersteinrichtung bereits erledigt (hier: durch den Seed), ist
- * `/setup` nicht mehr erreichbar und führt zurück auf `/login`.
+ * Ist die Ersteinrichtung bereits erledigt (hier: durch den Seed), sind
+ * `/setup` UND ein direkter Aufruf von `/login` nicht dauerhaft blockiert -
+ * `/setup` führt zurück auf `/login`, und `/login` selbst bleibt normal
+ * bedienbar (die Regressionsstelle aus der ersten Fassung, siehe
+ * `RequireSetupComplete.tsx`).
  *
  * Der volle Weg auf einem tatsächlich leeren System - Formular ausfüllen,
  * Fehlerfälle (abweichende Wiederholung, zu kurze PIN, bereits
- * eingerichtet), automatische Anmeldung danach - ist für diese Aufgabe
- * manuell gegen ein frisches, isoliertes Docker-Bündel auf drei Viewports
- * geprüft worden (CONTRIBUTING.md Abschnitt 1.3) und ist automatisiert über
- * `apps/frontend/src/pages/Setup.test.tsx` abgesichert, das die leere
- * Benutzertabelle über eine gemockte `GET /setup/status`-Antwort simuliert
- * - genau das, was in dieser gemeinsam genutzten E2E-Datenbank nicht
- * herstellbar ist, ohne den Seed zu zerstören.
+ * eingerichtet), automatische Anmeldung danach, sowie der direkte Aufruf
+ * von `/login` VOR der Anlage - ist für diese Aufgabe manuell gegen ein
+ * frisches, isoliertes Docker-Bündel geprüft worden (CONTRIBUTING.md
+ * Abschnitt 1.3), ist automatisiert über `apps/frontend/src/pages/Setup.test.tsx`
+ * und `apps/frontend/src/components/layout/RequireSetupComplete.test.tsx`
+ * abgesichert (beide simulieren die leere Benutzertabelle über den
+ * Setup-Status-Kontext, statt eine echte leere Datenbank zu brauchen), und
+ * wird auf Schnittstellenebene zusätzlich von #192 abgedeckt - dort ist die
+ * Lücke zu suchen, falls dieser Weg künftig einmal gegen eine echte leere
+ * Datenbank laufen soll.
  */
 test.describe("Ersteinrichtung auf einem bereits eingerichteten System", () => {
   test("/setup ist nicht erreichbar und führt zur Anmeldemaske", async ({
@@ -40,5 +46,15 @@ test.describe("Ersteinrichtung auf einem bereits eingerichteten System", () => {
 
     await expect(page).toHaveURL(/\/login$/);
     await expect(page.getByPlaceholder("Benutzername")).toBeVisible();
+  });
+
+  test("/login bleibt direkt aufrufbar und funktionsfähig", async ({
+    page,
+  }) => {
+    await page.goto("/login");
+
+    await expect(page).toHaveURL(/\/login$/);
+    await expect(page.getByPlaceholder("Benutzername")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Anmelden" })).toBeVisible();
   });
 });
