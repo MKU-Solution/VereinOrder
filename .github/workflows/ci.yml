@@ -202,15 +202,6 @@ jobs:
     # wuerde nur denselben Compose-Ablauf ein zweites Mal ausfuehren, ohne
     # eine neue Aussage ueber die Migration selbst zu liefern - unnoetiger
     # Ressourcenverbrauch fuer diesen Auftrag.
-    #
-    # Abweichung vom Umfang in #172: Dort wird zusaetzlich verlangt, den
-    # Anmeldeablauf aus #173 (Setup-Wizard, erster Administrator) bis zur
-    # erfolgreichen Anmeldung durchzuspielen. #173 ist zum Zeitpunkt dieser
-    # Aenderung noch nicht umgesetzt - es gibt weder einen Setup-Endpunkt
-    # noch einen anmeldbaren Benutzer. Dieser Auftrag prueft deshalb nur
-    # Migration und Erreichbarkeit; sobald #173 steht, gehoert hier ein
-    # weiterer Schritt hin, der den Setup-Endpunkt aufruft und sich
-    # anschliessend mit dem angelegten Administrator anmeldet.
     steps:
       - uses: actions/checkout@v4
       # Seit #175 werden hier BEWUSST keine Geheimnisse mehr gesetzt. Genau
@@ -220,30 +211,35 @@ jobs:
       # JWT_SECRET fiel auf einen im Repository stehenden Wert zurueck.
       - name: Bündel bauen und hochfahren (ohne .env, ohne gesetzte Geheimnisse)
         run: docker compose up -d --build
-      - name: Auf migriertes, antwortendes Backend warten
+      - name: Auf migriertes Backend warten und ausstehende Ersteinrichtung belegen
         run: |
+          set -euo pipefail
+          # GET /setup/status zaehlt die Tabelle "User" (SetupService.getStatus).
+          # Vor der Migration liefert das 500 (PrismaClientKnownRequestError:
+          # relation does not exist, siehe #172), danach 200. Der Aufruf
+          # ersetzt den frueheren Umweg ueber ein erfundenes Login
+          # ("ci-docker-smoke-check" / 401 als Schema-Beleg) - er dient
+          # zugleich als Warteschleife UND liefert direkt die erste Aussage
+          # von #192: die Ersteinrichtung ist auf einem frischen Buendel
+          # als ausstehend gemeldet.
           status=000
           for i in $(seq 1 60); do
-            status=$(curl -s -o /dev/null -w '%{http_code}' -X POST \
-              http://127.0.0.1:3000/auth/login \
-              -H 'Content-Type: application/json' \
-              -d '{"username":"ci-docker-smoke-check","pin":"0000"}') || status=000
-            # 401 heisst: Das Backend antwortet, die Tabelle "User" existiert
-            # und wurde erfolgreich abgefragt - nur eben kein solcher
-            # Benutzer gefunden. Vor der Migration lieferte derselbe Aufruf
-            # 500 (PrismaClientKnownRequestError: relation does not exist),
-            # siehe #172.
-            if [ "$status" = "401" ]; then
-              echo "Backend antwortet mit 401 - Schema ist vorhanden."
+            status=$(curl -s -o /dev/null -w '%{http_code}' \
+              http://127.0.0.1:3000/setup/status) || status=000
+            if [ "$status" = "200" ]; then
+              echo "Backend antwortet mit 200 - Schema ist vorhanden."
               break
             fi
             sleep 2
           done
-          if [ "$status" != "401" ]; then
+          if [ "$status" != "200" ]; then
             echo "Backend antwortet nicht wie erwartet (letzter Status: $status)." >&2
             docker compose logs
             exit 1
           fi
+          body=$(curl -s http://127.0.0.1:3000/setup/status)
+          echo "GET /setup/status (vor der Ersteinrichtung): $body"
+          echo "$body" | grep -q '"setupRequired":true'
       - name: Migrationsstand im Container prüfen
         run: docker compose exec -T backend pnpm --filter @vereinorder/database exec prisma migrate status
       - name: Tabellen in PostgreSQL prüfen
@@ -252,6 +248,80 @@ jobs:
             "SELECT count(*) FROM information_schema.tables WHERE table_schema='public'")
           echo "Öffentliche Tabellen nach der Migration: $count"
           test "$count" -gt 0
+      - name: Administrator über die Ersteinrichtung anlegen
+        run: |
+          set -euo pipefail
+          # Erzeugte Werte statt Literale aus einer Beispieldatei: Sonst
+          # pruefte dieser Schritt nur, dass EIN bestimmter String die
+          # Validierung besteht, nicht dass die Ersteinrichtung selbst
+          # funktioniert. username/pin muessen dieselbe Regel wie
+          # AuthService.validateUser erfuellen (setup.dto.ts importiert
+          # PIN_PATTERN direkt aus users.dto.ts) - genau der Fallstrick, den
+          # setup.dto.ts im Kommentar beschreibt: ein hier abweichendes
+          # Muster ergaebe ein Konto, das angelegt werden kann, sich aber
+          # nie anmelden kann.
+          admin_user="ci-setup-admin-${{ github.run_id }}-${{ github.run_attempt }}"
+          admin_pin=$(printf '%06d' "$RANDOM")
+          echo "::add-mask::$admin_pin"
+
+          http_code=$(curl -s -o /tmp/setup-admin-response.json -w '%{http_code}' -X POST \
+            http://127.0.0.1:3000/setup/admin \
+            -H 'Content-Type: application/json' \
+            -d "{\"username\":\"$admin_user\",\"pin\":\"$admin_pin\"}")
+          echo "POST /setup/admin antwortet mit $http_code"
+          if [ "$http_code" != "201" ]; then
+            echo "Erwartete 201, siehe Antwort:" >&2
+            cat /tmp/setup-admin-response.json >&2
+            exit 1
+          fi
+
+          # Die Antwort (SetupController.createAdministrator) enthaelt
+          # bewusst KEINEN PIN-Hash - kein Geheimnis, das hier gedruckt
+          # werden duerfte.
+          cat /tmp/setup-admin-response.json
+          grep -q "\"username\":\"$admin_user\"" /tmp/setup-admin-response.json
+          grep -q '"role":"ADMINISTRATOR"' /tmp/setup-admin-response.json
+          grep -q '"isActive":true' /tmp/setup-admin-response.json
+          if grep -q "pinHash" /tmp/setup-admin-response.json; then
+            echo "Antwort enthält einen PIN-Hash, der dort nicht stehen darf." >&2
+            exit 1
+          fi
+          rm -f /tmp/setup-admin-response.json
+
+          echo "SETUP_ADMIN_USERNAME=$admin_user" >> "$GITHUB_ENV"
+          echo "SETUP_ADMIN_PIN=$admin_pin" >> "$GITHUB_ENV"
+      - name: Abgeschlossene Ersteinrichtung über setup/status belegen
+        run: |
+          set -euo pipefail
+          body=$(curl -s http://127.0.0.1:3000/setup/status)
+          echo "GET /setup/status (nach der Ersteinrichtung): $body"
+          echo "$body" | grep -q '"setupRequired":false'
+      - name: Anmeldung mit dem angelegten Administrator (eigentliche Aussage dieses Auftrags)
+        run: |
+          set -euo pipefail
+          http_code=$(curl -s -o /tmp/auth-login-response.json -w '%{http_code}' -X POST \
+            http://127.0.0.1:3000/auth/login \
+            -H 'Content-Type: application/json' \
+            -d "{\"username\":\"$SETUP_ADMIN_USERNAME\",\"pin\":\"$SETUP_ADMIN_PIN\"}")
+          echo "POST /auth/login antwortet mit $http_code"
+          if [ "$http_code" != "200" ]; then
+            echo "Erwartete 200, siehe Antwort:" >&2
+            cat /tmp/auth-login-response.json >&2
+            exit 1
+          fi
+
+          # access_token nicht drucken - nur belegen, dass eines da ist, und
+          # fuer den Neustart-Schritt unten sichern (#175: dort wird
+          # geprueft, dass ein VOR dem Neuanlegen ausgestelltes Token danach
+          # noch gilt).
+          token=$(grep -o '"access_token":"[^"]*"' /tmp/auth-login-response.json | cut -d'"' -f4)
+          rm -f /tmp/auth-login-response.json
+          if [ -z "$token" ]; then
+            echo "Antwort auf POST /auth/login enthielt trotz Status 200 kein access_token." >&2
+            exit 1
+          fi
+          echo "::add-mask::$token"
+          echo "$token" > /tmp/setup-admin-token-vor-neustart
       - name: Erzeugte Geheimnisse prüfen (#175)
         run: |
           for file in jwt-secret print-worker-token; do
@@ -267,21 +337,57 @@ jobs:
             echo "Der erzeugte Schluessel steht im Protokoll." >&2
             exit 1
           }
-          echo "$secret" > /tmp/jwt-secret-vor-neustart
+          # printf statt echo: "$secret" kommt aus einer Kommandosubstitution
+          # und traegt deshalb nie einen abschliessenden Zeilenumbruch,
+          # gleich ob die Datei selbst einen hatte oder nicht (ensure-
+          # secrets.ts schreibt den Wert ohne Zeilenumbruch). "echo" wuerde
+          # hier einen hinzufuegen, den "cat" beim naechsten Start (Schritt
+          # "Zweiter Start verwendet denselben Schluessel") NICHT mitbringt -
+          # der folgende byteweise Vergleich schluege dann JEDES Mal fehl,
+          # unabhaengig davon, ob der Schluessel wirklich gleich ist.
+          printf '%s' "$secret" > /tmp/jwt-secret-vor-neustart
       - name: Zweiter Start verwendet denselben Schlüssel (#175)
         run: |
+          set -euo pipefail
           # Container neu anlegen, nicht nur neu starten: Der Schluessel
           # liegt auf dem Volume vereinorder_state_data und muss genau das
           # ueberleben. Bliebe er nicht gleich, waere jedes ausgegebene
           # Token nach einem Update ungueltig.
           docker compose up -d --force-recreate --no-deps backend
+          status=000
           for i in $(seq 1 60); do
-            status=$(curl -s -o /dev/null -w '%{http_code}' -X POST               http://127.0.0.1:3000/auth/login               -H 'Content-Type: application/json'               -d '{"username":"ci-docker-smoke-check","pin":"0000"}') || status=000
+            status=$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+              http://127.0.0.1:3000/auth/login \
+              -H 'Content-Type: application/json' \
+              -d '{"username":"ci-docker-smoke-check","pin":"0000"}') || status=000
             [ "$status" = "401" ] && break
             sleep 2
           done
+          if [ "$status" != "401" ]; then
+            echo "Backend antwortet nach dem Neuanlegen nicht wie erwartet (letzter Status: $status)." >&2
+            docker compose logs backend
+            exit 1
+          fi
+
           docker compose exec -T backend cat /app/state/jwt-secret > /tmp/jwt-secret-nach-neustart
           diff /tmp/jwt-secret-vor-neustart /tmp/jwt-secret-nach-neustart
+
+          # Staerkere, verhaltensbezogene Aussage zum Dateivergleich oben:
+          # Der Dateivergleich zeigt nur, dass zwei Dateien byteweise
+          # gleich sind. Die eigentliche Zusage aus #175 ist, dass ein VOR
+          # dem Neuanlegen des Containers mit dem alten Schluessel
+          # ausgestelltes Token danach noch gilt. /users ist bewusst
+          # gewaehlt: Der Weg verlangt JwtAuthGuard UND
+          # RolesGuard("ADMINISTRATOR") (users.controller.ts) - das Token
+          # muss also nicht nur signiert, sondern mit der richtigen Rolle
+          # ausgestellt sein, damit dieser Aufruf 200 statt 401/403 liefert.
+          token=$(cat /tmp/setup-admin-token-vor-neustart)
+          users_status=$(curl -s -o /dev/null -w '%{http_code}' \
+            http://127.0.0.1:3000/users \
+            -H "Authorization: Bearer $token")
+          echo "GET /users mit dem Token von vor dem Neuanlegen: $users_status"
+          test "$users_status" = "200"
+          rm -f /tmp/jwt-secret-vor-neustart /tmp/jwt-secret-nach-neustart /tmp/setup-admin-token-vor-neustart
       - name: Print-Worker hat dasselbe Token wie das Backend (#175)
         run: |
           # Der Worker hat kein eigenes Geheimnis, sondern liest die Datei
