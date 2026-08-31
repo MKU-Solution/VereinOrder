@@ -34,7 +34,7 @@ sudo usermod -aG docker $USER
 
 ## 3. Statische IP-Adresse & mDNS einrichten
 
-Um sicherzustellen, dass alle Kellner-Smartphones den Server immer zuverlässig unter derselben IP oder `http://vereinorder.local:5173` erreichen:
+Um sicherzustellen, dass alle Kellner-Smartphones den Server immer zuverlässig unter derselben IP oder `http://vereinorder.local` erreichen:
 
 ### A. mDNS (Avahi) aktivieren
 
@@ -44,7 +44,7 @@ sudo systemctl enable --now avahi-daemon
 ```
 
 Damit ist VereinOrder im lokalen Netzwerk sofort erreichbar unter:  
-👉 `http://vereinorder-pi.local:5173`
+👉 `http://vereinorder-pi.local`
 
 ### B. Statische IP via NetworkManager zuweisen
 

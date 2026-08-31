@@ -11,7 +11,8 @@ VereinOrder ist für den Einsatz auf Vereins- und Feuerwehrfesten im **lokalen N
 - **Passwort- und PIN-Hashes:** Alle Benutzer-PINs werden mit **bcrypt** (Salt-Rounds >= 10) gehasht gespeichert. Im Klartext werden PINs niemals protokolliert oder übertragen.
 - **JWT-Sitzungen:** Sitzungen basieren auf kurzlebigen JWT-Tokens (`JsonWebToken`), die in API-Aufrufen über `Authorization: Bearer <token>` validiert werden.
 - **Strikte Backend-Guards:** Alle sicherheits- oder kassenrelevanten Aktionen (z. B. Stornos, Preisänderungen, Kassenabschlüsse, Datenbankbackups) werden serverseitig über NestJS-Guards (`RolesGuard`, `AdminSessionGuard`) geprüft. Das Ausblenden von Buttons im Frontend ist lediglich eine Bedienhilfe.
-- **Admin-Notfall-PIN (`ADMIN_SECRET`):** Bei der Ersteinrichtung wird ein Notfall-Admin-Konto mit einem kryptografisch sicheren Geheimnis initialisiert.
+- **Ersteinrichtung ohne vorgegebenes Konto:** Es gibt kein Standardkonto und keine Notfall-PIN. Solange die Benutzertabelle leer ist, führt die Anwendung im Browser zu einem Assistenten, der das erste Administrator-Konto anlegt; der Weg verschwindet danach. Restrisiko, bewusst in Kauf genommen: In diesem Zeitfenster wird Administrator, wer zuerst zugreift — die Ersteinrichtung ist deshalb vor dem Öffnen des Gäste-WLANs abzuschließen (siehe [Installationsanleitung](docs/ops/installation.md)).
+- **Selbst erzeugte Sicherheitsschlüssel:** `JWT_SECRET` und `PRINT_WORKER_TOKEN` stehen nicht im Repository. Bleiben sie in der `.env` leer, erzeugt das Backend beide beim ersten Start selbst und legt sie unter `STATE_DIR` ab (siehe [Umgebungsvariablen](docs/ops/umgebungsvariablen.md)).
 
 ### Schutz gegen typische Angriffsvektoren
 

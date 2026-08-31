@@ -41,15 +41,27 @@ mkdir -p ~/vereinorder && cd ~/vereinorder
 # Repository klonen
 git clone https://github.com/seipekm/VereinOrder.git .
 
-# Umgebungsvariablen anlegen
+# Umgebungsvariablen anlegen (mindestens ein sicheres POSTGRES_PASSWORD eintragen)
 cp .env.example .env
 
 # Stack im Hintergrund starten
 docker compose up -d
 ```
 
-Vor dem ersten Start und bei jedem Update werden Migrationen ausschließlich über den
-abgesicherten Betriebsweg ausgeführt:
+Der Entrypoint des Backend-Abbilds bringt die Datenbank beim ersten Start automatisch auf
+den aktuellen Migrationsstand — dafür ist kein Befehl auf der Konsole des Servers nötig.
+Anschließend im Browser `http://<IP-des-Raspberry-Pi>/` öffnen: Solange noch kein
+Benutzer angelegt ist, führt die Anwendung direkt zur Ersteinrichtung. Dort wird das
+erste Administrator-Konto angelegt, und man ist danach unmittelbar angemeldet.
+
+**Wichtig:** Solange die Ersteinrichtung aussteht, wird Administrator, wer zuerst darauf
+zugreift. Schließe sie deshalb ab, **bevor** du das Gäste-WLAN öffnest — der Hinweis
+steht seit der Ersteinrichtung selbst auch dauerhaft im Assistenten.
+
+### Aktualisierung eines laufenden Systems
+
+Für ein bereits eingerichtetes System — nicht für den ersten Start — läuft eine
+Aktualisierung ausschließlich über den abgesicherten Betriebsweg:
 
 ```bash
 export ADMIN_TOKEN='<aktuelles Administrator-JWT>'
@@ -60,6 +72,15 @@ Der Ablauf setzt den Wartungsmodus, erzeugt eine geprüfte `PRE_MIGRATION`-Siche
 führt `prisma migrate deploy` sowie `prisma migrate status` aus und öffnet das System
 erst nach Erfolg wieder. Details und der Notfall-Restore stehen in
 [`docs/ops/backup-recovery.md`](./backup-recovery.md).
+
+**Falle beim Token:** Hole `ADMIN_TOKEN` erst, NACHDEM die Container neu angelegt wurden
+(`docker compose up -d --build`), nicht davor. Das Skript selbst braucht dafür keine
+Änderung — es migriert über `docker compose run --rm` und legt den laufenden
+Backend-Container nicht neu an, ein vorab geholtes Token bleibt für die Dauer seines
+Laufs gültig. Der Schlüsselwechsel beim erneuten `docker compose up -d --build` selbst
+schlägt aber zu: Läuft die bisherige Installation ohne gesetztes `JWT_SECRET`, erzeugt
+das Backend dabei einen neuen Schlüssel, und ein davor ausgestelltes Token wird
+ungültig. Wer das Token vor diesem Schritt holt, steht danach mit einem ungültigen da.
 
 ---
 

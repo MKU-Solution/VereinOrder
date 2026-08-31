@@ -78,10 +78,22 @@ Die Dienste sind anschließend erreichbar unter:
 
 ### 2. Produktionsstart via Docker Compose
 
+Anders als die lokale Entwicklung oben läuft der Docker-Betrieb auf Port 80 und kennt
+kein Seed-Konto: Der erste Administrator wird über einen Wizard im Browser angelegt.
+
 ```bash
+# Umgebungsvariablen anlegen (mindestens ein sicheres POSTGRES_PASSWORD eintragen)
+cp .env.example .env
+
 # Container für Backend, Frontend, PostgreSQL und Print-Worker starten
 docker compose up -d
 ```
+
+Der Entrypoint des Backend-Abbilds migriert die Datenbank beim ersten Start automatisch.
+Anschließend im Browser `http://<SERVER-IP>/` öffnen: Solange noch kein Benutzer existiert,
+führt die Anwendung direkt zur Ersteinrichtung. Details, insbesondere der Hinweis zum
+Zeitfenster vor Abschluss der Ersteinrichtung, stehen in der
+[Installationsanleitung](docs/ops/installation.md).
 
 ---
 

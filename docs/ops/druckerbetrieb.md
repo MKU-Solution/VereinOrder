@@ -228,6 +228,18 @@ Für den Betrieb folgt daraus:
 Bei allen Fällen mit unklarem Ausgang gilt: **kein automatischer zweiter Druckversuch.**
 Das System wartet auf eine Entscheidung in der Verwaltung.
 
+**Kaltstart-Neustarts des Print-Workers sind normal, kein Defekt.** Backend und
+Print-Worker starten beim ersten `docker compose up -d` gleichzeitig. Das gemeinsame
+Geheimnis `PRINT_WORKER_TOKEN` erzeugt aber erst das Backend (siehe
+[Umgebungsvariablen](./umgebungsvariablen.md)); der Worker liest es über ein gemeinsames
+Volume. Verliert der Worker dieses Wettrennen, protokolliert er `worker.token_waiting`
+und wartet bis zu 60 Sekunden; findet die Datei danach immer noch nicht, endet der
+Prozess mit Fehlerstatus und wird durch `restart: always` erneut gestartet — deshalb
+zeigt `docker compose ps` oder `docker logs vereinorder_print_worker` in den ersten
+Sekunden nach dem allerersten Start mitunter einen oder zwei Neustarts des Containers
+`vereinorder_print_worker`. Sobald die Tokendatei existiert, läuft der Worker stabil
+weiter.
+
 ## 9. Was „gedruckt“ bedeutet
 
 Der Nachweis, den VereinOrder führen kann, endet an der Übergabe an das Gerät: CUPS meldet
