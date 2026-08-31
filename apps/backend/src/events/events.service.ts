@@ -388,8 +388,11 @@ export class EventsService {
    * den Stand vor dem Testbetrieb zurueck (Issue #141).
    *
    * Warum ueberhaupt: "InventoryMovement" haengt per ON DELETE RESTRICT an
-   * "Order" und "OrderItem". Ohne diesen Schritt bricht die Bereinigung mit
-   * 23001 ab, und die Veranstaltung kann nicht mehr aktiviert werden.
+   * "Order" und "OrderItem". Ohne diesen Schritt bricht die Bereinigung an
+   * dieser Sperre ab, und die Veranstaltung kann nicht mehr aktiviert werden.
+   * Der gemeldete SQLSTATE haengt an der Serverfassung: bis PostgreSQL 17
+   * 23503 wie bei jeder Fremdschluesselverletzung, ab PostgreSQL 18 der
+   * eigene Code 23001 (Issue #204).
    *
    * Was genau geschieht:
    *  - Geloescht werden ausschliesslich TEST-Bewegungen dieser Veranstaltung
@@ -585,7 +588,7 @@ export class EventsService {
 
             // Issue #141: Das Bestands-Ledger haengt per ON DELETE RESTRICT an
             // "Order" und "OrderItem". Ohne diesen Schritt scheitert die
-            // Bereinigung mit 23001, sobald im Testbetrieb ein
+            // Bereinigung an dieser Sperre, sobald im Testbetrieb ein
             // bestandsgefuehrtes Produkt verkauft wurde - und die
             // Veranstaltung liesse sich nie wieder auf Echtbetrieb umstellen.
             // Der Aufruf muss vor dem Loeschen der Bestellungen stehen.
