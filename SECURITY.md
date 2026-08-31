@@ -35,6 +35,7 @@ Da VereinOrder im lokalen Netzwerk betrieben wird, ist das lokale Netzwerk die e
 1. **WLAN-Verschlüsselung:** Das Vereins-WLAN muss mit mindestens **WPA2-PSK (AES)** oder **WPA3** und einem starken Passwort geschützt sein.
 2. **Gastnetzwerk trennen:** Gäste-WLAN (sofern vorhanden) muss über ein separates VLAN vollständig vom Kassen-Netzwerk isoliert sein.
 3. **Physische Sicherheit:** Der Server (Raspberry Pi / Mini-PC) sollte an einem vor unbefugtem Zugriff geschützten Ort (z. B. Kassenbüro / Schank-Zentrale) aufgestellt werden.
+4. **Datenbankport nicht im Netz veröffentlicht (#181):** Der PostgreSQL-Port ist im Docker-Bündel nur auf die Loopback-Adresse des Hosts gebunden (`127.0.0.1:5432:5432`), nicht auf allen Schnittstellen. Diese Absicherung des Fest-Netzwerks bleibt damit die erste, aber nicht mehr die einzige Verteidigungslinie gegen einen direkten Datenbankzugriff aus dem WLAN.
 
 ---
 

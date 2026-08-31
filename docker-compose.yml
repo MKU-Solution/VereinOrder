@@ -10,8 +10,19 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - backup_data:/backups
+    # #181: Nur auf die Loopback-Adresse des Hosts binden, nicht auf allen
+    # Schnittstellen. Im Festbetrieb haengt der Rechner im selben Netz wie die
+    # Bediengeraete; ein offenes oder mit Gaesten geteiltes WLAN machte die
+    # Datenbank sonst an der Anwendung, ihren Guards und ihrem Audit-Log
+    # vorbei direkt ansprechbar. Der ersatzlose Wegfall waere sicherer
+    # gewesen, haette aber den Notfall-Wiederherstellungsweg
+    # (scripts/ops/restore.sh, docs/ops/backup-recovery.md Abschnitt 4)
+    # umschreiben muessen - ein Verfahren, das im Ernstfall unter Druck
+    # ablaeuft, aendert man nicht ohne Not. Auf dem Server selbst bleiben
+    # beide dokumentierten Wege unveraendert erreichbar; vom Laptop aus
+    # braucht ein Datenbankwerkzeug jetzt einen SSH-Tunnel.
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
       interval: 5s
