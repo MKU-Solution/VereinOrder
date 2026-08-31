@@ -529,7 +529,7 @@ jobs:
           echo "Migrationen im PRE_MIGRATION-Manifest laut 'migrations'-Feld:"
           # Nur zur Nachvollziehbarkeit im Protokoll - die eigentliche Aussage
           # dieses Schritts steht bereits oben (die Wegwerfmigration fehlt im
-          # Manifest). serializeBackupManifest (native-backup.service.ts)
+          # Manifest). serializeBackupManifest (backup-manifest.ts:243)
           # schreibt ueber "JSON.stringify(manifest, null, 2)" eingerueckt,
           # also mit einem Leerzeichen nach dem Doppelpunkt
           # ("name": "...", nicht "name":"..."). "|| true" faengt hier
