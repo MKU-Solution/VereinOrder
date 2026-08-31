@@ -76,8 +76,29 @@ test.describe("Testdruck über den Print-Worker", () => {
     test.setTimeout(90_000);
     await login(page, "admin");
     await page.goto("/admin");
+    // Die Betriebsuebersicht (Zielseite der /admin-Weiterleitung) laedt beim
+    // Mounten selbst Daten ("events"-Bereich in AdminDashboardController).
+    // Klickt der Test sofort weiter, bevor diese erste Anfrage beantwortet
+    // ist, kann ihre Antwort NACH der Antwort des Drucker-Bereichs eintreffen
+    // und dessen bereits anzeigte Daten in useAdminAreaData.fetchData
+    // ueberschreiben (kein Abgleich, welcher Bereich beim Eintreffen noch
+    // aktiv ist) - sichtbar als vertauschte Karte ("Sommerfest 2026" statt
+    // "Hauptkasse Drucker"). Das Warten auf Netzwerkruhe bildet nach, dass
+    // eine bedienende Person die Uebersicht erst sieht, bevor sie weiterklickt,
+    // und umgeht damit diesen wettlaufbedingten Anzeigefehler, ohne ihn zu
+    // beheben. Er gehoert nicht zur Geraetesperre aus Issue #207 und ist
+    // eigenstaendig zu melden.
+    await page.waitForLoadState("networkidle");
 
-    await page.getByRole("button", { name: /Drucker & Bon-Routing/ }).click();
+    // Seit bf10761 ("routed admin shell and sidebar", waehrend des CI-Ausfalls
+    // ungeprueft auf main gelangt) ist die Verwaltungsnavigation ein
+    // React-Router-NavLink (Rolle "link"), kein <button> mehr wie zuvor in
+    // AdminDashboard.tsx (siehe 86974d3, "tabs"-Array mit <button>-Elementen).
+    // "button" fand hier nie ein Element - der Klick wartete bis zum
+    // Testzeitlimit, und weil in dieser Zeit keine echte Aktivitaet
+    // stattfand, schlug zusaetzlich die Geraetesperre zu (Issue #207). Die
+    // Sperre ist dabei nur ein Folgesymptom, keine Ursache.
+    await page.getByRole("link", { name: /Drucker & Bon-Routing/ }).click();
     await expect(page.getByText("Hauptkasse Drucker")).toBeVisible();
 
     await page
