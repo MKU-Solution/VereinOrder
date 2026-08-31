@@ -319,9 +319,11 @@ export const AdminBackupsView = ({
                                 className="h-3 w-3"
                               />
                             )}
-                            {(backup.verification as string) === "STRUCTURE_VERIFIED"
+                            {(backup.verification as string) ===
+                            "STRUCTURE_VERIFIED"
                               ? "Strukturgeprüft"
-                              : (backup.verification as string) === "CHECKSUM_ONLY" ||
+                              : (backup.verification as string) ===
+                                    "CHECKSUM_ONLY" ||
                                   backup.verification === "LEGACY"
                                 ? "Legacy-Prüfsumme"
                                 : backup.verification}
