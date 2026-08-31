@@ -25,6 +25,10 @@ VereinOrder wird nach verbindlichen Qualitäts-, Sicherheits- und Teststandards 
    - Keine externen CDNs, Google Fonts oder externen Skripte zur Laufzeit. Alle Assets müssen lokal ausgeliefert werden.
 6. **Cent-Genauigkeit:**
    - Geldbeträge werden ausnahmslos als ganzzahlige Cent-Beträge (`INTEGER`) verarbeitet und gespeichert.
+7. **Kein `[skip ci]`:**
+   - Commit-Nachrichten und Pull-Request-Titel dürfen keine CI-Sprungmarke enthalten: weder `[skip ci]` noch die von GitHub Actions gleichwirkend ausgewerteten `[ci skip]`, `[no ci]`, `[skip actions]`, `[actions skip]` oder den Nachsatz `skip-checks:true` (bzw. `skip-checks: true`) – auch nicht für reine Dokumentationsänderungen.
+   - Grund: Vom 24.08. bis 31.08.2026 lief die CI wegen eines Abrechnungsproblems gar nicht. In dieser Zeit gelangten 58 Commits ungeprüft auf `main`, 21 davon zusätzlich mit `[skip ci]` versehen. Der erste echte Lauf danach zeigte sechs rote Prüfungen mit vier Ursachen, davon zwei unmittelbar auf `[skip ci]`-Commits zurückgehend – Fehler, die je im eigenen Pull Request sofort sichtbar gewesen wären, statt gemeinsam mit drei fremden Ursachen entwirrt werden zu müssen.
+   - Sobald der für `main` vorgesehene Zweigschutz greift (gebunden an die Behebung von #207), macht er dieses Verbot selbsttragend: Pflichtprüfungen müssen dann grün sein, und `[skip ci]` sorgt dafür, dass gar keine Prüfung meldet – der Merge ist damit blockiert, unabhängig davon, ob jemand die Commit-Nachricht liest. Bis der Zweigschutz eingerichtet ist, gilt das Verbot ausschließlich kraft Einhaltung durch alle Mitwirkenden, einschließlich künftiger Agenten.
 
 ---
 
