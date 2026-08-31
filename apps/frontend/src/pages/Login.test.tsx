@@ -11,7 +11,7 @@ describe("Anmeldung", () => {
       </MemoryRouter>,
     );
 
-    expect(screen.getByPlaceholderText("z.B. admin")).toBeRequired();
+    expect(screen.getByPlaceholderText("Benutzername")).toBeRequired();
     expect(screen.getByPlaceholderText("••••")).toBeRequired();
     expect(screen.getByRole("button", { name: "Anmelden" })).toBeEnabled();
   });
