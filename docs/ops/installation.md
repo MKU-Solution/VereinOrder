@@ -31,14 +31,10 @@ Kopiere die Vorlage `.env.example` nach `.env`:
 cp .env.example .env
 ```
 
-Erzeuge sichere Passwörter und Tokens für Produktion (z. B. mit `openssl rand -hex 32`):
-
-```bash
-# In .env eintragen:
-POSTGRES_PASSWORD=SicheresDatenbankPasswort123!
-JWT_SECRET=KryptografischSichererJWTSchluessel456!
-ADMIN_SECRET=AdminNotfallPIN789!
-```
+Trage mindestens ein sicheres `POSTGRES_PASSWORD` ein (z. B. mit `openssl rand -hex 32`
+erzeugt); der mitgelieferte Beispielwert taugt nicht für den Festbetrieb. `JWT_SECRET`
+und `PRINT_WORKER_TOKEN` bleiben leer: Das Backend erzeugt beide beim ersten Start selbst
+und legt sie unter `STATE_DIR` ab (siehe [Umgebungsvariablen](./umgebungsvariablen.md)).
 
 ### Schritt 3: Container bauen und starten
 
@@ -57,20 +53,28 @@ docker compose logs -f backend
 
 ## 3. Bereitgestellte Dienste & Ports
 
-| Dienst           | Container-Name             | Port (Host)        | Beschreibung                         |
-| ---------------- | -------------------------- | ------------------ | ------------------------------------ |
-| **Frontend**     | `vereinorder-frontend`     | `5173` (oder `80`) | Nginx Webserver mit React PWA        |
-| **Backend**      | `vereinorder-backend`      | `3000`             | NestJS REST-API & SSE-Echtzeitstream |
-| **Datenbank**    | `vereinorder-db`           | `5432`             | PostgreSQL 16 Datenbank              |
-| **Druck-Worker** | `vereinorder-print-worker` | -                  | Asynchroner Druckauftragsprozessor   |
+| Dienst           | Container-Name             | Port (Host) | Beschreibung                         |
+| ---------------- | -------------------------- | ----------- | ------------------------------------ |
+| **Frontend**     | `vereinorder_frontend`     | `80`        | Nginx Webserver mit React PWA        |
+| **Backend**      | `vereinorder_backend`      | `3000`      | NestJS REST-API & SSE-Echtzeitstream |
+| **Datenbank**    | `vereinorder_postgres`     | `5432`      | PostgreSQL 16 Datenbank              |
+| **Druck-Worker** | `vereinorder_print_worker` | -           | Asynchroner Druckauftragsprozessor   |
 
 ---
 
-## 4. Erstinbetriebnahme
+## 4. Ersteinrichtung
 
-1. Öffne im Webbrowser `http://<SERVER_IP>:5173` (z. B. `http://192.168.1.100:5173`).
-2. Melde dich als Administrator an:
-   - **Benutzer:** `admin`
-   - **Standard-PIN:** `1234`
-3. Ändere im Admin-Panel unter **Personal & Rollen** umgehend die Administrator-PIN.
-4. Erstelle unter **Veranstaltungen** deine erste Festveranstaltung.
+Es gibt keinen vorgegebenen Administrator und keinen Konsolenbefehl auf dem Server. Der
+Entrypoint des Backend-Abbilds bringt die Datenbank beim ersten Start automatisch auf den
+aktuellen Migrationsstand; die Anwendung selbst führt anschließend durch die Ersteinrichtung.
+
+1. Öffne im Webbrowser `http://<SERVER_IP>/` (z. B. `http://192.168.1.100/`).
+2. Solange noch kein Benutzer angelegt ist, erscheint automatisch der Ersteinrichtungs-Assistent.
+   Lege dort Benutzername und PIN des ersten Administrator-Kontos fest.
+3. Nach dem Anlegen bist du unmittelbar angemeldet, ohne erneute Eingabe.
+4. **Wichtig:** Solange die Ersteinrichtung aussteht, wird Administrator, wer zuerst darauf
+   zugreift — ohne Einmal-Token, denn eines abzulesen würde wieder eine Serverkonsole
+   voraussetzen. Schließe die Ersteinrichtung deshalb ab, **bevor** du das Gäste-WLAN öffnest.
+   Derselbe Hinweis steht dauerhaft im Assistenten selbst.
+5. Erstelle anschließend im Admin-Bereich unter **Veranstaltungen** deine erste
+   Festveranstaltung.
