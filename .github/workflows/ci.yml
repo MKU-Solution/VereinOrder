@@ -183,8 +183,16 @@ jobs:
         if: matrix.component == 'backend'
         run: |
           image="vereinorder-ci-backend:${{ matrix.platform == 'linux/arm64' && 'arm64' || 'amd64' }}"
-          test "$(docker run --rm "$image" pg_dump --version | grep -oE '[0-9]+' | head -1)" = "16"
-          test "$(docker run --rm "$image" pg_restore --version | grep -oE '[0-9]+' | head -1)" = "16"
+          # Seit #172 traegt das Abbild ENTRYPOINT ["docker-entrypoint.sh"]
+          # (apps/backend/Dockerfile). Ohne "--entrypoint" wuerde jedes
+          # "docker run" hier zuerst den Entrypoint durchlaufen, der ohne
+          # DATABASE_URL an "prisma migrate deploy" mit P1012 scheitert -
+          # "pg_dump --version" wird dann nie erreicht. Die beiden
+          # PostgreSQL-Werkzeuge sind vom Entrypoint unabhaengige Binaries im
+          # Abbild; "--entrypoint" ruft sie direkt auf und misst wieder
+          # ausschliesslich ihre Version.
+          test "$(docker run --rm --entrypoint pg_dump "$image" --version | grep -oE '[0-9]+' | head -1)" = "16"
+          test "$(docker run --rm --entrypoint pg_restore "$image" --version | grep -oE '[0-9]+' | head -1)" = "16"
 
   docker-compose-migration:
     name: Docker-Bündel Migrationsstart
@@ -519,7 +527,17 @@ jobs:
             exit 1
           fi
           echo "Migrationen im PRE_MIGRATION-Manifest laut 'migrations'-Feld:"
-          grep -o '"name":"[^"]*"' /tmp/premigration-manifest.json | tail -3
+          # Nur zur Nachvollziehbarkeit im Protokoll - die eigentliche Aussage
+          # dieses Schritts steht bereits oben (die Wegwerfmigration fehlt im
+          # Manifest). serializeBackupManifest (native-backup.service.ts)
+          # schreibt ueber "JSON.stringify(manifest, null, 2)" eingerueckt,
+          # also mit einem Leerzeichen nach dem Doppelpunkt
+          # ("name": "...", nicht "name":"..."). "|| true" faengt hier
+          # ausdruecklich nur diese Anzeigezeile ab, nicht die Pruefung oben:
+          # Faende "grep" aus irgendeinem Grund keine Treffer (z. B. ein
+          # kuenftig erneut geaendertes Format), soll das den bereits
+          # bestandenen Test nicht nachtraeglich zu Fall bringen.
+          grep -o '"name": "[^"]*"' /tmp/premigration-manifest.json | tail -3 || true
           rm -f /tmp/premigration-manifest.json
       - name: Beleg B - die neue Migration ist NACH dem Update tatsächlich angewendet
         run: |

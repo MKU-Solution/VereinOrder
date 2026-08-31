@@ -36,7 +36,18 @@ for (const viewport of viewports) {
         page.getByRole("button", { name: "Verwaltung" }),
       ).toBeVisible();
       await page.goto("/admin");
-      await expect(page).toHaveURL(/\/admin$/);
+      // AdminDashboard.tsx leitet "/admin" clientseitig auf die feste
+      // Standardunterseite "/admin/overview" weiter (bf10761, "routed admin
+      // shell and sidebar"). Bewusst die enge Fassung statt z. B.
+      // /\/admin\/.+$/: Der Zielpfad steht im Quelltext als Literal, nicht
+      // hinter einer konfigurierbaren Standardseite - eine kuenftige
+      // Aenderung des Ziels waere eine bewusste Produktentscheidung, die
+      // diese Zeile dann ebenso bewusst mitziehen soll. Eine weitere
+      // Fassung wuerde zwar eine andere Standardunterseite stillschweigend
+      // mittragen, aber jede fehlerhafte Weiterleitung auf eine ANDERE
+      // Verwaltungsunterseite ebenso stillschweigend durchwinken - genau
+      // die Abweichung, die dieser Test aufdecken soll.
+      await expect(page).toHaveURL(/\/admin\/overview$/);
     });
 
     test("Kellner sieht keine Verwaltung und wird von /admin abgewiesen", async ({
