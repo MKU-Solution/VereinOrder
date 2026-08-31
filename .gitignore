@@ -15,7 +15,9 @@ test-results
 apps/backend/backups/*
 !apps/backend/backups/.gitkeep
 # Zustandsverzeichnis ausserhalb von Docker (STATE_DIR ist dort /app/state).
-# Enthaelt seit #175 die selbst erzeugten Signaturgeheimnisse - die duerfen
+# GENAU EINES, in der Wurzel des Arbeitsbereichs: Backend und Print-Worker
+# leiten es seit #175 aus apps/backend/src/common/state-dir.ts bzw.
+# apps/print-worker/src/state-dir.ts nach derselben Regel ab. Enthaelt die
+# selbst erzeugten Signaturgeheimnisse und den Wartungszustand - beides darf
 # unter keinen Umstaenden im Repository landen.
-apps/backend/state/
-apps/print-worker/state/
+/state/

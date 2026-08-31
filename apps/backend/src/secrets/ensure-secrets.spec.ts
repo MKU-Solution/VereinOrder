@@ -2,13 +2,13 @@ import { JwtService } from "@nestjs/jwt";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
+import { resolveStateDir } from "../common/state-dir";
 import {
   ensureBackendSecrets,
   ensureSecret,
   JWT_SECRET_FILE,
   PRINT_WORKER_TOKEN_FILE,
   requireJwtSecret,
-  resolveStateDir,
 } from "./ensure-secrets";
 
 /**
@@ -200,9 +200,21 @@ describe("Sicherheitsgeheimnisse beim ersten Start (Issue #175)", () => {
     expect(token.value.length).toBeGreaterThanOrEqual(32);
   });
 
-  it("verwendet STATE_DIR, sonst <cwd>/state — wie der Wartungszustand", () => {
-    expect(resolveStateDir({ STATE_DIR: "/app/state" })).toBe("/app/state");
-    expect(resolveStateDir({})).toBe(path.join(process.cwd(), "state"));
+  it("nimmt den Ablageort aus common/state-dir.ts", () => {
+    // Die Vorgabe selbst ist dort geprueft (state-dir.spec.ts). Hier zaehlt
+    // nur, dass diese Stelle sie tatsaechlich verwendet und nicht wieder
+    // eine eigene bildet. Bewusst mit gesetzter Umgebungsvariablen: dann
+    // gewinnt sie, es wird KEINE Datei geschrieben - der Test darf im
+    // echten Zustandsverzeichnis des Arbeitsbereichs nichts hinterlassen -,
+    // und `filePath` zeigt trotzdem den aufgeloesten Ablageort.
+    const result = ensureSecret("JWT_SECRET", JWT_SECRET_FILE, {
+      env: { JWT_SECRET: "von-aussen" },
+      log,
+    });
+
+    expect(result.source).toBe("env");
+    expect(path.dirname(result.filePath)).toBe(resolveStateDir({}));
+    expect(fs.existsSync(result.filePath)).toBe(false);
   });
 });
 

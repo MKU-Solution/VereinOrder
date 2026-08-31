@@ -1,6 +1,7 @@
 import * as crypto from "crypto";
 import * as fs from "fs";
 import * as path from "path";
+import { resolveStateDir } from "../common/state-dir";
 
 /**
  * Sicherheitsgeheimnisse beim ersten Start erzeugen (#175).
@@ -10,6 +11,10 @@ import * as path from "path";
  * Stellen still auf `"changeme-in-production"` zurück. Wer den Wert kennt,
  * stellt sich selbst ein Token für jede Rolle aus. Ein Vorgabewert, der
  * still greift, wird nie bemerkt und deshalb nie geändert.
+ *
+ * Der Ablageort kommt aus `common/state-dir.ts` — derselben Stelle, aus der
+ * ihn auch `MaintenanceStateService` bezieht, damit Schlüssel und
+ * Wartungszustand nicht auseinanderlaufen.
  *
  * ABLAGE UNTER `STATE_DIR`, NICHT IN DER DATENBANK — dasselbe Argument wie
  * bei `maintenance-state.service.ts:6-24`: Eine Wiederherstellung ERSETZT
@@ -77,14 +82,6 @@ const SECRET_BYTES = 32;
 
 export const JWT_SECRET_FILE = "jwt-secret";
 export const PRINT_WORKER_TOKEN_FILE = "print-worker-token";
-
-/**
- * Wortgleich zu `MaintenanceStateService`: derselbe Zustandsort, damit
- * Schlüssel und Wartungszustand nicht auf zwei Volumes auseinanderlaufen.
- */
-export function resolveStateDir(env: NodeJS.ProcessEnv = process.env): string {
-  return env.STATE_DIR || path.join(process.cwd(), "state");
-}
 
 /**
  * Bewusst auf stderr: `ensure-secrets.cli.ts` läuft im Entrypoint; dessen
