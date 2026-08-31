@@ -213,18 +213,12 @@ jobs:
     # anschliessend mit dem angelegten Administrator anmeldet.
     steps:
       - uses: actions/checkout@v4
-      - name: Ephemere Testgeheimnisse erzeugen
-        # docker-compose.yml:30 und :76 erzwingen PRINT_WORKER_TOKEN ueber
-        # "${...:?}" - ohne gesetzten Wert bricht "docker compose up" sofort
-        # ab. JWT_SECRET wird hier ebenfalls ausdruecklich gesetzt statt den
-        # Vorgabewert aus docker-compose.yml:29 zu verwenden (dessen
-        # Behandlung ist #175).
-        run: |
-          {
-            echo "PRINT_WORKER_TOKEN=$(openssl rand -hex 32)"
-            echo "JWT_SECRET=$(openssl rand -hex 32)"
-          } >> "$GITHUB_ENV"
-      - name: Bündel bauen und hochfahren
+      # Seit #175 werden hier BEWUSST keine Geheimnisse mehr gesetzt. Genau
+      # das ist die Zusage: "docker compose up -d" laeuft ohne .env und ohne
+      # gesetzte Variablen durch. Vorher erzwang docker-compose.yml
+      # PRINT_WORKER_TOKEN ueber "${...:?}" und brach sofort ab, und
+      # JWT_SECRET fiel auf einen im Repository stehenden Wert zurueck.
+      - name: Bündel bauen und hochfahren (ohne .env, ohne gesetzte Geheimnisse)
         run: docker compose up -d --build
       - name: Auf migriertes, antwortendes Backend warten
         run: |
@@ -258,6 +252,44 @@ jobs:
             "SELECT count(*) FROM information_schema.tables WHERE table_schema='public'")
           echo "Öffentliche Tabellen nach der Migration: $count"
           test "$count" -gt 0
+      - name: Erzeugte Geheimnisse prüfen (#175)
+        run: |
+          for file in jwt-secret print-worker-token; do
+            mode=$(docker compose exec -T backend stat -c '%a' "/app/state/$file")
+            echo "/app/state/$file hat Dateirechte $mode"
+            test "$mode" = "600"
+          done
+          # Das Protokoll haelt fest, DASS erzeugt wurde - nicht welcher Wert.
+          docker compose logs backend | grep -q "wurde beim ersten Start neu erzeugt"
+          secret=$(docker compose exec -T backend cat /app/state/jwt-secret)
+          test -n "$secret"
+          docker compose logs | grep -q -- "$secret" && {
+            echo "Der erzeugte Schluessel steht im Protokoll." >&2
+            exit 1
+          }
+          echo "$secret" > /tmp/jwt-secret-vor-neustart
+      - name: Zweiter Start verwendet denselben Schlüssel (#175)
+        run: |
+          # Container neu anlegen, nicht nur neu starten: Der Schluessel
+          # liegt auf dem Volume vereinorder_state_data und muss genau das
+          # ueberleben. Bliebe er nicht gleich, waere jedes ausgegebene
+          # Token nach einem Update ungueltig.
+          docker compose up -d --force-recreate --no-deps backend
+          for i in $(seq 1 60); do
+            status=$(curl -s -o /dev/null -w '%{http_code}' -X POST               http://127.0.0.1:3000/auth/login               -H 'Content-Type: application/json'               -d '{"username":"ci-docker-smoke-check","pin":"0000"}') || status=000
+            [ "$status" = "401" ] && break
+            sleep 2
+          done
+          docker compose exec -T backend cat /app/state/jwt-secret > /tmp/jwt-secret-nach-neustart
+          diff /tmp/jwt-secret-vor-neustart /tmp/jwt-secret-nach-neustart
+      - name: Print-Worker hat dasselbe Token wie das Backend (#175)
+        run: |
+          # Der Worker hat kein eigenes Geheimnis, sondern liest die Datei
+          # des Backends ueber dasselbe Volume (nur lesend eingehaengt).
+          backend_token=$(docker compose exec -T backend cat /app/state/print-worker-token)
+          worker_token=$(docker compose exec -T print-worker cat /app/state/print-worker-token)
+          test "$backend_token" = "$worker_token"
+          test "$(docker compose ps --status running --services | grep -c '^print-worker$')" = "1"
       - name: Bündelprotokolle bei Fehlschlag sichern
         if: failure()
         run: docker compose logs

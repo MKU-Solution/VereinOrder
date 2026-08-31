@@ -14,3 +14,8 @@ test-results
 *.tsbuildinfo
 apps/backend/backups/*
 !apps/backend/backups/.gitkeep
+# Zustandsverzeichnis ausserhalb von Docker (STATE_DIR ist dort /app/state).
+# Enthaelt seit #175 die selbst erzeugten Signaturgeheimnisse - die duerfen
+# unter keinen Umstaenden im Repository landen.
+apps/backend/state/
+apps/print-worker/state/

@@ -26,8 +26,15 @@ services:
     restart: always
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-vereinorder}?schema=public
-      JWT_SECRET: ${JWT_SECRET:-vereinorder_super_secret_production_key_festbetrieb_2026}
-      PRINT_WORKER_TOKEN: ${PRINT_WORKER_TOKEN:?PRINT_WORKER_TOKEN muss gesetzt sein}
+      # #175: Kein Vorgabewert mehr - der alte stand im oeffentlichen
+      # Repository, und wer ihn kannte, konnte sich ein Token fuer jede Rolle
+      # selbst ausstellen. Kein "${...:?}" mehr fuer das Worker-Token: leer
+      # ist der Normalfall. Beide Werte erzeugt der Entrypoint beim ersten
+      # Start unter STATE_DIR (apps/backend/docker-entrypoint.sh). Wer sie
+      # selbst verwalten will, setzt sie in der .env - eine gesetzte
+      # Umgebungsvariable gewinnt immer.
+      JWT_SECRET: ${JWT_SECRET:-}
+      PRINT_WORKER_TOKEN: ${PRINT_WORKER_TOKEN:-}
       BACKUP_DIR: /app/backups
       BACKUP_RETENTION_HOURLY_KEEP: ${BACKUP_RETENTION_HOURLY_KEEP:-24}
       BACKUP_RETENTION_DAILY_KEEP: ${BACKUP_RETENTION_DAILY_KEEP:-14}
@@ -73,13 +80,23 @@ services:
     restart: always
     environment:
       BACKEND_URL: http://backend:3000
-      PRINT_WORKER_TOKEN: ${PRINT_WORKER_TOKEN:?PRINT_WORKER_TOKEN muss gesetzt sein}
+      # #175: Leer erlaubt. Ist nichts gesetzt, liest der Worker das vom
+      # Backend erzeugte Token aus STATE_DIR (siehe volumes unten). Fehlt die
+      # Datei noch - der Worker startet parallel zum Backend -, endet er mit
+      # Fehlerstatus und laeuft ueber "restart: always" erneut an.
+      PRINT_WORKER_TOKEN: ${PRINT_WORKER_TOKEN:-}
       PRINT_FORCE_SIMULATOR: ${PRINT_FORCE_SIMULATOR:-0}
       PRINT_POLL_INTERVAL_MS: ${PRINT_POLL_INTERVAL_MS:-2500}
       PRINT_TIMEOUT_MS: ${PRINT_TIMEOUT_MS:-5000}
       CUPS_BASE_URL: ${CUPS_BASE_URL:-http://host.docker.internal:631}
       PRINT_CUPS_POLL_MS: ${PRINT_CUPS_POLL_MS:-1000}
       PRINT_CUPS_WAIT_MS: ${PRINT_CUPS_WAIT_MS:-120000}
+      STATE_DIR: /app/state
+    volumes:
+      # Nur lesend: Der Worker verwendet das vom Backend erzeugte Token, er
+      # erzeugt keines. Zwei unabhaengig erzeugte Token waeren zwei
+      # verschiedene, und der PrintWorkerGuard wuerde jede Anfrage ablehnen.
+      - state_data:/app/state:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:

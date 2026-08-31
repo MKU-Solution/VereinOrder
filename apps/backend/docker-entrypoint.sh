@@ -7,6 +7,38 @@
 # docs/development/datensicherung.md:930 und die Auswertung in #172.
 set -eu
 
+# --- Sicherheitsgeheimnisse (#175) -----------------------------------------
+# Vor allem anderen, auch vor der Migration: Der Print-Worker startet
+# parallel und braucht die Tokendatei so frueh wie moeglich.
+#
+# Warum hier und nicht in der Anwendung: JWT_SECRET wird zur MODUL-Ladezeit
+# gelesen (apps/backend/src/auth/auth.module.ts,
+# .../maintenance/maintenance.module.ts), also bereits waehrend
+# "require(app.module)" und damit vor der ersten Zeile von bootstrap().
+# Ein eigener Prozessschritt vor "exec" kann durch keine Umsortierung von
+# Importen zu spaet kommen. Die Rangfolge (Umgebung > Datei > Neuerzeugung)
+# steht einmalig in apps/backend/src/secrets/ensure-secrets.ts; das Programm
+# unten legt nur fehlende Dateien an und gibt KEINEN Wert auf stdout aus.
+printf 'docker-entrypoint: pruefe Sicherheitsgeheimnisse unter STATE_DIR.\n'
+node apps/backend/dist/secrets/ensure-secrets.cli.js
+
+# Dieselbe Vorgabe wie in ensure-secrets.ts und maintenance-state.service.ts:
+# STATE_DIR, sonst <Arbeitsverzeichnis>/state.
+vereinorder_state_dir="${STATE_DIR:-$(pwd)/state}"
+
+# Spiegelt Rang 1 der Rangfolge: Eine gesetzte Umgebungsvariable gewinnt,
+# dann wird nichts aus der Datei nachgeladen (und oben auch keine
+# geschrieben). Nur wenn sie leer ist, kommt der erzeugte Wert zum Zug.
+if [ -z "${JWT_SECRET:-}" ] && [ -r "${vereinorder_state_dir}/jwt-secret" ]; then
+  JWT_SECRET="$(cat "${vereinorder_state_dir}/jwt-secret")"
+  export JWT_SECRET
+fi
+if [ -z "${PRINT_WORKER_TOKEN:-}" ] &&
+  [ -r "${vereinorder_state_dir}/print-worker-token" ]; then
+  PRINT_WORKER_TOKEN="$(cat "${vereinorder_state_dir}/print-worker-token")"
+  export PRINT_WORKER_TOKEN
+fi
+
 if [ "${SKIP_AUTO_MIGRATE:-0}" = "1" ]; then
   # scripts/ops/upgrade.sh fuehrt "prisma migrate deploy" und
   # "prisma migrate status" fuer ein bestehendes, befuelltes System bereits

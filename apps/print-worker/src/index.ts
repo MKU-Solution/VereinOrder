@@ -14,6 +14,7 @@ import { createLogger } from "./logging";
 import { PrintJobLike } from "./printing/documents";
 import { prepareDocument } from "./printing/prepare";
 import { PrinterConfigurationError, PrinterRow, resolveTarget } from "./target";
+import { MIN_TOKEN_LENGTH, resolveWorkerToken } from "./token";
 
 interface PrintJob extends PrintJobLike {
   printer: PrinterRow;
@@ -32,7 +33,11 @@ interface OutcomeReport {
 }
 
 const BACKEND_URL = process.env.BACKEND_URL || "http://127.0.0.1:3000";
-const PRINT_WORKER_TOKEN = process.env.PRINT_WORKER_TOKEN;
+// #175: Faellt auf die Datei unter STATE_DIR zurueck, die das Backend beim
+// ersten Start erzeugt. Weiterhin zur Modul-Ladezeit - der Abbruch bei
+// fehlendem Token steht deshalb unten im "require.main"-Zweig und nicht
+// hier, damit index.spec.ts das Modul weiterhin laden kann.
+const PRINT_WORKER_TOKEN = resolveWorkerToken() ?? undefined;
 const POLL_INTERVAL_MS = positiveNumber(
   process.env.PRINT_POLL_INTERVAL_MS,
   2500,
@@ -56,7 +61,7 @@ function positiveNumber(value: unknown, fallback: number): number {
 }
 
 function workerHeaders() {
-  if (!PRINT_WORKER_TOKEN || PRINT_WORKER_TOKEN.length < 32) {
+  if (!PRINT_WORKER_TOKEN || PRINT_WORKER_TOKEN.length < MIN_TOKEN_LENGTH) {
     throw new Error(
       "PRINT_WORKER_TOKEN muss gesetzt sein und mindestens 32 Zeichen enthalten.",
     );
@@ -386,6 +391,23 @@ async function main(): Promise<void> {
 }
 
 if (require.main === module) {
+  // #175: Ohne Token kann dieser Prozess nichts Sinnvolles tun. Frueher
+  // liess "workerHeaders()" jeden Umlauf in claimNextJob() scheitern, das
+  // den Fehler faengt - der Worker lief dann still und ewig in einer
+  // "backend.claim_failed"-Schleife weiter. Stattdessen: Fehlerstatus.
+  // "restart: always" (docker-compose.yml) laesst ihn mit wachsendem
+  // Abstand erneut anlaufen; das ist der Normalfall, wenn der Worker vor
+  // dem Backend startet und die Tokendatei noch nicht geschrieben ist.
+  if (!PRINT_WORKER_TOKEN || PRINT_WORKER_TOKEN.length < MIN_TOKEN_LENGTH) {
+    logger.error("worker.token_missing", {
+      message:
+        "PRINT_WORKER_TOKEN fehlt oder ist zu kurz. Erwartet: Umgebungsvariable " +
+        "oder die vom Backend erzeugte Datei unter STATE_DIR. Beende mit " +
+        "Fehlerstatus und starte ueber restart: always erneut.",
+    });
+    process.exit(1);
+  }
+
   main().catch((error) => {
     logger.error("worker.crashed", { message: (error as Error).message });
     process.exitCode = 1;
