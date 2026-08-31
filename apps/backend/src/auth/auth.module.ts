@@ -4,12 +4,16 @@ import { AuthController } from "./auth.controller";
 import { JwtModule } from "@nestjs/jwt";
 import { PassportModule } from "@nestjs/passport";
 import { JwtStrategy } from "./jwt.strategy";
+import { requireJwtSecret } from "../secrets/ensure-secrets";
 
 @Module({
   imports: [
     PassportModule,
     JwtModule.register({
-      secret: process.env.JWT_SECRET || "changeme-in-production",
+      // #175: kein Rueckfall auf einen festen Wert mehr. Dieser Ausdruck
+      // wird zur MODUL-Ladezeit ausgewertet - der Schluessel muss also
+      // bereits stehen, bevor main.ts AppModule laedt.
+      secret: requireJwtSecret(),
       signOptions: { expiresIn: "12h" },
     }),
   ],

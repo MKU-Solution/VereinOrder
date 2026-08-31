@@ -14,6 +14,11 @@ import { createLogger } from "./logging";
 import { PrintJobLike } from "./printing/documents";
 import { prepareDocument } from "./printing/prepare";
 import { PrinterConfigurationError, PrinterRow, resolveTarget } from "./target";
+import {
+  MIN_TOKEN_LENGTH,
+  resolveWorkerToken,
+  waitForWorkerToken,
+} from "./token";
 
 interface PrintJob extends PrintJobLike {
   printer: PrinterRow;
@@ -32,7 +37,12 @@ interface OutcomeReport {
 }
 
 const BACKEND_URL = process.env.BACKEND_URL || "http://127.0.0.1:3000";
-const PRINT_WORKER_TOKEN = process.env.PRINT_WORKER_TOKEN;
+// #175: Faellt auf die Datei unter STATE_DIR zurueck, die das Backend beim
+// ersten Start erzeugt. Weiterhin zur Modul-Ladezeit, damit index.spec.ts
+// das Modul unveraendert laden kann - aber als "let": Startet der Worker vor
+// dem Backend, ist die Datei hier noch nicht da, und der Startzweig unten
+// traegt den Wert nach, sobald er auftaucht.
+let printWorkerToken = resolveWorkerToken() ?? undefined;
 const POLL_INTERVAL_MS = positiveNumber(
   process.env.PRINT_POLL_INTERVAL_MS,
   2500,
@@ -48,7 +58,10 @@ const HEARTBEAT_INTERVAL_MS = 20000;
 const REPORT_RETRY_INITIAL_DELAY_MS = 1000;
 const REPORT_RETRY_MAX_DELAY_MS = 30000;
 
-const logger = createLogger({ secrets: [PRINT_WORKER_TOKEN ?? ""] });
+// "let", weil der Startzweig unten den Protokollierer mit dem
+// nachgetragenen Token neu aufsetzt - sonst stuende ein spaet gelesenes
+// Token nicht auf der Maskierungsliste.
+let logger = createLogger({ secrets: [printWorkerToken ?? ""] });
 
 function positiveNumber(value: unknown, fallback: number): number {
   const parsed = Number(value);
@@ -56,12 +69,12 @@ function positiveNumber(value: unknown, fallback: number): number {
 }
 
 function workerHeaders() {
-  if (!PRINT_WORKER_TOKEN || PRINT_WORKER_TOKEN.length < 32) {
+  if (!printWorkerToken || printWorkerToken.length < MIN_TOKEN_LENGTH) {
     throw new Error(
       "PRINT_WORKER_TOKEN muss gesetzt sein und mindestens 32 Zeichen enthalten.",
     );
   }
-  return { "x-print-worker-token": PRINT_WORKER_TOKEN };
+  return { "x-print-worker-token": printWorkerToken };
 }
 
 function sleep(ms: number): Promise<void> {
@@ -385,8 +398,50 @@ async function main(): Promise<void> {
   logger.info("worker.stopped", {});
 }
 
+/**
+ * #175: Ohne Token kann dieser Prozess nichts Sinnvolles tun. Frueher liess
+ * "workerHeaders()" jeden Umlauf in claimNextJob() scheitern, das den Fehler
+ * faengt - der Worker lief dann still und ewig in einer
+ * "backend.claim_failed"-Schleife weiter.
+ *
+ * Stattdessen: begrenzt warten, dann Fehlerstatus. Backend und Worker
+ * starten gleichzeitig, erzeugt wird das Token vom Backend - der Worker
+ * verliert dieses Rennen regelmaessig. Das Warten ueberbrueckt genau diese
+ * Sekunden. Bleibt das Token aus, endet der Prozess mit Status 1; im
+ * Container laesst ihn "restart: always" erneut anlaufen, ausserhalb von
+ * Docker ist der Fehlschlag sichtbar statt stumm.
+ */
+async function startWorker(): Promise<void> {
+  const token = await waitForWorkerToken({
+    onWait: () =>
+      logger.info("worker.token_waiting", {
+        message:
+          "Warte auf das vom Backend erzeugte PRINT_WORKER_TOKEN unter STATE_DIR.",
+      }),
+  });
+
+  if (!token || token.length < MIN_TOKEN_LENGTH) {
+    logger.error("worker.token_missing", {
+      message:
+        "PRINT_WORKER_TOKEN fehlt oder ist zu kurz. Erwartet: Umgebungsvariable " +
+        "oder die vom Backend erzeugte Datei unter STATE_DIR. Beende mit " +
+        "Fehlerstatus.",
+    });
+    process.exit(1);
+  }
+
+  if (token !== printWorkerToken) {
+    printWorkerToken = token;
+    // Neu aufsetzen, damit das nachgetragene Token auf der
+    // Maskierungsliste steht und nie im Protokoll auftauchen kann.
+    logger = createLogger({ secrets: [token] });
+  }
+
+  await main();
+}
+
 if (require.main === module) {
-  main().catch((error) => {
+  startWorker().catch((error) => {
     logger.error("worker.crashed", { message: (error as Error).message });
     process.exitCode = 1;
   });

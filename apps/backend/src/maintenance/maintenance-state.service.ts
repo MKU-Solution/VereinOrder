@@ -1,6 +1,7 @@
 import { Injectable } from "@nestjs/common";
 import * as fs from "fs";
 import * as path from "path";
+import { resolveStateDir } from "../common/state-dir";
 import { MaintenanceState, OPEN_MAINTENANCE_STATE } from "./maintenance.types";
 
 /**
@@ -28,7 +29,11 @@ export class MaintenanceStateService {
   private readonly filePath: string;
 
   constructor() {
-    this.stateDir = process.env.STATE_DIR || path.join(process.cwd(), "state");
+    // #175: Der Ablageort kommt aus common/state-dir.ts. Die frueher hier
+    // stehende Vorgabe <cwd>/state war vom Arbeitsverzeichnis abhaengig und
+    // lieferte je Prozess ein anderes Verzeichnis; seit die Schluessel
+    // daneben liegen, muessen beide dieselbe Stelle treffen.
+    this.stateDir = resolveStateDir();
     this.filePath = path.join(this.stateDir, "maintenance.json");
   }
 

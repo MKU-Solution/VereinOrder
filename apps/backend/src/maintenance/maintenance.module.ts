@@ -5,6 +5,7 @@ import { MaintenanceStateService } from "./maintenance-state.service";
 import { MaintenanceService } from "./maintenance.service";
 import { MaintenanceController } from "./maintenance.controller";
 import { MaintenanceGuard } from "./maintenance.guard";
+import { requireJwtSecret } from "../secrets/ensure-secrets";
 
 /**
  * `@Global()`, damit `MaintenanceStateService` (und darüber `MaintenanceService`)
@@ -25,7 +26,8 @@ import { MaintenanceGuard } from "./maintenance.guard";
 @Module({
   imports: [
     JwtModule.register({
-      secret: process.env.JWT_SECRET || "changeme-in-production",
+      // #175: kein Rueckfall auf einen festen Wert mehr.
+      secret: requireJwtSecret(),
     }),
   ],
   controllers: [MaintenanceController],
