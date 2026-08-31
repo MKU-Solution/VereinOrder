@@ -61,26 +61,43 @@ steht seit der Ersteinrichtung selbst auch dauerhaft im Assistenten.
 ### Aktualisierung eines laufenden Systems
 
 Für ein bereits eingerichtetes System — nicht für den ersten Start — läuft eine
-Aktualisierung ausschließlich über den abgesicherten Betriebsweg:
+Aktualisierung ausschließlich über den abgesicherten Betriebsweg. Das Skript baut das
+Bündel dabei selbst neu (#199); auf dem Server wird **kein** eigenes
+`docker compose up -d --build` mehr davor oder danach ausgeführt:
 
 ```bash
 export ADMIN_TOKEN='<aktuelles Administrator-JWT>'
 ./scripts/ops/upgrade.sh
 ```
 
-Der Ablauf setzt den Wartungsmodus, erzeugt eine geprüfte `PRE_MIGRATION`-Sicherung,
-führt `prisma migrate deploy` sowie `prisma migrate status` aus und öffnet das System
-erst nach Erfolg wieder. Details und der Notfall-Restore stehen in
+**`ADMIN_TOKEN` wird VOR dem Aufruf geholt, gegen das noch laufende, alte System** — das
+ist gegenüber früheren Fassungen dieser Anleitung umgekehrt. Das Skript braucht das
+Token bereits für den allerersten Schritt, um den Wartungsmodus zu setzen; der Neubau
+folgt erst danach als Teil des Skripts selbst, nicht mehr vorab von Hand.
+
+Der Ablauf ist damit ein einziger Befehl: Wartungsmodus setzen, eine geprüfte
+`PRE_MIGRATION`-Sicherung erzeugen — beides **vor** jeder Schemaänderung —, danach
+`docker compose up -d --build` ausführen. Die automatische Migration im Entrypoint
+(`apps/backend/docker-entrypoint.sh`, #172) bleibt dabei unverändert eingeschaltet und
+läuft dadurch genau im geschützten Fenster zwischen Sperre und Sicherung einerseits und
+der Wiederöffnung andererseits. Danach wartet das Skript mit Zeitgrenze auf ein wieder
+antwortendes Backend, kontrolliert `prisma migrate status` und öffnet das System erst
+nach Erfolg wieder. Details und der Notfall-Restore stehen in
 [`docs/ops/backup-recovery.md`](./backup-recovery.md).
 
-**Falle beim Token:** Hole `ADMIN_TOKEN` erst, NACHDEM die Container neu angelegt wurden
-(`docker compose up -d --build`), nicht davor. Das Skript selbst braucht dafür keine
-Änderung — es migriert über `docker compose run --rm` und legt den laufenden
-Backend-Container nicht neu an, ein vorab geholtes Token bleibt für die Dauer seines
-Laufs gültig. Der Schlüsselwechsel beim erneuten `docker compose up -d --build` selbst
-schlägt aber zu: Läuft die bisherige Installation ohne gesetztes `JWT_SECRET`, erzeugt
-das Backend dabei einen neuen Schlüssel, und ein davor ausgestelltes Token wird
-ungültig. Wer das Token vor diesem Schritt holt, steht danach mit einem ungültigen da.
+**Schlägt ein Schritt fehl, bleibt das System absichtlich im Wartungsmodus gesperrt.**
+Das Skript gibt dabei aus, welcher Schritt betroffen war und wie man — nach Klärung der
+Ursache — wieder herauskommt; es öffnet den Wartungsmodus im Fehlerfall nie von selbst.
+
+**Sonderfall Installationen von vor #175:** Lief die bisherige Installation ohne
+gesetztes `JWT_SECRET`, erzeugt der Neubau in Schritt 4 einen neuen Schlüssel — das
+eingangs geholte `ADMIN_TOKEN` wird dadurch ungültig, und das abschließende Entsperren
+scheitert vorhersehbar mit 401, obwohl Sicherung und Migration bereits erfolgreich
+gelaufen sind. Das Skript erkennt diesen Fall vorab (bevor der Neubau überhaupt
+angestoßen wird) an einer fehlenden, dauerhaft hinterlegten `JWT_SECRET` und warnt
+davor; bleibt das abschließende Entsperren dennoch am ungültig gewordenen Token hängen,
+nennt die Fehlermeldung des Skripts den Weg heraus: neu anmelden und
+`POST /maintenance/end` von Hand mit dem frischen Token nachholen.
 
 ---
 

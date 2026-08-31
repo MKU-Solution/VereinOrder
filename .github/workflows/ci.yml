@@ -403,6 +403,151 @@ jobs:
         if: always()
         run: docker compose down -v
 
+  docker-compose-upgrade:
+    name: Docker-Bündel Aktualisierung (upgrade.sh, PRE_MIGRATION vor Migration)
+    runs-on: ubuntu-latest
+    # Der Auftrag "docker-compose-migration" oben fährt nur ein LEERES Bündel
+    # hoch (Ersteinrichtung, aber keine spätere Aktualisierung). Genau das
+    # war die Lücke hinter #199: Kein Auftrag hat je ein BEFÜLLTES System
+    # über "scripts/ops/upgrade.sh" aktualisiert, deshalb blieb unbemerkt,
+    # dass der bis dahin dokumentierte Ablauf (Neubau vor Sicherung, siehe
+    # der frühere Wortlaut von docs/ops/raspberry-pi-setup.md) die
+    # PRE_MIGRATION-Sicherung erst NACH der automatischen Migration im
+    # Entrypoint anlegte. Dieser Auftrag richtet ein befülltes System ein,
+    # erzeugt eine harmlose zusätzliche Migration (eine Wegwerftabelle) und
+    # belegt über das Sicherungsmanifest, dass "upgrade.sh" die
+    # PRE_MIGRATION-Sicherung VOR dieser neuen Migration anlegt - nicht über
+    # einen Zeitstempelvergleich, sondern direkt: Jedes Sicherungsmanifest
+    # trägt die Liste der zum Sicherungszeitpunkt bereits angewendeten
+    # Migrationen (native-backup.service.ts, "migrations: before.migrations"
+    # - dieselbe Momentaufnahme, aus der auch "prisma migrate status"
+    # schöpft). Fehlt die Wegwerfmigration in dieser Liste, stand der Dump
+    # nachweislich vor ihrer Anwendung.
+    steps:
+      - uses: actions/checkout@v4
+      - name: Bündel bauen und hochfahren (Ersteinrichtung folgt, wie im Auftrag oben)
+        run: docker compose up -d --build
+      - name: Auf migriertes Backend warten
+        run: |
+          set -euo pipefail
+          status=000
+          for i in $(seq 1 60); do
+            status=$(curl -s -o /dev/null -w '%{http_code}' \
+              http://127.0.0.1:3000/setup/status) || status=000
+            [ "$status" = "200" ] && break
+            sleep 2
+          done
+          if [ "$status" != "200" ]; then
+            echo "Backend antwortet nicht wie erwartet (letzter Status: $status)." >&2
+            docker compose logs
+            exit 1
+          fi
+      - name: Administrator über die Ersteinrichtung anlegen
+        run: |
+          set -euo pipefail
+          admin_user="ci-upgrade-admin-${{ github.run_id }}-${{ github.run_attempt }}"
+          admin_pin=$(printf '%06d' "$RANDOM")
+          echo "::add-mask::$admin_pin"
+          http_code=$(curl -s -o /tmp/setup-admin-response.json -w '%{http_code}' -X POST \
+            http://127.0.0.1:3000/setup/admin \
+            -H 'Content-Type: application/json' \
+            -d "{\"username\":\"$admin_user\",\"pin\":\"$admin_pin\"}")
+          if [ "$http_code" != "201" ]; then
+            echo "POST /setup/admin antwortet mit $http_code statt 201:" >&2
+            cat /tmp/setup-admin-response.json >&2
+            exit 1
+          fi
+          rm -f /tmp/setup-admin-response.json
+          echo "SETUP_ADMIN_USERNAME=$admin_user" >> "$GITHUB_ENV"
+          echo "SETUP_ADMIN_PIN=$admin_pin" >> "$GITHUB_ENV"
+      - name: Anmelden und ADMIN_TOKEN erzeugen - VOR dem Aufruf von upgrade.sh, wie jetzt dokumentiert
+        run: |
+          set -euo pipefail
+          http_code=$(curl -s -o /tmp/login-response.json -w '%{http_code}' -X POST \
+            http://127.0.0.1:3000/auth/login \
+            -H 'Content-Type: application/json' \
+            -d "{\"username\":\"$SETUP_ADMIN_USERNAME\",\"pin\":\"$SETUP_ADMIN_PIN\"}")
+          if [ "$http_code" != "200" ]; then
+            echo "POST /auth/login antwortet mit $http_code statt 200:" >&2
+            cat /tmp/login-response.json >&2
+            exit 1
+          fi
+          token=$(grep -o '"access_token":"[^"]*"' /tmp/login-response.json | cut -d'"' -f4)
+          rm -f /tmp/login-response.json
+          if [ -z "$token" ]; then
+            echo "Antwort auf POST /auth/login enthielt trotz Status 200 kein access_token." >&2
+            exit 1
+          fi
+          echo "::add-mask::$token"
+          echo "ADMIN_TOKEN=$token" >> "$GITHUB_ENV"
+      - name: Testdaten anlegen (befülltes System statt leerem Bündel)
+        run: |
+          set -euo pipefail
+          http_code=$(curl -s -o /tmp/users-response.json -w '%{http_code}' -X POST \
+            http://127.0.0.1:3000/users \
+            -H "Authorization: Bearer $ADMIN_TOKEN" -H 'Content-Type: application/json' \
+            -d '{"username":"ci-upgrade-kellner1","pin":"123456","role":"WAITER"}')
+          if [ "$http_code" != "201" ]; then
+            echo "POST /users antwortet mit $http_code statt 201:" >&2
+            cat /tmp/users-response.json >&2
+            exit 1
+          fi
+          rm -f /tmp/users-response.json
+      - name: Wegwerfmigration erzeugen (etwas, das ausstehen kann)
+        run: |
+          set -euo pipefail
+          dir="packages/database/prisma/migrations/20260830999999_ci_upgrade_probe"
+          mkdir -p "$dir"
+          cat > "$dir/migration.sql" <<'EOF'
+          -- Wegwerfmigration nur fuer den CI-Nachweis von Issue #199.
+          CREATE TABLE "ci_upgrade_probe" (
+              "id" SERIAL PRIMARY KEY
+          );
+          EOF
+      - name: scripts/ops/upgrade.sh ausführen (eigentliche Aussage dieses Auftrags)
+        run: ./scripts/ops/upgrade.sh
+      - name: Beleg A - PRE_MIGRATION-Sicherung enthält die Wegwerfmigration NICHT
+        run: |
+          set -euo pipefail
+          manifest_name=$(docker compose exec -T backend sh -c \
+            'ls -t /app/backups/*premigration*.manifest.json 2>/dev/null | head -1')
+          echo "Gefundenes Manifest: $manifest_name"
+          docker compose exec -T backend cat "$manifest_name" > /tmp/premigration-manifest.json
+          if grep -q "20260830999999_ci_upgrade_probe" /tmp/premigration-manifest.json; then
+            echo "PRE_MIGRATION-Sicherung enthält die neue Migration bereits - #199 nicht behoben." >&2
+            cat /tmp/premigration-manifest.json >&2
+            exit 1
+          fi
+          echo "Migrationen im PRE_MIGRATION-Manifest laut 'migrations'-Feld:"
+          grep -o '"name":"[^"]*"' /tmp/premigration-manifest.json | tail -3
+          rm -f /tmp/premigration-manifest.json
+      - name: Beleg B - die neue Migration ist NACH dem Update tatsächlich angewendet
+        run: |
+          set -euo pipefail
+          docker compose exec -T backend pnpm --filter @vereinorder/database exec prisma migrate status \
+            | tee /tmp/migrate-status.log
+          grep -q "Database schema is up to date" /tmp/migrate-status.log
+          count=$(docker compose exec -T postgres psql -U postgres -d vereinorder -Atc \
+            "SELECT count(*) FROM information_schema.tables WHERE table_name='ci_upgrade_probe'")
+          echo "Wegwerftabelle in PostgreSQL vorhanden: $count"
+          test "$count" = "1"
+      - name: Beleg C - befülltes System blieb erhalten, Wartungsmodus wieder OPEN
+        run: |
+          set -euo pipefail
+          users_count=$(curl -s http://127.0.0.1:3000/users -H "Authorization: Bearer $ADMIN_TOKEN" \
+            | grep -o '"username"' | wc -l)
+          echo "Benutzer nach dem Update: $users_count"
+          test "$users_count" -ge 2
+          phase=$(curl -s http://127.0.0.1:3000/maintenance | jq -r '.phase')
+          echo "Wartungsphase nach dem Update: $phase"
+          test "$phase" = "OPEN"
+      - name: Bündelprotokolle bei Fehlschlag sichern
+        if: failure()
+        run: docker compose logs
+      - name: Bündel abbauen
+        if: always()
+        run: docker compose down -v
+
   secrets:
     name: Geheimnisprüfung
     runs-on: ubuntu-latest
