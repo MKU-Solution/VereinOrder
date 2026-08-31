@@ -66,11 +66,25 @@ Der letzte Rückweg hängt nicht von Node oder Prisma ab. Benötigt werden `psql
 `pg_dump`, `pg_restore`, `jq` und `sha256sum` sowie dieselben libpq-Variablen wie für
 PostgreSQL (`PGHOST`, `PGPORT`, `PGUSER`, `PGPASSWORD`).
 
+**Nur auf dem Server selbst.** Seit #181 bindet `docker-compose.yml` den
+Datenbankport nur noch auf die Loopback-Adresse des Hosts
+(`127.0.0.1:5432:5432`). `PGHOST=127.0.0.1` erreicht die Datenbank deshalb nur,
+wenn dieser Befehl direkt auf dem Server ausgeführt wird, nicht von einem
+Laptop oder einem anderen Gerät im Netz aus. Für einen Fernzugriff ist zuerst
+ein SSH-Tunnel auf den Server aufzubauen.
+
+Die Sicherungsdateien liegen nicht in einem Verzeichnis neben dem Repository,
+sondern im benannten Docker-Volume `vereinorder_backup_data`, das im Container
+unter `/backups` eingehängt ist. `BACKUP_DIR` muss deshalb auf den Mountpunkt
+dieses Volumes zeigen, zum Beispiel den von Docker verwalteten Pfad
+(`docker volume inspect vereinorder_backup_data --format '{{ .Mountpoint }}'`)
+oder ein eigenes Bind-Mount an derselben Stelle - nicht `./backups`.
+
 ```bash
 export POSTGRES_DB=vereinorder
-export BACKUP_DIR=./backups
+export BACKUP_DIR="$(docker volume inspect vereinorder_backup_data --format '{{ .Mountpoint }}')"
 export STATE_DIR=./state
-./scripts/ops/restore.sh ./backups/<datei>.dump ./backups/<datei>.manifest.json
+./scripts/ops/restore.sh "$BACKUP_DIR/<datei>.dump" "$BACKUP_DIR/<datei>.manifest.json"
 docker compose restart backend
 ```
 

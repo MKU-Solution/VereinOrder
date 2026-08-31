@@ -53,12 +53,12 @@ docker compose logs -f backend
 
 ## 3. Bereitgestellte Dienste & Ports
 
-| Dienst           | Container-Name             | Port (Host) | Beschreibung                         |
-| ---------------- | -------------------------- | ----------- | ------------------------------------ |
-| **Frontend**     | `vereinorder_frontend`     | `80`        | Nginx Webserver mit React PWA        |
-| **Backend**      | `vereinorder_backend`      | `3000`      | NestJS REST-API & SSE-Echtzeitstream |
-| **Datenbank**    | `vereinorder_postgres`     | `5432`      | PostgreSQL 16 Datenbank              |
-| **Druck-Worker** | `vereinorder_print_worker` | -           | Asynchroner Druckauftragsprozessor   |
+| Dienst           | Container-Name             | Port (Host)      | Beschreibung                                                                                                       |
+| ---------------- | -------------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------ |
+| **Frontend**     | `vereinorder_frontend`     | `80`             | Nginx Webserver mit React PWA                                                                                      |
+| **Backend**      | `vereinorder_backend`      | `3000`           | NestJS REST-API & SSE-Echtzeitstream                                                                               |
+| **Datenbank**    | `vereinorder_postgres`     | `127.0.0.1:5432` | PostgreSQL 16. Bewusst nur auf der Loopback-Adresse veroeffentlicht und damit aus dem Netz nicht erreichbar (#181) |
+| **Druck-Worker** | `vereinorder_print_worker` | -                | Asynchroner Druckauftragsprozessor                                                                                 |
 
 ---
 
