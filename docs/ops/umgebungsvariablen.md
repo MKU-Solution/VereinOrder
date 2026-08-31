@@ -55,7 +55,7 @@ abzulösen.
 
 | Variable   | Beschreibung                                              | Standard     |
 | ---------- | --------------------------------------------------------- | ------------ |
-| `PORT`     | Port, auf dem der NestJS-Backend-Server hört              | `3000`       |
+| `PORT`     | Port, auf dem das NestJS-Backend (Fastify-Adapter) hört   | `3000`       |
 | `NODE_ENV` | Ausführungsumgebung (`development`, `production`, `test`) | `production` |
 
 Der Port der Webanwendung selbst ist nicht über eine Umgebungsvariable konfigurierbar:
