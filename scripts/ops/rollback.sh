@@ -53,6 +53,34 @@
 # nie ein Skript im Ernstfall unter Zeitdruck. Ein Skript, das dabei
 # ungefragt Daten ersetzt, ist gefaehrlicher als eines, das innehaelt.
 #
+# WOHER DIE PRUEFUNG WEISS, WAS "SEIT DER SICHERUNG" BEDEUTET: "upgrade.sh"
+# hinterlegt den Migrationsstand zum Sicherungszeitpunkt als einfache Datei
+# im "state_data"-Volume ("/app/state/rollback-previous-migration-marker"),
+# NICHT als Tabelle in der Anwendungsdatenbank - eine dort eingecheckte
+# Tabelle bräuchte eine Prisma-Migration (AGENTS.md: "Datenbankaenderungen
+# benoetigen nachvollziehbare, eingecheckte SQL-Migrationen") und würde ohne
+# das über "pg_dump" in jede Sicherung wandern. Wichtiger noch: Ein nativer
+# Restore (apps/backend/src/backup/restore-swap.ts, "RestoreSwapCoordinator")
+# vertauscht ganze DATENBANKEN per SQL ("ALTER DATABASE ... RENAME TO ...",
+# "postgresql-backup.tools.ts", "renameDatabase") - eine Markierung
+# INNERHALB der Datenbank würde dabei durch den Stand aus der eingespielten
+# Sicherung ersetzt und beschriebe danach einen anderen Augenblick als den,
+# den sie beschreiben soll. Am Quelltext geprueft (Stand dieser Aenderung):
+# "FileRestoreSwapStateStore" (restore-swap.ts) ist die einzige
+# Dateisystem-Beruehrung des gesamten Restore-Ablaufs und schreibt
+# ausschliesslich ihre EIGENE, anders benannte Datei
+# ("restore-swap-state.json") im selben Volume - nie ein Verzeichnis-Wisch,
+# nie ein Zugriff auf andere Dateinamen. Unsere Markierungsdatei bleibt
+# davon unberuehrt, weil ihr Name nicht kollidiert; der eigentliche
+# Datentausch laeuft ohnehin rein per SQL gegen "postgres_data", nicht
+# gegen das Dateisystem. Gelesen wird die Markierung hier ueber einen kurzlebigen
+# Hilfscontainer (Schritt 2 unten) - unabhaengig davon, ob das Backend noch
+# antwortet, und OHNE ein Abbild aus dem Netz zu brauchen: Verwendet wird
+# das bereits lokal vorhandene Postgres-Abbild (docker-compose.yml,
+# Dienst "postgres" - Pflichtabhaengigkeit jeder lauffaehigen Installation),
+# nur um dessen Alpine-Shell fuer ein "cat" zu nutzen, nicht um den
+# Postgres-Server selbst zu starten.
+#
 # KEINE INTERAKTIVEN ABFRAGEN: Erkennt die Pruefung unten ein Migrationsrisiko
 # (oder kann es mangels erreichbarer Datenbank nicht ausschliessen), bricht
 # das Skript ab und verlangt eine ausdrueckliche Bestaetigung ueber die
@@ -121,36 +149,49 @@ fi
 
 # --- 2. Migrationsrisiko pruefen (rein lesend, aendert keine Daten) ---------
 # Vergleicht den Migrationsstand ZUM ZEITPUNKT, als "scripts/ops/upgrade.sh"
-# dieses Abbild als Vorgaenger sicherte (Tabelle
-# "_vereinorder_rollback_marker", von genau diesem Lauf angelegt), mit dem
-# JETZT zuletzt angewendeten Migrationsstand. Ist der jetzige Stand neuer,
-# migrierte das Schema seit der Sicherung weiter - die alte Anwendungslogik
-# liefe gegen ein Schema, fuer das sie nicht gebaut wurde. Bewusst NICHT der
-# Bauzeitpunkt des Abbilds selbst als Vergleichswert: Ein frisch gebautes
-# Abbild durchlaeuft seine EIGENE erste Migration erst bei seinem ERSTEN
-# Start danach, ihr Zeitpunkt liegt also praktisch immer NACH dem
-# Bauzeitpunkt - ein Vergleich dagegen waere fast immer faelschlich positiv.
-# Der Vergleich selbst laeuft als einzelne, rein lesende SQL-Abfrage IN
-# Postgres (Zeitstempelvergleich per "::timestamptz"), nicht ueber das
-# Parsen von Zeitstempeln im Shell-Skript.
+# dieses Abbild als Vorgaenger sicherte (Datei
+# "rollback-previous-migration-marker" im "state_data"-Volume, von genau
+# diesem Lauf geschrieben - Begruendung fuer Datei statt Datenbanktabelle
+# im Kopfkommentar dieser Datei), mit dem JETZT zuletzt angewendeten
+# Migrationsstand. Ist der jetzige Stand neuer, migrierte das Schema seit
+# der Sicherung weiter - die alte Anwendungslogik liefe gegen ein Schema,
+# fuer das sie nicht gebaut wurde. Bewusst NICHT der Bauzeitpunkt des
+# Abbilds selbst als Vergleichswert: Ein frisch gebautes Abbild durchlaeuft
+# seine EIGENE erste Migration erst bei seinem ERSTEN Start danach, ihr
+# Zeitpunkt liegt also praktisch immer NACH dem Bauzeitpunkt - ein Vergleich
+# dagegen waere fast immer faelschlich positiv.
 step="Migrationsrisiko pruefen"
+
+STATE_VOLUME=$(docker compose config --format json | jq -er '.volumes.state_data.name') || {
+  printf 'Name des "state_data"-Volumes konnte nicht ermittelt werden.\n' >&2
+  exit 3
+}
+POSTGRES_IMAGE=$(docker compose config --format json | jq -er '.services.postgres.image') || {
+  printf 'Postgres-Abbildname konnte nicht ermittelt werden.\n' >&2
+  exit 3
+}
 
 migration_check_possible=1
 schema_risk=0
-if migration_check_result=$(docker compose exec -T postgres psql --no-psqlrc \
-  --set=ON_ERROR_STOP=1 -U "$POSTGRES_USER_NAME" -d "$POSTGRES_DB_NAME" \
-  --tuples-only --no-align \
-  --command='SELECT (
-      (SELECT MAX(finished_at) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL)
-      >
-      (SELECT last_migration_finished_at FROM "_vereinorder_rollback_marker" WHERE id)
-    )' \
-  2>/dev/null); then
-  case "$migration_check_result" in
-    t) schema_risk=1 ;;
-    f) schema_risk=0 ;;
-    *) migration_check_possible=0 ;;
-  esac
+marker_value=""
+if marker_value=$(docker run --rm -v "${STATE_VOLUME}:/state:ro" "$POSTGRES_IMAGE" \
+  cat /state/rollback-previous-migration-marker 2>/dev/null) && [ -n "$marker_value" ]; then
+  # Der Vergleich selbst laeuft als einzelne, rein lesende SQL-Abfrage IN
+  # Postgres (Zeitstempelvergleich per "::timestamptz"), nicht ueber das
+  # Parsen von Zeitstempeln im Shell-Skript.
+  if migration_check_result=$(docker compose exec -T postgres psql --no-psqlrc \
+    --set=ON_ERROR_STOP=1 -U "$POSTGRES_USER_NAME" -d "$POSTGRES_DB_NAME" \
+    --tuples-only --no-align \
+    --command="SELECT ((SELECT MAX(finished_at) FROM \"_prisma_migrations\" WHERE finished_at IS NOT NULL) > '${marker_value}'::timestamptz)" \
+    2>/dev/null); then
+    case "$migration_check_result" in
+      t) schema_risk=1 ;;
+      f) schema_risk=0 ;;
+      *) migration_check_possible=0 ;;
+    esac
+  else
+    migration_check_possible=0
+  fi
 else
   migration_check_possible=0
 fi
@@ -159,10 +200,10 @@ if [ "$migration_check_possible" -ne 1 ] || [ "$schema_risk" -eq 1 ]; then
   printf '\n' >&2
   if [ "$migration_check_possible" -ne 1 ]; then
     printf '=== Migrationsstand konnte NICHT ermittelt werden ===\n' >&2
-    printf 'Die Datenbank (Dienst "postgres") war fuer die Pruefung nicht erreichbar,\n' >&2
-    printf 'oder es fehlt die Markierung aus dem sichernden "upgrade.sh"-Lauf\n' >&2
-    printf '("_vereinorder_rollback_marker" bzw. "_prisma_migrations"). Ob seit dem\n' >&2
-    printf 'gesicherten Abbild migriert wurde, ist damit UNBEKANNT und wird\n' >&2
+    printf 'Entweder fehlt die Markierung aus dem sichernden "upgrade.sh"-Lauf im\n' >&2
+    printf '"state_data"-Volume ("rollback-previous-migration-marker"), oder die\n' >&2
+    printf 'Datenbank (Dienst "postgres") war fuer die Pruefung nicht erreichbar. Ob\n' >&2
+    printf 'seit dem gesicherten Abbild migriert wurde, ist damit UNBEKANNT und wird\n' >&2
     printf 'sicherheitshalber als moeglich behandelt.\n' >&2
   else
     printf '=== Seit dem gesicherten Abbild wurde migriert ===\n' >&2

@@ -156,15 +156,24 @@ offen.
 
 Vor der Umbenennung prüft das Skript rein lesend, ob seit dem Sichern des vorigen
 Abbilds bereits eine Migration gelaufen ist: `scripts/ops/upgrade.sh` hält dafür bei
-jedem Lauf den damaligen Migrationsstand in einer eigenen Tabelle
-(`_vereinorder_rollback_marker`) fest, und `rollback.sh` vergleicht ihn mit dem
-aktuellen Stand in `_prisma_migrations`. Ist das der Fall - oder lässt sich die
-Datenbank für die Prüfung nicht erreichen -, bricht das Skript ab und nennt
-ausdrücklich, dass zusätzlich eine `PRE_MIGRATION`-Wiederherstellung
-(`scripts/ops/restore.sh` mit der Sicherung aus demselben Aktualisierungslauf) nötig sein
-kann. Diese Wiederherstellung führt das Skript **niemals selbst aus** - eine
-Entscheidung, die Bestellungen und Zahlungen verwirft, trifft ausschließlich ein
-Mensch. Erst nach ausdrücklicher Bestätigung über
+jedem Lauf den damaligen Migrationsstand in einer einfachen Datei im
+`state_data`-Volume fest (`rollback-previous-migration-marker`), und `rollback.sh`
+vergleicht sie mit dem aktuellen Stand in `_prisma_migrations`. Bewusst keine Tabelle in
+der Anwendungsdatenbank: Das bräuchte eine eingecheckte Prisma-Migration (AGENTS.md) und
+würde über `pg_dump` in jede Sicherung wandern - vor allem aber vertauscht ein nativer
+Restore (Abschnitt 3) ganze Datenbanken per Umbenennung, eine Markierung innerhalb der
+Datenbank würde dabei mit ausgetauscht und beschriebe danach den falschen Augenblick.
+Die Datei im separaten `state_data`-Volume übersteht einen solchen Restore unberührt.
+Gelesen wird sie über einen kurzlebigen Hilfscontainer mit dem ohnehin schon lokal
+vorhandenen Postgres-Abbild - unabhängig davon, ob das Backend antwortet, und ohne ein
+Abbild aus dem Netz zu benötigen.
+
+Ist seit der Sicherung migriert worden - oder lässt sich das nicht ermitteln -, bricht
+das Skript ab und nennt ausdrücklich, dass zusätzlich eine `PRE_MIGRATION`-
+Wiederherstellung (`scripts/ops/restore.sh` mit der Sicherung aus demselben
+Aktualisierungslauf) nötig sein kann. Diese Wiederherstellung führt das Skript
+**niemals selbst aus** - eine Entscheidung, die Bestellungen und Zahlungen verwirft,
+trifft ausschließlich ein Mensch. Erst nach ausdrücklicher Bestätigung über
 `ROLLBACK_ACKNOWLEDGE_SCHEMA_RISK=1 ./scripts/ops/rollback.sh` fährt es trotz erkanntem
 Risiko fort; keine Eingabeaufforderung.
 

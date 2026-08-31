@@ -268,25 +268,45 @@ done
 # damit wertlos. Festgehalten wird stattdessen der Migrationsstand IN DEM
 # AUGENBLICK, in dem dieses Abbild zum Vorgaenger wird (jetzt, vor dem
 # Neubau) - der Rueckweg vergleicht spaeter den DANN aktuellen Stand
-# dagegen. Abgelegt wird das in einer eigenen, winzigen Tabelle in Postgres
-# (nicht im "state_data"-Volume, das nur ueber das Backend erreichbar waere,
-# und nicht in "backup_data", das der Sicherungsverwaltung des Backends
-# gehoert): "postgres" laeuft unabhaengig davon, wie kaputt backend nach
-# Schritt 4 ist, und braucht dafuer kein zusaetzliches Abbild.
+# dagegen.
+#
+# WARUM EINE DATEI IM "state_data"-VOLUME UND KEINE TABELLE IN POSTGRES
+# (fruehere Fassung dieser Aenderung, in Pruefung verworfen): AGENTS.md,
+# Abschnitt "Entwicklung", verlangt fuer Datenbankaenderungen nachvollzieh-
+# bare, eingecheckte SQL-Migrationen - ein "CREATE TABLE" aus einem
+# Shell-Skript heraus, ausserhalb von Prisma, verstoesst genau dagegen: Die
+# Tabelle stuende in keinem Prisma-Schema, in keiner eingecheckten Migration,
+# und sie wanderte ueber "pg_dump" in jede Sicherung. Schwerer noch: Der
+# native Restore (apps/backend/src/backup/restore-swap.ts,
+# "RestoreSwapCoordinator") vertauscht ganze DATENBANKEN per SQL
+# ("ALTER DATABASE ... RENAME TO ...", "postgresql-backup.tools.ts",
+# "renameDatabase") - eine Markierung INNERHALB der Anwendungsdatenbank
+# wuerde dabei durch den Stand aus der eingespielten Sicherung ersetzt und
+# beschriebe danach einen anderen Augenblick als den, den sie beschreiben
+# soll. Am Quelltext geprueft (Stand dieser Aenderung):
+# "FileRestoreSwapStateStore" (restore-swap.ts) ist die einzige
+# Dateisystem-Beruehrung des gesamten Restore-Ablaufs und schreibt
+# ausschliesslich ihre EIGENE, anders benannte Datei
+# ("restore-swap-state.json") im selben Volume - nie ein Verzeichnis-Wisch,
+# nie ein Zugriff auf andere Dateinamen; unsere Markierungsdatei bleibt
+# davon unberuehrt, weil ihr Name nicht kollidiert. Es ist zudem ein
+# eigenes Docker-Volume, getrennt von "postgres_data", und gehoert - wie
+# STATE_DIR im Dateikopf von docker-compose.yml bereits fuer den
+# Wartungsmodus begruendet - explizit NICHT der Datenbank. Ein
+# Docker-Volume ist zudem von JEDEM Container aus
+# einhaengbar, nicht nur vom Backend: Das Schreiben unten laeuft ueber
+# "docker compose exec backend", weil das Backend an dieser Stelle im Ablauf
+# ohnehin noch laeuft (Schritt 5 kommt erst danach) - nicht weil kein
+# anderer Weg bestuende. scripts/ops/rollback.sh liest dieselbe Datei
+# spaeter ueber einen kurzlebigen Hilfscontainer, unabhaengig davon, ob das
+# Backend dann noch antwortet (siehe dortige Begruendung).
 step="Migrationsstand zum Sicherungszeitpunkt festhalten (#201)"
-docker compose exec -T postgres psql --no-psqlrc --set=ON_ERROR_STOP=1 \
-  -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-vereinorder}" \
-  --command='CREATE TABLE IF NOT EXISTS "_vereinorder_rollback_marker" (
-    id boolean PRIMARY KEY DEFAULT true,
-    captured_at timestamptz NOT NULL,
-    last_migration_finished_at timestamptz,
-    CONSTRAINT _vereinorder_rollback_marker_single_row CHECK (id)
-  )' \
-  --command='INSERT INTO "_vereinorder_rollback_marker" (id, captured_at, last_migration_finished_at)
-    VALUES (true, now(), (SELECT MAX(finished_at) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL))
-    ON CONFLICT (id) DO UPDATE SET
-      captured_at = EXCLUDED.captured_at,
-      last_migration_finished_at = EXCLUDED.last_migration_finished_at' >/dev/null
+last_migration_finished_at=$(docker compose exec -T postgres psql --no-psqlrc \
+  --set=ON_ERROR_STOP=1 -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-vereinorder}" \
+  --tuples-only --no-align \
+  --command='SELECT COALESCE(MAX(finished_at)::text, '"'"'epoch'"'"') FROM "_prisma_migrations" WHERE finished_at IS NOT NULL')
+printf '%s\n' "$last_migration_finished_at" |
+  docker compose exec -T backend sh -c 'cat > /app/state/rollback-previous-migration-marker'
 
 # --- 4. Neubau: der Entrypoint migriert dabei automatisch (#199, Punkt 4) --
 step="Neubau (docker compose up -d --build)"
