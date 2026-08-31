@@ -108,7 +108,80 @@ deploy` und `prisma migrate status` im Backend-Abbild aus und beendet die Wartun
 nach Erfolg. Bei einem Fehler bleibt das System gesperrt und die Sicherheitssicherung
 erhalten.
 
-## 6. ARM64-/AMD64- und Neustart-Abnahme
+Vor dem Neubau sichert das Skript zusätzlich die gerade laufenden Abbilder von
+`backend`, `frontend` und `print-worker` unter `<Abbildname>:previous` (#201) - das ist
+die Grundlage für den Rückweg im folgenden Abschnitt.
+
+## 6. Rückweg auf die vorige Softwarefassung ohne Neubau (#201)
+
+Ein Fehler, der erst unter echter Bedienung auffällt, ist der wahrscheinlichste Fall
+überhaupt: Die Aktualisierung läuft durch, die Container sind gesund, und erst der
+erste Kellner an der Ausgabe merkt, dass etwas nicht stimmt. In diesem Augenblick zählen
+Minuten. `docker-compose.yml` führt für `backend`, `frontend` und `print-worker` nur
+`build:`, kein `image:` - jeder Neubau überschreibt denselben lokalen Abbildnamen. Ohne
+Gegenmaßnahme wäre der einzige Weg zurück ein vollständiger Neubau aus einem alten
+Stand, derselbe Aufwand wie die fehlgeschlagene Aktualisierung selbst.
+
+**Das ist kein Ersatz für die Datenwiederherstellung in Abschnitt 3/4.** Der
+Software-Rückweg fasst die Datenbank nicht an. Für einen defekten Datenstand bleibt die
+dortige Wiederherstellung der richtige Weg - sie wirft dafür Bestellungen und Zahlungen
+weg, die seit der Sicherung entstanden sind, was für einen reinen Softwarefehler ein
+unverhältnismäßiger Preis wäre.
+
+Vorbereitet wird der Rückweg automatisch durch `scripts/ops/upgrade.sh` (siehe
+Abschnitt 5): Vor jedem Neubau sichert es die dann noch laufenden Abbilder der drei
+selbstgebauten Dienste unter `<Abbildname>:previous`. Aufbewahrt wird dabei genau eine
+Vorgängerfassung - sie wird bei jedem weiteren Aktualisierungslauf überschrieben, weil
+nur die zum jeweils letzten Lauf gehörende `PRE_MIGRATION`-Sicherung sicher zu diesem
+Abbild passt. Ein getaggtes Abbild gilt Docker nie als „dangling"; ein einfaches
+`docker image prune` entfernt `<Abbildname>:previous` deshalb nicht. Nur `docker image
+prune -a` würde es entfernen, sobald kein Container mehr darauf verweist - dieses
+Kommando im Festbetrieb entsprechend zurückhaltend einsetzen.
+
+Aktiviert wird der Rückweg mit:
+
+```bash
+./scripts/ops/rollback.sh
+```
+
+Das Skript benötigt kein `ADMIN_TOKEN` und ruft keine HTTP-Route auf, um die drei
+Dienste anzuhalten - der Ernstfall, der den Rückweg auslöst, kann genau der sein, in dem
+das Backend nach dem Neubau gar nicht mehr antwortet. Es hält `backend`, `frontend` und
+`print-worker` direkt über Docker an, benennt die gesicherten Abbilder auf die von
+Compose erwarteten Namen um (`docker tag`, kein `docker compose build`) und startet die
+drei Dienste mit `docker compose up -d --no-build` neu. Die dateibasierte
+Wartungssperre (`STATE_DIR`) übersteht den Tausch von selbst: War das System gesperrt,
+kommt die reaktivierte alte Fassung weiterhin gesperrt hoch; war es offen, sofort wieder
+offen.
+
+Vor der Umbenennung prüft das Skript rein lesend, ob seit dem Sichern des vorigen
+Abbilds bereits eine Migration gelaufen ist: `scripts/ops/upgrade.sh` hält dafür bei
+jedem Lauf den damaligen Migrationsstand in einer einfachen Datei im
+`state_data`-Volume fest (`rollback-previous-migration-marker`), und `rollback.sh`
+vergleicht sie mit dem aktuellen Stand in `_prisma_migrations`. Bewusst keine Tabelle in
+der Anwendungsdatenbank: Das bräuchte eine eingecheckte Prisma-Migration (AGENTS.md) und
+würde über `pg_dump` in jede Sicherung wandern - vor allem aber vertauscht ein nativer
+Restore (Abschnitt 3) ganze Datenbanken per Umbenennung, eine Markierung innerhalb der
+Datenbank würde dabei mit ausgetauscht und beschriebe danach den falschen Augenblick.
+Die Datei im separaten `state_data`-Volume übersteht einen solchen Restore unberührt.
+Gelesen wird sie über einen kurzlebigen Hilfscontainer mit dem ohnehin schon lokal
+vorhandenen Postgres-Abbild - unabhängig davon, ob das Backend antwortet, und ohne ein
+Abbild aus dem Netz zu benötigen.
+
+Ist seit der Sicherung migriert worden - oder lässt sich das nicht ermitteln -, bricht
+das Skript ab und nennt ausdrücklich, dass zusätzlich eine `PRE_MIGRATION`-
+Wiederherstellung (`scripts/ops/restore.sh` mit der Sicherung aus demselben
+Aktualisierungslauf) nötig sein kann. Diese Wiederherstellung führt das Skript
+**niemals selbst aus** - eine Entscheidung, die Bestellungen und Zahlungen verwirft,
+trifft ausschließlich ein Mensch. Erst nach ausdrücklicher Bestätigung über
+`ROLLBACK_ACKNOWLEDGE_SCHEMA_RISK=1 ./scripts/ops/rollback.sh` fährt es trotz erkanntem
+Risiko fort; keine Eingabeaufforderung.
+
+Fehlt für einen der drei Dienste ein gesichertes Abbild (etwa vor dem allerersten Lauf
+von `scripts/ops/upgrade.sh`), verweigert `rollback.sh` den Dienst mit einer
+verständlichen Meldung und ändert nichts.
+
+## 7. ARM64-/AMD64- und Neustart-Abnahme
 
 Vor einem Release und einmal auf dem eingesetzten Raspberry Pi:
 
