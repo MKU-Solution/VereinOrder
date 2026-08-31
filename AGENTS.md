@@ -24,6 +24,16 @@ Vor jedem `git push` muss das Projekt zwingend auf Funktion geprüft werden (z. 
 - Datenbankänderungen benötigen nachvollziehbare, eingecheckte SQL-Migrationen.
 - Destruktive Datenbanktests dürfen ausschließlich eine eindeutig geprüfte Testdatenbank verwenden.
 - Neue Abhängigkeiten müssen begründet und auf AMD64/ARM64-Kompatibilität geprüft werden.
+- `[skip ci]` ist in Commit-Nachrichten und PR-Titeln verboten, ausnahmslos, auch bei reinen
+  Textänderungen unter `docs/`. Gleiches gilt für die von GitHub Actions ebenso ausgewerteten Marken
+  `[ci skip]`, `[no ci]`, `[skip actions]`, `[actions skip]` und den Nachsatz `skip-checks:true`.
+  Hintergrund: Als die CI vom 24.08. bis 31.08.2026 wegen eines Abrechnungsproblems ausfiel,
+  gelangten 58 Commits ungeprüft auf `main`, 21 davon zusätzlich mit `[skip ci]`. Der erste echte
+  Lauf danach fand sechs rote Prüfungen mit vier Ursachen; zwei davon gingen unmittelbar auf
+  `[skip ci]`-Commits zurück und wären im eigenen Pull Request sofort aufgefallen. Sobald der für
+  `main` vorgesehene Zweigschutz greift (nach #207), macht er dieses Verbot selbsttragend: Ohne
+  Prüfung kein grüner Pflichtstatus, ohne grünen Status kein Merge. Bis dahin ist das Verbot allein
+  auf Einhaltung angewiesen – auch durch Agenten, die diesen Vorfall nicht miterlebt haben.
 
 ## Delegierte Aufgaben und Modellwahl
 
