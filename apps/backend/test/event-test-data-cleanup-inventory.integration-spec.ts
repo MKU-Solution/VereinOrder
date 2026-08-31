@@ -16,6 +16,16 @@ const TEST_CONFIRMATION = "VEREINORDER_TEST_ONLY";
 const REPOSITORY_ROOT = path.resolve(__dirname, "..", "..", "..");
 const FINGERPRINT = "f".repeat(64);
 
+/**
+ * Die beiden Sperren, die eine Testbestellung mit Bestandsbewegung am Loeschen
+ * hindern. Sie werden namentlich festgehalten, weil der SQLSTATE allein nicht
+ * zeigt, welcher Fremdschluessel verweigert hat - und auf der unterstuetzten
+ * PostgreSQL-Fassung 16 auch nicht, ob es ueberhaupt eine RESTRICT-Sperre war
+ * (siehe Kommentar am Testfall).
+ */
+const ITEM_LOCK = "InventoryMovement_orderItemId_orderId_productId_fkey";
+const ORDER_LOCK = "InventoryMovement_orderId_eventId_dataMode_fkey";
+
 type Scene = {
   eventId: string;
   eventName: string;
@@ -298,9 +308,29 @@ describe("Testdatenbereinigung mit Bestandsfuehrung (#141)", () => {
   /**
    * Beleg fuer die Ursache des Abnahmefehlers und zugleich fuer die Grenze,
    * die bestehen bleibt: eine Testbestellung mit Bestandsbewegung kann nie
-   * einfach geloescht werden, PostgreSQL antwortet mit 23001.
+   * einfach geloescht werden.
+   *
+   * Zugesichert ist nicht bloss ein Fehlschlag, sondern dass genau die dafuer
+   * vorgesehene Bestandssperre verweigert. Ein fest verdrahteter SQLSTATE
+   * taugt dafuer nicht: bis einschliesslich PostgreSQL 17 meldet der Server
+   * fuer ON DELETE RESTRICT denselben Code 23503 (foreign_key_violation) wie
+   * fuer ON DELETE NO ACTION, erst PostgreSQL 18 unterscheidet und meldet
+   * 23001 (restrict_violation). Der urspruengliche Test erwartete 23001 und
+   * war damit gegen die Entwicklungsfassung 18 gruen und gegen die
+   * unterstuetzte Fassung 16 der CI rot (Issue #204). Nachgewiesen wird die
+   * Zusage deshalb an dem, was sie tatsaechlich ausmacht:
+   *
+   *  1. Es gibt ueberhaupt etwas zu sperren - der Verkauf hat eine Bewegung
+   *     erzeugt, die an Bestellung und Position haengt.
+   *  2. Beide Sperren sind in der migrierten Datenbank als RESTRICT
+   *     deklariert, nicht als NO ACTION oder CASCADE.
+   *  3. Das Loeschen scheitert namentlich an ihnen und nicht zufaellig an
+   *     einem anderen Fremdschluessel; der erwartete SQLSTATE wird aus der
+   *     Serverfassung abgeleitet statt festgeschrieben.
+   *  4. Sie verbieten nicht alles: ohne die Bewegung ist dieselbe Bestellung
+   *     loeschbar - genau darauf beruht die erlaubte Bereinigung.
    */
-  it("verweigert das Loeschen einer Testbestellung mit Bestandsbewegung mit 23001", async () => {
+  it("verweigert das Loeschen einer Testbestellung an der Bestandssperre", async () => {
     const scene = await createScene("restrict");
     const order = await ordersService().createOrder(
       scene.userId,
@@ -309,24 +339,70 @@ describe("Testdatenbereinigung mit Bestandsfuehrung (#141)", () => {
       ]),
     );
 
-    expect(
-      postgresErrorCode(
-        await rejection(
-          prisma.$executeRaw(
+    // 1. Die Sperre hat etwas zu sperren.
+    const movement = await prisma.inventoryMovement.findFirstOrThrow({
+      where: { orderId: order.id },
+    });
+    expect(movement).toEqual(
+      expect.objectContaining({
+        type: "SALE",
+        dataMode: "TEST",
+        quantityDelta: -1,
+      }),
+    );
+    expect(movement.orderItemId).not.toBeNull();
+
+    // 2. Beide Sperren sind sofort pruefende RESTRICT-Beziehungen.
+    expect([await deleteRule(ITEM_LOCK), await deleteRule(ORDER_LOCK)]).toEqual(
+      ["RESTRICT", "RESTRICT"],
+    );
+
+    // 3. Und genau sie verweigern das Loeschen.
+    const expectedCode = await restrictViolationCode();
+    const itemRejection = await rejection(
+      prisma.$executeRaw(
+        Prisma.sql`DELETE FROM "OrderItem" WHERE "orderId" = ${order.id}`,
+      ),
+    );
+    expect([
+      postgresErrorCode(itemRejection),
+      postgresConstraintName(itemRejection),
+    ]).toEqual([expectedCode, ITEM_LOCK]);
+    const orderRejection = await rejection(
+      prisma.$executeRaw(
+        Prisma.sql`DELETE FROM "Order" WHERE "id" = ${order.id}`,
+      ),
+    );
+    expect([
+      postgresErrorCode(orderRejection),
+      postgresConstraintName(orderRejection),
+    ]).toEqual([expectedCode, ORDER_LOCK]);
+
+    // 4. Faellt die Bewegung ueber die Bereinigungsausnahme weg, laesst sich
+    //    dieselbe Bestellung loeschen. Die Sperre verbietet also die
+    //    Bestandsbewegung, nicht das Loeschen an sich.
+    await expect(
+      withTestResetFlag(async (tx) => {
+        expect(await deleteMovement(tx, movement.id)).toBe(1);
+        expect(
+          await tx.$executeRaw(
             Prisma.sql`DELETE FROM "OrderItem" WHERE "orderId" = ${order.id}`,
           ),
-        ),
-      ),
-    ).toBe("23001");
-    expect(
-      postgresErrorCode(
-        await rejection(
-          prisma.$executeRaw(
+        ).toBe(1);
+        expect(
+          await tx.$executeRaw(
             Prisma.sql`DELETE FROM "Order" WHERE "id" = ${order.id}`,
           ),
-        ),
-      ),
-    ).toBe("23001");
+        ).toBe(1);
+        throw new Rollback();
+      }),
+    ).rejects.toBeInstanceOf(Rollback);
+
+    // Der Gegenbeweis hat nichts hinterlassen.
+    expect(await prisma.order.count({ where: { id: order.id } })).toBe(1);
+    expect(
+      await prisma.inventoryMovement.count({ where: { id: movement.id } }),
+    ).toBe(1);
   }, 180_000);
 
   /**
@@ -442,6 +518,37 @@ describe("Testdatenbereinigung mit Bestandsfuehrung (#141)", () => {
       );
       return work(tx);
     });
+  }
+
+  /**
+   * Der SQLSTATE, mit dem die laufende Serverfassung eine
+   * RESTRICT-Verweigerung meldet. Bis PostgreSQL 17 ist das 23503 wie bei
+   * jeder anderen Fremdschluesselverletzung, ab PostgreSQL 18 der eigene
+   * Code 23001. Unterstuetzt ist Fassung 16 (docs/development/testing.md);
+   * die Ableitung haelt den Test auch auf neueren Entwicklungsstaenden
+   * scharf, statt ihn dort gruen oder hier rot zu machen.
+   */
+  async function restrictViolationCode() {
+    const [row] = await prisma.$queryRaw<{ major: number }[]>(
+      Prisma.sql`SELECT current_setting('server_version_num')::int / 10000 AS "major"`,
+    );
+    return Number(row.major) >= 18 ? "23001" : "23503";
+  }
+
+  /**
+   * Liest die Loeschregel einer Fremdschluesselbedingung aus dem migrierten
+   * Katalog. Auf der unterstuetzten Fassung 16 ist das die einzige Stelle,
+   * an der sich RESTRICT von NO ACTION unterscheiden laesst - der Fehlercode
+   * ist dort fuer beide derselbe.
+   */
+  async function deleteRule(constraint: string) {
+    const [row] = await prisma.$queryRaw<{ rule: string }[]>(
+      Prisma.sql`SELECT "delete_rule" AS "rule"
+        FROM information_schema.referential_constraints
+        WHERE "constraint_name" = ${constraint}
+          AND "constraint_schema" = current_schema()`,
+    );
+    return row?.rule ?? null;
   }
 
   function stock(
@@ -641,6 +748,21 @@ function postgresErrorCode(error: unknown): string | null {
   if (typeof metaCode === "string") return metaCode;
   const message = describeError(error);
   return /(?:code|sqlstate)[^0-9]{0,12}(\d{5})/i.exec(message)?.[1] ?? null;
+}
+
+/**
+ * Liest den Namen der verletzten Fremdschluesselbedingung aus einem
+ * Prisma-Fehler. PostgreSQL nennt ihn im Meldungstext; er ist das einzige
+ * Merkmal, an dem sich die Bestandssperre von jedem anderen Fremdschluessel
+ * unterscheiden laesst. Ab Fassung 18 schiebt der Server bei RESTRICT ein
+ * "RESTRICT setting of" in den Text ein.
+ */
+function postgresConstraintName(error: unknown): string | null {
+  return (
+    /violates (?:RESTRICT setting of )?foreign key constraint "([^"]+)"/.exec(
+      describeError(error),
+    )?.[1] ?? null
+  );
 }
 
 function describeError(error: unknown): string {
