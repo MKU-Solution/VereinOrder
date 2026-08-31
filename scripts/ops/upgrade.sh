@@ -22,14 +22,20 @@
 #   1. Vorbedingungen pruefen (jq, docker, ADMIN_TOKEN).
 #   2. POST /maintenance/start, auf Phase LOCKED warten.
 #   3. POST /backup/pre-migration - jetzt garantiert VOR jeder Migration.
-#   4. docker compose up -d --build. SKIP_AUTO_MIGRATE wird ABSICHTLICH
+#   4. Die GERADE LAUFENDEN Abbilder von backend, frontend und print-worker
+#      unter "<Abbildname>:previous" sichern (#201) - das ist die letzte
+#      Gelegenheit dazu, denn Schritt 6 ueberschreibt denselben Abbildnamen
+#      sofort wieder. Ohne diesen Schritt gibt es nach einem fehlgeschlagenen
+#      Neubau keinen Weg zurueck ausser einem vollstaendigen Neubau aus einem
+#      alten Stand - siehe scripts/ops/rollback.sh fuer den Rueckweg selbst.
+#   5. docker compose up -d --build. SKIP_AUTO_MIGRATE wird ABSICHTLICH
 #      NICHT gesetzt: Die Automigration im Entrypoint ist erwuenscht, nur
 #      ihr Zeitpunkt war falsch. Sie laeuft jetzt genau hier, im
 #      geschuetzten Fenster zwischen Sicherung und Wiederoeffnung.
-#   5. Auf ein wieder antwortendes Backend warten, mit Zeitgrenze.
-#   6. "prisma migrate status" zur Kontrolle, gegen den bereits laufenden
+#   6. Auf ein wieder antwortendes Backend warten, mit Zeitgrenze.
+#   7. "prisma migrate status" zur Kontrolle, gegen den bereits laufenden
 #      Container (kein zusaetzlicher Einwegcontainer noetig, siehe unten).
-#   7. POST /maintenance/end.
+#   8. POST /maintenance/end.
 #
 # Die beiden vormaligen "docker compose run --rm --no-deps
 # -e SKIP_AUTO_MIGRATE=1 backend ..."-Aufrufe (frueher hier an dieser
@@ -212,11 +218,81 @@ if [ "$jwt_secret_persisted" -eq 0 ]; then
   printf '\n' >&2
 fi
 
-# --- 3. Neubau: der Entrypoint migriert dabei automatisch (#199, Punkt 4) --
+# --- Vorige Abbilder sichern (#201) -----------------------------------------
+# "docker-compose.yml" gibt fuer backend, frontend und print-worker nur
+# "build:" an, kein "image:". Compose vergibt den Abbildnamen dabei selbst
+# aus Projekt- und Dienstname ("<Projekt>-<Dienst>", z. B.
+# "vereinorder-backend") und ueberschreibt genau diesen Namen bei jedem
+# Neubau - das vorige Abbild verliert seinen Namen und ist ohne diesen
+# Schritt nur noch ueber seine Abbild-ID ansprechbar, wenn ueberhaupt (ein
+# "docker image prune" raeumt unbenannte/"dangling" Abbilder weg). Der
+# "container_name" (z. B. "vereinorder_backend") ist NICHT der Abbildname
+# und dient hier nur dazu, ueber den tatsaechlich laufenden Container an das
+# tatsaechlich laufende Abbild zu kommen - erraten wird nichts.
+#
+# Genau EINE Vorgaengerfassung wird aufbewahrt (Tag ":previous", bei jedem
+# Lauf ueberschrieben): Jeder Aktualisierungslauf erzeugt genau eine neue
+# PRE_MIGRATION-Sicherung (Schritt 3 oben), und nur die zu DIESEM Lauf
+# gehoerende Sicherung passt sicher zu dem hier gesicherten Abbild. Mehrere
+# Vorgaengerfassungen vorzuhalten wuerde verlangen, jede einzelne mit der
+# jeweils zugehoerigen PRE_MIGRATION-Sicherung zu verknuepfen, ohne dafuer
+# einen belastbaren Zusatznutzen zu liefern - der Rueckweg
+# (scripts/ops/rollback.sh) federt ohnehin nur den letzten Schritt ab, nicht
+# beliebig viele. Ein getaggtes Abbild gilt Docker NIEMALS als "dangling";
+# ein einfaches "docker image prune" entfernt "<Abbildname>:previous" daher
+# nicht. Nur "docker image prune -a" wuerde es entfernen, sobald kein
+# Container mehr darauf verweist (docs/ops/backup-recovery.md).
+step="Vorige Abbilder sichern (#201)"
+COMPOSE_PROJECT_FOR_ROLLBACK=$(docker compose config --format json | jq -er '.name')
+for rollback_service in backend frontend print-worker; do
+  running_container_id=$(docker compose ps -q "$rollback_service")
+  if [ -z "$running_container_id" ]; then
+    printf 'Kein laufender Container fuer "%s" gefunden; ueberspringe Sicherung des\n' \
+      "$rollback_service" >&2
+    printf 'vorigen Abbilds (vermutlich Ersteinrichtung ohne vorherigen Aktualisierungslauf).\n' >&2
+    continue
+  fi
+  running_image_id=$(docker inspect --format '{{.Image}}' "$running_container_id")
+  rollback_image_name="${COMPOSE_PROJECT_FOR_ROLLBACK}-${rollback_service}"
+  docker tag "$running_image_id" "${rollback_image_name}:previous"
+  printf 'Voriges Abbild gesichert: %s:previous (%s)\n' "$rollback_image_name" "$running_image_id"
+done
+
+# Migrationsstand ZUM SICHERUNGSZEITPUNKT festhalten, fuer den Rueckweg
+# (scripts/ops/rollback.sh). WARUM NICHT einfach der Bauzeitpunkt des
+# gesicherten Abbilds selbst: Ein frisch gebautes Abbild durchlaeuft seine
+# EIGENE erste automatische Migration erst beim ERSTEN Start danach - ihr
+# Zeitpunkt liegt also praktisch immer NACH dem Bauzeitpunkt des Abbilds,
+# selbst wenn seither nie wieder migriert wurde. Ein Vergleich "juengste
+# Migration neuer als Abbild-Bauzeitpunkt" waere deshalb fast immer wahr und
+# damit wertlos. Festgehalten wird stattdessen der Migrationsstand IN DEM
+# AUGENBLICK, in dem dieses Abbild zum Vorgaenger wird (jetzt, vor dem
+# Neubau) - der Rueckweg vergleicht spaeter den DANN aktuellen Stand
+# dagegen. Abgelegt wird das in einer eigenen, winzigen Tabelle in Postgres
+# (nicht im "state_data"-Volume, das nur ueber das Backend erreichbar waere,
+# und nicht in "backup_data", das der Sicherungsverwaltung des Backends
+# gehoert): "postgres" laeuft unabhaengig davon, wie kaputt backend nach
+# Schritt 4 ist, und braucht dafuer kein zusaetzliches Abbild.
+step="Migrationsstand zum Sicherungszeitpunkt festhalten (#201)"
+docker compose exec -T postgres psql --no-psqlrc --set=ON_ERROR_STOP=1 \
+  -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-vereinorder}" \
+  --command='CREATE TABLE IF NOT EXISTS "_vereinorder_rollback_marker" (
+    id boolean PRIMARY KEY DEFAULT true,
+    captured_at timestamptz NOT NULL,
+    last_migration_finished_at timestamptz,
+    CONSTRAINT _vereinorder_rollback_marker_single_row CHECK (id)
+  )' \
+  --command='INSERT INTO "_vereinorder_rollback_marker" (id, captured_at, last_migration_finished_at)
+    VALUES (true, now(), (SELECT MAX(finished_at) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL))
+    ON CONFLICT (id) DO UPDATE SET
+      captured_at = EXCLUDED.captured_at,
+      last_migration_finished_at = EXCLUDED.last_migration_finished_at' >/dev/null
+
+# --- 4. Neubau: der Entrypoint migriert dabei automatisch (#199, Punkt 4) --
 step="Neubau (docker compose up -d --build)"
 docker compose up -d --build
 
-# --- 4. Auf ein wieder antwortendes Backend warten, mit Zeitgrenze --------
+# --- 5. Auf ein wieder antwortendes Backend warten, mit Zeitgrenze --------
 # GET /maintenance ist auf Klassenebene @MaintenancePublic() (siehe
 # apps/backend/src/maintenance/maintenance.controller.ts) und antwortet
 # deshalb auch waehrend LOCKED ohne Anmeldung - anders als praktisch jede
@@ -244,14 +320,14 @@ if [ "$ready" -ne 1 ]; then
   exit 12
 fi
 
-# --- 5. Migrationsstand zur Kontrolle ---------------------------------------
+# --- 6. Migrationsstand zur Kontrolle ---------------------------------------
 # Gegen den bereits laufenden Container aus Schritt 4, siehe Begruendung im
 # Dateikopf, warum die vormaligen "docker compose run"-Aufrufe entfallen.
 step="Migrationsstand pruefen (prisma migrate status)"
 docker compose exec -T backend \
   pnpm --filter @vereinorder/database exec prisma migrate status
 
-# --- 6. Wartungsmodus beenden ------------------------------------------------
+# --- 7. Wartungsmodus beenden ------------------------------------------------
 step="Wartungsmodus beenden (POST /maintenance/end)"
 # "set +e" rund um genau diesen Aufruf, NICHT "if ! curl ...; then": "!"
 # negiert den Exitstatus der Pipeline selbst, und "$?" liefert im
