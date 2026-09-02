@@ -16,5 +16,25 @@
 playwright-report
 test-results
 
-.env
+# Umgebungsdateien. ACHTUNG: Hier gilt NICHT dieselbe Regel wie in
+# .gitignore, obwohl die Zeile dort woertlich gleich lautete. git wendet ein
+# Muster ohne Schraegstrich auf JEDER Ebene an; Docker vergleicht es mit dem
+# VOLLSTAENDIGEN relativen Pfad. Das blosse ".env" schloss deshalb nur die
+# Datei im Wurzelverzeichnis aus, waehrend etwa apps/backend/.env in den
+# Baukontext geriet und ueber "COPY apps/backend ./apps/backend"
+# (apps/backend/Dockerfile) sogar in die Builder-Schicht und ihren Bau-Cache -
+# unbemerkt, weil git dieselbe Datei sehr wohl ignoriert und "git status"
+# schweigt. Genau diese Asymmetrie war die Ursache von #182.
+#
+# Bewusst KEIN pauschales "**/.env.*": Das erfasst auch .env.example, und die
+# gehoert ausdruecklich in den Baukontext (.gitignore holt sie ueber
+# "!.env.example" ebenso zurueck).
+#
+# scripts/ci/check-repository-hygiene.mjs prueft diese Muster gegen eine feste
+# Liste von Pfaden. Wer sie aendert, bekommt dort eine Antwort, statt es erst
+# beim naechsten Abbild zu merken.
+**/.env
+**/.env.local
+**/.env.*.local
+
 *.log
