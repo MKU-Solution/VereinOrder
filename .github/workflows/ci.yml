@@ -518,6 +518,16 @@ jobs:
           #
           # Die Volumes tragen in docker-compose.yml feste Namen; Compose
           # uebernimmt die hier vorbereiteten, statt neue anzulegen.
+          #
+          # In BEIDE Verzeichnisse muss eine Datei: Ein LEERES benanntes Volume
+          # befuellt Docker beim ersten Einhaengen aus dem Abbild und
+          # uebernimmt dabei auch Eigentuemer und Rechte des Einhaengepunkts -
+          # seit #180 also "node". Der hier gesetzte Eigentuemer root waere
+          # damit wieder weg, und die Altinstallation, die dieser Schritt
+          # nachstellen soll, gaebe es gar nicht. Genau daran ist dieser
+          # Auftrag beim ersten Anlauf gescheitert: /backups blieb leer, kam
+          # als node-eigen im Container an, und der Entrypoint hatte zu Recht
+          # nichts zu uebereignen.
           docker volume create vereinorder_state_data
           docker volume create vereinorder_backup_data
           docker run --rm \
@@ -526,7 +536,9 @@ jobs:
             alpine sh -euc '
               printf "%s" "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" > /state/jwt-secret
               printf "%s" "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210" > /state/print-worker-token
-              chmod 600 /state/jwt-secret /state/print-worker-token
+              printf "%s" "{\"phase\":\"OPEN\",\"since\":null,\"byUserId\":null,\"byUsername\":null,\"reason\":null,\"expectedUntil\":null}" > /state/maintenance.json
+              echo "kein echter Dump, nur damit das Volume nicht leer ist" > /backups/vereinorder_2026-01-01T00-00-00.000Z_manual.dump
+              chmod 600 /state/jwt-secret /state/print-worker-token /backups/*.dump
               chmod 700 /backups
               chown -R 0:0 /state /backups
               ls -la /state /backups
@@ -537,9 +549,18 @@ jobs:
         run: |
           set -euo pipefail
           # Erste Aussage: Der Entrypoint hat den Schritt ueberhaupt getan.
+          # Bei einem Fehlschlag ist das Protokoll die einzige Spur - "grep -q"
+          # allein sagt nur, dass etwas fehlt, nicht was dastand.
           docker compose logs --no-color backend > /tmp/backend-start.log
-          grep -q 'uebereigne /app/state an node' /tmp/backend-start.log
-          grep -q 'uebereigne /app/backups an node' /tmp/backend-start.log
+          for verzeichnis in /app/state /app/backups; do
+            if ! grep -q "uebereigne $verzeichnis an node" /tmp/backend-start.log; then
+              echo "Keine Uebereignung fuer $verzeichnis im Backend-Protokoll." >&2
+              echo "Eigentuemer im Container:" >&2
+              docker compose exec -T --user 0 backend stat -c '%n %u:%g %a' /app/state /app/backups >&2
+              head -40 /tmp/backend-start.log >&2
+              exit 1
+            fi
+          done
           # Zweite Aussage, die wichtigere: Die vorgefundenen Geheimnisse haben
           # ueberlebt. Wuerde der Entrypoint sie neu erzeugen, waeren auf einer
           # echten Installation im selben Augenblick alle ausgegebenen Token
