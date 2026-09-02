@@ -52,6 +52,23 @@ services:
       retries: 5
 
   backend:
+    # #200: Fertiges Abbild aus der Registry - und ZUSAETZLICH weiterhin
+    # "build:". Beides zusammen ist der ganze Kniff:
+    #
+    #   - Auf dem Raspberry Pi wird aus einer Aktualisierung
+    #     "docker compose pull" statt eines vollstaendigen Baus. Vorher zwang
+    #     jede Aktualisierung das Geraet, das gleichzeitig Bestellungen bedient,
+    #     zu bis zu sechs "pnpm install"-Laeufen - mit erreichbarer
+    #     npm-Registry als Voraussetzung. Die CI hatte dieselben Abbilder
+    #     laengst gebaut und danach weggeworfen.
+    #   - In Entwicklung und CI aendert sich nichts: Fehlt das Abbild oertlich,
+    #     BAUT "docker compose up -d" es weiterhin selbst; gezogen wird nur auf
+    #     ausdrueckliches "docker compose pull". Wer an der Anwendung arbeitet,
+    #     nimmt wie bisher "--build".
+    #
+    # VEREINORDER_VERSION pinnt eine bestimmte Fassung (Commit-SHA); ohne
+    # Angabe gilt "latest", also der letzte gruene Stand von "main".
+    image: ghcr.io/seipekm/vereinorder-backend:${VEREINORDER_VERSION:-latest}
     build:
       context: .
       dockerfile: apps/backend/Dockerfile
@@ -123,6 +140,8 @@ services:
       start_period: 180s
 
   frontend:
+    # Siehe die Begruendung beim Dienst "backend" (#200).
+    image: ghcr.io/seipekm/vereinorder-frontend:${VEREINORDER_VERSION:-latest}
     build:
       context: .
       dockerfile: apps/frontend/Dockerfile
@@ -157,6 +176,8 @@ services:
       start_period: 10s
 
   print-worker:
+    # Siehe die Begruendung beim Dienst "backend" (#200).
+    image: ghcr.io/seipekm/vereinorder-print-worker:${VEREINORDER_VERSION:-latest}
     build:
       context: .
       dockerfile: apps/print-worker/Dockerfile

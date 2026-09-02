@@ -65,6 +65,19 @@ Die drei Portvariablen betreffen ausschließlich die Abbildung **am Host**. Inne
 Bündels sprechen sich die Dienste über ihre Compose-Namen an (`http://backend:3000`);
 daran ändert eine geänderte Host-Portnummer nichts.
 
+Zwei Variablen steuern, **welche** Abbilder laufen und **woher** sie kommen (#200):
+
+| Variable              | Beschreibung                                                                             | Standard |
+| --------------------- | ---------------------------------------------------------------------------------------- | -------- |
+| `VEREINORDER_VERSION` | Marke der Abbilder aus `ghcr.io`: `latest` oder eine Commit-SHA                          | `latest` |
+| `VEREINORDER_BUILD`   | Auf `1` gesetzt, baut `scripts/ops/upgrade.sh` örtlich, statt fertige Abbilder zu ziehen | `0`      |
+
+`VEREINORDER_BUILD` gehört **nicht** in die `.env`: Es ist keine Einstellung des
+Systems, sondern eine Entscheidung für einen einzelnen Aufruf
+(`VEREINORDER_BUILD=1 ./scripts/ops/upgrade.sh`). Gebraucht wird es für einen Stand, der
+nie nach `main` gelangt ist, oder auf einem Gerät ohne Netz. Die CI setzt es im Auftrag
+„Docker-Bündel Aktualisierung" aus genau dem ersten Grund.
+
 Dazu kommen drei Variablen für die Namen der Docker-Volumes:
 
 | Variable               | Beschreibung                                 | Standard                    |

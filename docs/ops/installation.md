@@ -188,6 +188,32 @@ Eigentümer wechselt von `root` auf `node`. Der in `docs/ops/backup-recovery.md`
 beschriebene Weg über den Datenbankcontainer (`docker compose exec postgres ...`)
 läuft als `root` und erreicht sie unverändert.
 
+### Woher die Abbilder kommen (#200)
+
+`backend`, `frontend` und `print-worker` tragen in `docker-compose.yml` **beides**: ein
+`image:` aus der Registry und ein `build:`. Was davon greift, hängt vom Befehl ab:
+
+| Befehl                         | Wirkung                                                            |
+| ------------------------------ | ------------------------------------------------------------------ |
+| `docker compose up -d`         | Baut örtlich, wenn das Abbild fehlt. Zieht **nicht** von sich aus. |
+| `docker compose pull`          | Holt die fertigen Abbilder aus `ghcr.io`.                          |
+| `docker compose up -d --build` | Baut immer neu. Der Weg für Entwicklung und CI.                    |
+
+Für die **Aktualisierung im Festbetrieb** zieht `scripts/ops/upgrade.sh` seit #200
+fertige Abbilder, statt auf dem Raspberry Pi zu bauen — Einzelheiten im
+[Raspberry-Pi-Setup](./raspberry-pi-setup.md). Die drei Pakete sind öffentlich, der Pi
+braucht also keine Zugangsdaten.
+
+`VEREINORDER_VERSION` wählt die Fassung: ohne Angabe `latest` (der letzte vollständig
+grüne Stand von `main`), sonst eine Commit-SHA. Vor einem Fest ist das Pinnen einer
+geprüften Fassung die sicherere Wahl.
+
+> **Einmalig nach dem allerersten Veröffentlichungslauf:** GitHub legt neue Pakete
+> zunächst **privat** an. Die drei Pakete unter
+> `https://github.com/seipekm?tab=packages` müssen einmal auf **Public** gestellt
+> werden, sonst scheitert `docker compose pull` auf dem Pi mit `denied`. Danach ist
+> nichts mehr zu tun.
+
 ---
 
 ## 4. Ersteinrichtung

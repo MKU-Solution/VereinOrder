@@ -3,7 +3,12 @@
 # print-worker, OHNE erneuten Bau (#201).
 #
 # AUSGANGSLAGE: "docker-compose.yml" gibt fuer diese drei Dienste nur
-# "build:" an, kein "image:". Compose vergibt den Abbildnamen selbst aus
+# HINWEIS seit #200: Die drei Dienste tragen jetzt ein "image:" (ghcr.io).
+# Der Absatz unten beschreibt den Zustand davor; die Mechanik bleibt dieselbe,
+# nur der Abbildname kommt nicht mehr aus Projekt- plus Dienstnamen, sondern
+# aus der Compose-Konfiguration selbst.
+#
+# "build:" an, kein "image:". Compose vergab den Abbildnamen selbst aus
 # Projekt- und Dienstname ("<Projekt>-<Dienst>", z. B. "vereinorder-
 # backend") und ueberschreibt genau diesen Namen bei jedem Neubau. Ohne
 # Gegenmassnahme verliert das vorige Abbild damit seinen Namen, und der
@@ -118,10 +123,31 @@ report_failure() {
 }
 trap report_failure EXIT
 
-COMPOSE_PROJECT=$(docker compose config --format json | jq -er '.name') || {
-  printf 'Compose-Projekt konnte nicht ermittelt werden. Dieses Skript im\n' >&2
+# --- Abbildkennungen aus der Compose-Konfiguration (#200) --------------------
+# Seit #200 tragen backend, frontend und print-worker ein "image:"
+# (ghcr.io/...). Der frueher hier berechnete Name "<Projekt>-<Dienst>" - den
+# Compose selbst vergibt, SOLANGE nur "build:" dasteht - trifft damit nicht
+# mehr zu. Gefragt wird deshalb Compose selbst, wie schon beim
+# PostgreSQL-Abbild weiter unten: nicht geraten, sondern erfragt.
+COMPOSE_CONFIG_JSON=$(docker compose config --format json) || {
+  printf 'Compose-Konfiguration konnte nicht gelesen werden. Dieses Skript im\n' >&2
   printf 'Projektverzeichnis mit "docker-compose.yml" ausfuehren.\n' >&2
   exit 3
+}
+
+# Die konfigurierte Kennung eines Dienstes, samt Marke:
+#   "ghcr.io/seipekm/vereinorder-backend:latest"
+vereinorder_configured_image() {
+  printf '%s' "$COMPOSE_CONFIG_JSON" |
+    jq -er --arg dienst "$1" '.services[$dienst].image'
+}
+
+# Dieselbe Kennung ohne Marke, als Ablageort fuer ":previous":
+#   "ghcr.io/seipekm/vereinorder-backend"
+# Der Ausdruck schneidet nur eine Marke ab, keinen Port im Registrynamen -
+# nach dem letzten ":" darf kein "/" mehr folgen.
+vereinorder_image_repository() {
+  printf '%s' "$1" | sed 's|:[^:/]*$||'
 }
 
 # --- 1. Gesicherte Abbilder pruefen ------------------------------------------
@@ -132,7 +158,8 @@ COMPOSE_PROJECT=$(docker compose config --format json | jq -er '.name') || {
 step="Gesicherte Abbilder pruefen"
 missing=""
 for rollback_service in backend frontend print-worker; do
-  image_name="${COMPOSE_PROJECT}-${rollback_service}"
+  image_name=$(vereinorder_image_repository \
+    "$(vereinorder_configured_image "$rollback_service")")
   if ! docker image inspect "${image_name}:previous" >/dev/null 2>&1; then
     missing="${missing}
  - ${image_name}:previous"
@@ -241,8 +268,13 @@ docker compose stop backend frontend print-worker
 # --- 4. Gesicherte Abbilder aktivieren (Umbenennen, KEIN Bau) ---------------
 step="Gesicherte Abbilder aktivieren"
 for rollback_service in backend frontend print-worker; do
-  image_name="${COMPOSE_PROJECT}-${rollback_service}"
-  docker tag "${image_name}:previous" "${image_name}:latest"
+  # Ziel ist die KONFIGURIERTE Marke, nicht pauschal ":latest": Steht in
+  # VEREINORDER_VERSION eine gepinnte Fassung, muss das gesicherte Abbild
+  # unter genau dieser Marke stehen, sonst zoege "docker compose up -d" die
+  # gepinnte Fassung aus der Registry wieder heran.
+  configured_image=$(vereinorder_configured_image "$rollback_service")
+  image_name=$(vereinorder_image_repository "$configured_image")
+  docker tag "${image_name}:previous" "$configured_image"
 done
 
 # --- 5. Dienste mit dem aktivierten Abbild neu starten, ausdruecklich ohne
@@ -256,11 +288,11 @@ step="Aktivierten Stand bestaetigen"
 printf '\n'
 printf 'Rueckweg abgeschlossen. Aktivierte Abbilder (ohne Neubau):\n'
 for rollback_service in backend frontend print-worker; do
-  image_name="${COMPOSE_PROJECT}-${rollback_service}"
-  active_id=$(docker image inspect --format '{{.Id}}' "${image_name}:latest")
-  active_created=$(docker image inspect --format '{{.Created}}' "${image_name}:latest")
-  printf ' - %-10s %s  (%s, gebaut %s)\n' "$rollback_service" "$image_name" \
-    "$active_id" "$active_created"
+  configured_image=$(vereinorder_configured_image "$rollback_service")
+  active_id=$(docker image inspect --format '{{.Id}}' "$configured_image")
+  active_created=$(docker image inspect --format '{{.Created}}' "$configured_image")
+  printf ' - %-10s %s  (%s, erstellt %s)\n' "$rollback_service" \
+    "$configured_image" "$active_id" "$active_created"
 done
 printf '\n'
 API_BASE_URL="${API_BASE_URL:-http://127.0.0.1:3000}"
