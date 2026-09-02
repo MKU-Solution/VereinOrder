@@ -2116,9 +2116,34 @@ export class OrdersService {
   }
 
   async getUnpaidOrders(eventId: string) {
+    const event = await this.prisma.event.findUnique({
+      where: { id: eventId },
+      select: { status: true, testMode: true },
+    });
+    // Einzige Ableitung der Betriebsart (Issue #152,
+    // common/operational-data-mode.ts). Laeuft die Veranstaltung gerade
+    // (LIVE oder TEST), grenzt der Filter offene Rechnungen auf genau diese
+    // Betriebsart ein, damit Test- und Echtbestellungen derselben
+    // Veranstaltung nicht gemeinsam in dieser Liste erscheinen (Issue #162).
+    //
+    // Laeuft sie NICHT (null: DRAFT, PREPARED, PAUSED, COMPLETED, ARCHIVED
+    // oder eine bereits geloeschte Veranstaltung), bleibt der dataMode-Filter
+    // ABSICHTLICH weg: Order.dataMode ist nie null, ein Filter
+    // `dataMode: null` faende also nichts, und offene Rechnungen einer
+    // abgeschlossenen Veranstaltung wuerden unsichtbar - obwohl genau die
+    // noch erreichbar bleiben muessen, um beglichen zu werden. Bewusst kein
+    // try/catch um den moeglichen Wurf bei unmoeglicher status/testMode-
+    // Kombination: derselbe Lesepfad-Umgang wie getQuickSaleContext oben,
+    // findFloorPlans (areas.service.ts) und inventoryFacade
+    // (products.service.ts) - die Kombination ist seit der Migration
+    // 20260830090000 durch einen DB-Constraint ausgeschlossen und nur ueber
+    // das Einspielen einer alten JSON-Sicherung erreichbar (eigenes Issue).
+    const dataMode = resolveOperationalDataMode(event);
+
     return this.prisma.order.findMany({
       where: {
         eventId,
+        ...(dataMode ? { dataMode } : {}),
         paymentStatus: { in: ["OPEN", "PARTIALLY_PAID"] },
         lifecycleStatus: { not: "CANCELLED" },
       },
