@@ -78,8 +78,13 @@ services:
       dockerfile: apps/frontend/Dockerfile
     container_name: vereinorder_frontend
     restart: always
+    # #180: Am Host unveraendert Port 80, im Container 8080. Der
+    # nginx-Hauptprozess laeuft seit #180 unprivilegiert und kann keinen
+    # Port unterhalb von 1024 mehr binden (apps/frontend/nginx.conf,
+    # apps/frontend/Dockerfile). Fuer den Betrieb aendert sich dadurch
+    # nichts: Die Anwendung bleibt unter http://<SERVER-IP>/ erreichbar.
     ports:
-      - "80:80"
+      - "80:8080"
     depends_on:
       - backend
 

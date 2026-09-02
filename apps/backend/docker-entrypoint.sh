@@ -7,6 +7,65 @@
 # docs/development/datensicherung.md:930 und die Auswertung in #172.
 set -eu
 
+# --- Unprivilegierte Laufzeit (#180) ---------------------------------------
+# Bis hierher lief das Backend als root - einschliesslich voller Schreibrechte
+# auf die Sicherungen im Volume 'vereinorder_backup_data', also auf genau die
+# Daten, die den Ernstfall ueberstehen sollen.
+#
+# Dieser Abschnitt laeuft VOR allem anderen, insbesondere vor
+# 'ensure-secrets.cli.js': Der Schluessel unter STATE_DIR entsteht mit den
+# Rechten 0600 (apps/backend/src/secrets/ensure-secrets.ts). Wuerde er noch
+# als root geschrieben, koennte ihn danach weder die Anwendung selbst noch
+# der Print-Worker im Nachbarcontainer lesen.
+#
+# Zwei Faelle, unterschieden ueber die eigene Uid:
+#
+#   root  - der Regelfall aus docker-compose.yml. Die beiden Volumes werden
+#           angeglichen, danach wechselt der Prozess auf 'node'.
+#   sonst - der Container wurde bereits unprivilegiert gestartet (etwa ueber
+#           'docker compose run --user'). Dann ist nichts anzugleichen, und
+#           das Skript laeuft unveraendert weiter.
+vereinorder_runtime_user=node
+
+if [ "$(id -u)" = "0" ]; then
+  vereinorder_runtime_uid="$(id -u "$vereinorder_runtime_user")"
+
+  # Einmalige Uebereignung bestehender Volumes. Ein FRISCHES benanntes Volume
+  # uebernimmt Eigentuemer und Rechte aus dem Abbild (apps/backend/Dockerfile:
+  # 'mkdir -p /app/backups /app/state && chown node:node ...') und ist hier
+  # bereits richtig - die Schleife sieht dann nur nach und tut nichts. Ein
+  # VORHANDENES Volume aus der Zeit vor #180 gehoert dagegen root; nur dieser
+  # Fall loest das rekursive 'chown' aus, und danach nie wieder, weil das
+  # Verzeichnis anschliessend dem Laufzeitbenutzer gehoert.
+  for vereinorder_dir in "${BACKUP_DIR:-/app/backups}" "${STATE_DIR:-/app/state}"; do
+    [ -d "$vereinorder_dir" ] || mkdir -p "$vereinorder_dir"
+    if [ "$(stat -c '%u' "$vereinorder_dir")" != "$vereinorder_runtime_uid" ]; then
+      printf 'docker-entrypoint: uebereigne %s an %s (einmalig, #180).\n' \
+        "$vereinorder_dir" "$vereinorder_runtime_user"
+      chown -R "${vereinorder_runtime_user}:${vereinorder_runtime_user}" \
+        "$vereinorder_dir"
+    fi
+  done
+
+  # HOME zeigt als root auf /root. pnpm - weiter unten fuer
+  # 'prisma migrate deploy' aufgerufen - wertet HOME aus; nach dem Wechsel auf
+  # 'node' waere /root unerreichbar. Das entpackte pnpm selbst liegt seit #180
+  # unter COREPACK_HOME=/opt/corepack und ist fuer alle lesbar.
+  HOME="$(getent passwd "$vereinorder_runtime_user" | cut -d: -f6)"
+  export HOME
+
+  # 'su-exec' statt 'su': es ERSETZT den eigenen Prozess, statt einen
+  # Kindprozess unter einer Login-Shell zu starten. Nur so bleibt PID 1 der
+  # Anwendungsprozess, und nur so bleibt das abschliessende 'exec' am
+  # Dateiende wirksam - sonst kaeme kein Signal mehr unveraendert bei der
+  # Anwendung an (RESTORE_EXIT_AFTER_SWAP).
+  printf 'docker-entrypoint: wechsle auf den Benutzer %s (uid %s).\n' \
+    "$vereinorder_runtime_user" "$vereinorder_runtime_uid"
+  exec su-exec "${vereinorder_runtime_user}:${vereinorder_runtime_user}" \
+    "$0" "$@"
+fi
+
+
 # --- Sicherheitsgeheimnisse (#175) -----------------------------------------
 # Vor allem anderen, auch vor der Migration: Der Print-Worker startet
 # parallel und braucht die Tokendatei so frueh wie moeglich.
