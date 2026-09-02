@@ -217,13 +217,13 @@ Für den Betrieb folgt daraus:
 
 ## 8. Fehlersuche
 
-| Symptom                                   | Kommando am Pi                                                                                                                                 | Erwartete Anzeige in CUPS                                                                                     | Erwartete Anzeige in der Verwaltung                                                                                                                           |
-| ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Drucker aus                               | `lpstat -p <queue> -l`                                                                                                                         | `printer-state-reasons` enthält `offline-report`                                                              | Auftrag hängt kurz, dann bei sicherem Fehlschlag automatischer Wechsel auf den Ersatzdrucker (falls hinterlegt), sonst endgültig gescheitert                  |
-| Papier aus                                | `lpstat -p <queue> -l`                                                                                                                         | `printer-state-reasons` enthält `media-empty` bzw. `media-needed`, Auftrag bleibt in der Warteschlange stehen | Auftrag bleibt in Zustellung, **kein Fehler** — nach dem Nachlegen druckt derselbe Auftrag automatisch fertig. Kein Doppeldruck, kein Failover                |
-| USB getrennt (während des Drucks)         | `lsusb` (Gerät fehlt in der Liste), `lpstat -p <queue> -l`                                                                                     | Auftragszustand wechselt auf `processing-stopped`/`aborted`, Gerät nicht mehr ansprechbar                     | Ergebnis unklar — landet als „unklares“ Ergebnis in der Verwaltung, **kein** automatischer Zweitdruck, Admin-Entscheidung nötig (siehe Abschnitt 9)           |
-| CUPS auf dem Pi nicht erreichbar          | vom Pi: `curl -sS http://localhost:631/`; aus dem Container: `docker exec vereinorder_print_worker wget -qO- http://host.docker.internal:631/` | Zeitüberschreitung/Verbindungsfehler                                                                          | Auftrag sicher nicht gedruckt, automatischer Wechsel auf den Ersatzdrucker (falls hinterlegt)                                                                 |
-| Auftrag hängt in der Queue (unklar warum) | `lpstat -o <queue>` (zeigt wartende/laufende Aufträge), `lpstat -p <queue> -l`                                                                 | Auftrag bleibt länger als erwartet in `pending`/`processing` sichtbar                                         | Bleibt so lange in Zustellung, bis CUPS ein Ergebnis meldet oder die Wartezeit (`PRINT_CUPS_WAIT_MS`, Vorgabe 120 Sekunden) abläuft; danach unklares Ergebnis |
+| Symptom                                   | Kommando am Pi                                                                                                                             | Erwartete Anzeige in CUPS                                                                                     | Erwartete Anzeige in der Verwaltung                                                                                                                           |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Drucker aus                               | `lpstat -p <queue> -l`                                                                                                                     | `printer-state-reasons` enthält `offline-report`                                                              | Auftrag hängt kurz, dann bei sicherem Fehlschlag automatischer Wechsel auf den Ersatzdrucker (falls hinterlegt), sonst endgültig gescheitert                  |
+| Papier aus                                | `lpstat -p <queue> -l`                                                                                                                     | `printer-state-reasons` enthält `media-empty` bzw. `media-needed`, Auftrag bleibt in der Warteschlange stehen | Auftrag bleibt in Zustellung, **kein Fehler** — nach dem Nachlegen druckt derselbe Auftrag automatisch fertig. Kein Doppeldruck, kein Failover                |
+| USB getrennt (während des Drucks)         | `lsusb` (Gerät fehlt in der Liste), `lpstat -p <queue> -l`                                                                                 | Auftragszustand wechselt auf `processing-stopped`/`aborted`, Gerät nicht mehr ansprechbar                     | Ergebnis unklar — landet als „unklares“ Ergebnis in der Verwaltung, **kein** automatischer Zweitdruck, Admin-Entscheidung nötig (siehe Abschnitt 9)           |
+| CUPS auf dem Pi nicht erreichbar          | vom Pi: `curl -sS http://localhost:631/`; aus dem Container: `docker compose exec print-worker wget -qO- http://host.docker.internal:631/` | Zeitüberschreitung/Verbindungsfehler                                                                          | Auftrag sicher nicht gedruckt, automatischer Wechsel auf den Ersatzdrucker (falls hinterlegt)                                                                 |
+| Auftrag hängt in der Queue (unklar warum) | `lpstat -o <queue>` (zeigt wartende/laufende Aufträge), `lpstat -p <queue> -l`                                                             | Auftrag bleibt länger als erwartet in `pending`/`processing` sichtbar                                         | Bleibt so lange in Zustellung, bis CUPS ein Ergebnis meldet oder die Wartezeit (`PRINT_CUPS_WAIT_MS`, Vorgabe 120 Sekunden) abläuft; danach unklares Ergebnis |
 
 Bei allen Fällen mit unklarem Ausgang gilt: **kein automatischer zweiter Druckversuch.**
 Das System wartet auf eine Entscheidung in der Verwaltung.
@@ -235,10 +235,14 @@ Geheimnis `PRINT_WORKER_TOKEN` erzeugt aber erst das Backend (siehe
 Volume. Verliert der Worker dieses Wettrennen, protokolliert er `worker.token_waiting`
 und wartet bis zu 60 Sekunden; findet die Datei danach immer noch nicht, endet der
 Prozess mit Fehlerstatus und wird durch `restart: always` erneut gestartet — deshalb
-zeigt `docker compose ps` oder `docker logs vereinorder_print_worker` in den ersten
-Sekunden nach dem allerersten Start mitunter einen oder zwei Neustarts des Containers
-`vereinorder_print_worker`. Sobald die Tokendatei existiert, läuft der Worker stabil
-weiter.
+zeigt `docker compose ps` oder `docker compose logs print-worker` in den ersten
+Sekunden nach dem allerersten Start mitunter einen oder zwei Neustarts des Dienstes.
+Sobald die Tokendatei existiert, läuft der Worker stabil weiter.
+
+Seit #184 kommt dieser Fall im Regelbetrieb nicht mehr vor: Der Print-Worker startet
+erst, wenn das Backend `healthy` meldet, und zu diesem Zeitpunkt liegt die Tokendatei
+bereits. Der Absatz bleibt für den Fall stehen, dass jemand den Dienst einzeln startet
+(`docker compose up -d print-worker`) und die Wartebedingung damit umgeht.
 
 ## 9. Was „gedruckt“ bedeutet
 

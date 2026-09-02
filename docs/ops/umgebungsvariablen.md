@@ -53,20 +53,46 @@ abzulösen.
 
 ## 3. Server & Ports
 
-| Variable   | Beschreibung                                              | Standard     |
-| ---------- | --------------------------------------------------------- | ------------ |
-| `PORT`     | Port, auf dem das NestJS-Backend (Fastify-Adapter) hört   | `3000`       |
-| `NODE_ENV` | Ausführungsumgebung (`development`, `production`, `test`) | `production` |
+| Variable        | Beschreibung                                                                | Standard     |
+| --------------- | --------------------------------------------------------------------------- | ------------ |
+| `PORT`          | Port, auf dem das NestJS-Backend (Fastify-Adapter) im Container hört        | `3000`       |
+| `NODE_ENV`      | Ausführungsumgebung (`development`, `production`, `test`)                   | `production` |
+| `FRONTEND_PORT` | Host-Port der Webanwendung (#185)                                           | `80`         |
+| `BACKEND_PORT`  | Host-Port der Backend-API (#185)                                            | `3000`       |
+| `POSTGRES_PORT` | Host-Port der Datenbank, weiterhin nur an `127.0.0.1` gebunden (#181, #185) | `5432`       |
 
-Der Port der Webanwendung selbst ist nicht über eine Umgebungsvariable konfigurierbar.
-Am Host ist und bleibt es Port `80`; im Container ist es seit #180 Port `8080`.
-`apps/frontend/nginx.conf` und `apps/frontend/Dockerfile` legen den Containerport fest,
-`docker-compose.yml` bildet den Host-Port `80` darauf ab.
+Die drei Portvariablen betreffen ausschließlich die Abbildung **am Host**. Innerhalb des
+Bündels sprechen sich die Dienste über ihre Compose-Namen an (`http://backend:3000`);
+daran ändert eine geänderte Host-Portnummer nichts.
 
-Der Grund für die beiden verschiedenen Zahlen: Der nginx-Hauptprozess läuft seit #180
-unprivilegiert (`USER nginx`) und kann keinen Port unterhalb von 1024 mehr binden. Für
-den Betrieb ändert das nichts – die Anwendung bleibt unter `http://<SERVER-IP>/`
-erreichbar. Wer den Containerport ändert, muss beide Stellen mitziehen.
+Dazu kommen drei Variablen für die Namen der Docker-Volumes:
+
+| Variable               | Beschreibung                                 | Standard                    |
+| ---------------------- | -------------------------------------------- | --------------------------- |
+| `POSTGRES_DATA_VOLUME` | Volume mit dem Datenverzeichnis von Postgres | `vereinorder_postgres_data` |
+| `BACKUP_DATA_VOLUME`   | Volume mit den Sicherungen                   | `vereinorder_backup_data`   |
+| `STATE_DATA_VOLUME`    | Volume mit Wartungszustand und Geheimnissen  | `vereinorder_state_data`    |
+
+**Im Regelbetrieb bleiben diese drei unangetastet.** Die Vorgaben sind die Namen, unter
+denen eine bestehende Installation ihre Daten findet und unter denen der Notfallweg in
+[Backup & Recovery](./backup-recovery.md) sie sucht; ein geänderter Name legt ein neues,
+leeres Volume an. Steuerbar sind sie nur, damit ein zweites Bündel auf demselben Rechner
+sich nicht in die Daten des ersten setzt – die Einzelheiten samt Warnung stehen in der
+[Installationsanleitung](./installation.md).
+
+`FRONTEND_PORT` stand hier schon einmal – damals mit dem Wert `5173` und ohne
+Entsprechung im Bündel, weshalb #176 den Eintrag entfernt hat. Er ist mit #185
+zurückgekommen, jetzt mit der richtigen Bedeutung: der Host-Port des nginx-Containers.
+`5173` ist und bleibt etwas anderes, nämlich der Vite-Entwicklungsserver außerhalb von
+Docker.
+
+**Host-Port und Containerport des Frontends sind verschiedene Zahlen.** Am Host ist es
+in der Vorgabe `80`, im Container seit #180 `8080`. Der Grund: Der nginx-Hauptprozess
+läuft seit #180 unprivilegiert (`USER nginx`) und kann keinen Port unterhalb von 1024
+mehr binden. Der **Containerport** ist weiterhin nicht über eine Umgebungsvariable
+steuerbar – `apps/frontend/nginx.conf` und `apps/frontend/Dockerfile` legen ihn fest,
+und wer ihn ändert, muss beide Stellen mitziehen. Für den Betrieb ändert das nichts: Die
+Anwendung bleibt unter `http://<SERVER-IP>/` erreichbar.
 
 ---
 

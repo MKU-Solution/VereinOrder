@@ -1,7 +1,26 @@
+# #185: Weder Host-Ports noch Containernamen stehen hier noch fest.
+#
+# Die Ports folgen jetzt der Form, die diese Datei ohnehin ueberall verwendet
+# ("${...:-...}"): Sie waren die Ausnahme von der Regel der Datei, nicht ihr
+# Muster. Ohne sie liess sich das Buendel auf einem Rechner, auf dem 80 oder
+# 5432 belegt sind, ueberhaupt nicht starten - und der naheliegende Ausweg
+# ueber eine Override-Datei half nicht: Compose FUEHRT zwei Portlisten
+# ZUSAMMEN, statt die eine durch die andere zu ersetzen, und band die
+# urspruenglichen Ports zusaetzlich. Erst das YAML-Merkmal "!override" half,
+# und das steht in keiner Anleitung.
+#
+# "container_name" ist ersatzlos entfallen. Ein solcher Name gilt je
+# Docker-Dienst, nicht je Compose-Projekt: Ein zweites Buendel auf demselben
+# Rechner - ein Probeaufbau neben dem laufenden Fest - scheiterte daran auch
+# bei voellig freien Ports, und COMPOSE_PROJECT_NAME blieb wirkungslos. Ohne
+# die Zeile bildet Compose die Namen aus Projekt- und Dienstnamen; beides
+# wirkt wieder. Angesprochen werden die Container ueber ihren DIENSTnamen
+# ("docker compose logs backend", "docker compose exec backend ..."), der von
+# alledem unberuehrt bleibt - ebenso wie die Netzwerknamen, ueber die sich die
+# Dienste untereinander finden (BACKEND_URL=http://backend:3000).
 services:
   postgres:
     image: postgres:16-alpine
-    container_name: vereinorder_postgres
     restart: always
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
@@ -22,7 +41,10 @@ services:
     # beide dokumentierten Wege unveraendert erreichbar; vom Laptop aus
     # braucht ein Datenbankwerkzeug jetzt einen SSH-Tunnel.
     ports:
-      - "127.0.0.1:5432:5432"
+      # Die Bindung an 127.0.0.1 ist NICHT steuerbar und bleibt fest: Sie ist
+      # die Entscheidung aus #181, nicht eine Vorgabe. Variabel ist allein der
+      # Host-Port.
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
       interval: 5s
@@ -33,7 +55,6 @@ services:
     build:
       context: .
       dockerfile: apps/backend/Dockerfile
-    container_name: vereinorder_backend
     restart: always
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-vereinorder}?schema=public
@@ -67,7 +88,10 @@ services:
       - backup_data:/app/backups
       - state_data:/app/state
     ports:
-      - "3000:3000"
+      # Nur der HOST-Port ist variabel. Der Containerport bleibt 3000, weil
+      # ihn ausser der Abbildung hier auch der healthcheck unten und
+      # BACKEND_URL des Print-Workers kennen muessen.
+      - "${BACKEND_PORT:-3000}:3000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -102,15 +126,16 @@ services:
     build:
       context: .
       dockerfile: apps/frontend/Dockerfile
-    container_name: vereinorder_frontend
     restart: always
     # #180: Am Host unveraendert Port 80, im Container 8080. Der
     # nginx-Hauptprozess laeuft seit #180 unprivilegiert und kann keinen
     # Port unterhalb von 1024 mehr binden (apps/frontend/nginx.conf,
     # apps/frontend/Dockerfile). Fuer den Betrieb aendert sich dadurch
     # nichts: Die Anwendung bleibt unter http://<SERVER-IP>/ erreichbar.
+    # Seit #185 ist der Host-Port ueber FRONTEND_PORT steuerbar; 80 ist nur
+    # noch die Vorgabe.
     ports:
-      - "80:8080"
+      - "${FRONTEND_PORT:-80}:8080"
     # #184: "depends_on" bleibt hier bewusst OHNE "condition: service_healthy",
     # abweichend vom Wortlaut des Umfangs. Das Frontend ist ein statischer
     # Dateiserver; zum Ausliefern der Oberflaeche braucht es das Backend
@@ -135,7 +160,6 @@ services:
     build:
       context: .
       dockerfile: apps/print-worker/Dockerfile
-    container_name: vereinorder_print_worker
     restart: always
     environment:
       BACKEND_URL: http://backend:3000
@@ -169,10 +193,34 @@ services:
       backend:
         condition: service_healthy
 
+# #185: Auch die Volumenamen sind Vorgaben statt Festlegungen - aus einem
+# Grund, der beim Nachpruefen zutage kam und schwerer wiegt als die Ports.
+#
+# Ein "name:" gilt, genau wie ein "container_name", je Docker-Dienst und nicht
+# je Compose-Projekt. Mit den entfallenen Containernamen startet ein zweites
+# Buendel unter eigenem Projektnamen jetzt anstandslos - und haengt dabei
+# STILLSCHWEIGEND dieselben Volumes ein. Gemessen: Ein zweiter
+# PostgreSQL-Server nahm dasselbe Datenverzeichnis in Betrieb, fuehrte darauf
+# eine Wiederherstellung aus ("redo starts at ...") und meldete sich als
+# bereit, waehrend der erste noch lief. Die Sperrdatei "postmaster.pid"
+# verhindert das NICHT: Jeder Container hat seinen eigenen PID-Namensraum, der
+# zweite Server findet die eingetragene Prozessnummer bei sich nicht, haelt
+# die Sperre fuer verwaist und raeumt sie weg.
+#
+# Der fruehere feste "container_name" hat diesen Fall zufaellig verhindert,
+# indem das zweite Buendel schon am Namen scheiterte. Mit seinem Wegfall
+# braucht es diese Zeilen hier, sonst waere aus einem lauten Fehlschlag ein
+# leiser Datenverlust geworden.
+#
+# Die Vorgaben bleiben WOERTLICH die bisherigen: Eine bestehende Installation
+# findet ihre Volumes unveraendert wieder, und der Notfallweg in
+# docs/ops/backup-recovery.md ("docker volume inspect vereinorder_backup_data")
+# bleibt gueltig. Wer ein zweites Buendel fahren will, setzt alle drei Namen -
+# siehe docs/ops/installation.md.
 volumes:
   postgres_data:
-    name: vereinorder_postgres_data
+    name: ${POSTGRES_DATA_VOLUME:-vereinorder_postgres_data}
   backup_data:
-    name: vereinorder_backup_data
+    name: ${BACKUP_DATA_VOLUME:-vereinorder_backup_data}
   state_data:
-    name: vereinorder_state_data
+    name: ${STATE_DATA_VOLUME:-vereinorder_state_data}
