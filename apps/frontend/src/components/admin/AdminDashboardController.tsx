@@ -380,7 +380,8 @@ export const AdminDashboardController = ({
         printerId: "",
         role: "WAITER",
         pin: "",
-        isActive: true,
+        // Issue #170: Gruppenschalter, analog zum Stationsmuster unten.
+        isActive: item?.isActive ?? true,
         targetStationId: item?.targetStationId || "",
         depositEuro: String(Math.floor((item?.deposit ?? 0) / 100)),
         depositCent: String(Math.abs((item?.deposit ?? 0) % 100)).padStart(
@@ -569,6 +570,9 @@ export const AdminDashboardController = ({
             sortOrder: formData.sortOrder,
             targetStationId: formData.targetStationId || null,
             deposit: depositEuro * 100 + depositCent,
+            // Issue #170: Gruppenschalter statt Loeschen. Beim Anlegen bleibt
+            // der Serverdefault (aktiv) unangetastet, analog zu Stationen.
+            ...(editingItem ? { isActive: formData.isActive } : {}),
           };
           if (editingItem) {
             await api.patch(`${endpoint}/${editingItem.id}`, payload);
@@ -1090,8 +1094,9 @@ export const AdminDashboardController = ({
   // Produkte und Benutzer gab es hier vier tote Zweige: Der Aufruf lief ins
   // Leere, weil serverseitig keine DELETE-Route existierte. Diese vier
   // Entitäten werden stattdessen deaktiviert (siehe handleSaveModal für
-  // Stationen/Benutzer sowie handleToggleProductAvailability für Produkte);
-  // für Warengruppen fehlt dafür noch das Datenmodell (kein isActive-Feld).
+  // Stationen/Benutzer/Warengruppen sowie handleToggleProductAvailability für
+  // Produkte). Warengruppen tragen das dafür nötige isActive-Feld seit
+  // Issue #170.
   const handleDelete = async (id: string) => {
     if (!confirm("Diesen Eintrag wirklich unwiderruflich löschen?")) return;
     try {
@@ -2712,6 +2717,29 @@ export const AdminDashboardController = ({
                       Wird bei Produkten ohne eigenen Pfandbetrag verwendet.
                     </p>
                   </fieldset>
+                  {editingItem && (
+                    <label className="mt-4 flex min-h-11 items-center gap-3 text-sm text-slate-200">
+                      <input
+                        type="checkbox"
+                        checked={formData.isActive}
+                        onChange={(e) =>
+                          setFormData({
+                            ...formData,
+                            isActive: e.target.checked,
+                          })
+                        }
+                      />
+                      Warengruppe ist aktiv
+                    </label>
+                  )}
+                  {editingItem && !formData.isActive && (
+                    <p className="mt-1 text-xs text-amber-300">
+                      Deaktiviert: Die Produkte dieser Warengruppe werden an den
+                      Kassen nicht mehr angeboten, bleiben aber in der
+                      Verwaltung sichtbar und lassen sich hier jederzeit wieder
+                      aktivieren.
+                    </p>
+                  )}
                 </div>
               )}
 

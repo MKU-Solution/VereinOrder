@@ -10,6 +10,7 @@ describe("AdminCategoriesView", () => {
       sortOrder: 1,
       targetStationId: "stat-1",
       deposit: 50,
+      isActive: true,
     },
     {
       id: "cat-2",
@@ -17,6 +18,7 @@ describe("AdminCategoriesView", () => {
       sortOrder: 2,
       targetStationId: null,
       deposit: 0,
+      isActive: false,
     },
   ];
 
@@ -47,10 +49,9 @@ describe("AdminCategoriesView", () => {
     expect(screen.queryByText("Speisen")).not.toBeInTheDocument();
   });
 
-  // Issue #168: Warengruppen haben kein isActive-Feld und keine
-  // Backend-Löschroute; der frühere Löschknopf traf ins Leere und wurde
-  // ersatzlos entfernt. Eine Deaktivierung bräuchte eine Schemaänderung
-  // (eigenes Issue), sie wird hier bewusst nicht mitgebaut.
+  // Issue #168: Warengruppen haben keine Backend-Löschroute; der frühere
+  // Löschknopf traf ins Leere und wurde ersatzlos entfernt. An seine Stelle
+  // tritt das Deaktivieren (Issue #170, isActive-Feld, siehe Test unten).
   it("zeigt keinen Löschen-Knopf mehr (Issue #168)", () => {
     render(
       <AdminCategoriesView
@@ -65,5 +66,23 @@ describe("AdminCategoriesView", () => {
     expect(
       screen.queryByRole("button", { name: /löschen/i }),
     ).not.toBeInTheDocument();
+  });
+
+  // Issue #170: die Liste macht den Aktivstatus der Warengruppe sichtbar -
+  // ohne diesen Hinweis wäre für die Verwaltung nicht erkennbar, dass eine
+  // Gruppe an den Kassen bereits stillgelegt ist.
+  it("zeigt den Aktivstatus je Warengruppe", () => {
+    render(
+      <AdminCategoriesView
+        categories={mockCategories}
+        stationsList={mockStations}
+        onRefresh={vi.fn()}
+        onOpenCreate={vi.fn()}
+        onEdit={vi.fn()}
+      />,
+    );
+
+    expect(screen.getAllByText("Aktiv").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Inaktiv").length).toBeGreaterThan(0);
   });
 });

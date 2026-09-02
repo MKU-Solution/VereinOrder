@@ -17,8 +17,10 @@
 //   (products.service.ts#updateAvailability, PATCH /products/:id/availability),
 //   war aber in der Produktverwaltung nicht erreichbar (nur in der
 //   Stationsansicht). Dieser Test belegt den neu ergänzten Knopf.
-// - Warengruppen: haben kein isActive-Feld - hier gibt es bewusst keine
-//   Deaktivierung, siehe AdminCategoriesView.test.tsx.
+// - Warengruppen: hatten kein isActive-Feld - seit Issue #170 tragen sie es
+//   (ProductCategory.isActive), im selben Stil wie Stationen. Dieser Test
+//   belegt die neu ergänzte Checkbox; der Kasseneffekt der Deaktivierung ist
+//   Sache des Backends (siehe products.service.ts/orders.service.ts).
 import "fake-indexeddb/auto";
 import {
   fireEvent,
@@ -79,7 +81,14 @@ const stations = [
 ];
 
 const categories = [
-  { id: "cat-1", name: "Getränke", sortOrder: 1, targetStationId: null },
+  {
+    id: "cat-1",
+    name: "Getränke",
+    sortOrder: 1,
+    targetStationId: null,
+    deposit: 0,
+    isActive: true,
+  },
 ];
 
 const products = [
@@ -220,6 +229,52 @@ describe("Station deaktivieren (Issue #168)", () => {
         expect.objectContaining({ isActive: false }),
       ),
     );
+  });
+});
+
+describe("Warengruppe deaktivieren (Issue #170)", () => {
+  async function openEditDialog() {
+    await openTab("/admin/categories");
+    await screen.findAllByText("Getränke");
+    fireEvent.click(
+      screen.getAllByRole("button", {
+        name: "Kategorie Getränke bearbeiten",
+      })[0],
+    );
+    return screen.findByRole("dialog");
+  }
+
+  it("bietet im Bearbeiten-Dialog eine Aktiv-Checkbox an und speichert isActive", async () => {
+    const dialog = await openEditDialog();
+    const checkbox = within(dialog).getByRole("checkbox", {
+      name: "Warengruppe ist aktiv",
+    });
+    expect(checkbox).toBeChecked();
+
+    fireEvent.click(checkbox);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Speichern" }));
+
+    await waitFor(() =>
+      expect(mockedApi.patch).toHaveBeenCalledWith(
+        "/categories/cat-1",
+        expect.objectContaining({ isActive: false }),
+      ),
+    );
+  });
+
+  it("legt eine neue Warengruppe ohne isActive im Auftrag an (Serverdefault aktiv)", async () => {
+    await openTab("/admin/categories");
+    await screen.findAllByText("Getränke");
+    fireEvent.click(screen.getByRole("button", { name: /anlegen/i }));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.change(within(dialog).getByLabelText("Bezeichnung"), {
+      target: { value: "Neue Gruppe" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Speichern" }));
+
+    await waitFor(() => expect(mockedApi.post).toHaveBeenCalled());
+    const payload = mockedApi.post.mock.calls[0][1];
+    expect(payload).not.toHaveProperty("isActive");
   });
 });
 

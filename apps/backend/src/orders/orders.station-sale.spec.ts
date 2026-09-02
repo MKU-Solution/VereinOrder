@@ -334,9 +334,10 @@ describe("OrdersService – Stationsverkauf für Issue #66", () => {
       id: { in: [stationProduct.id] },
       eventId: "event-1",
     });
-    // category wird für resolveTargetStationId mitgeladen.
+    // category wird für resolveTargetStationId mitgeladen; isActive kam mit
+    // Issue #170 dazu (Gruppenschalter, reserveSale-Gate).
     expect(call.include.category).toEqual({
-      select: { targetStationId: true, deposit: true },
+      select: { targetStationId: true, deposit: true, isActive: true },
     });
   });
 

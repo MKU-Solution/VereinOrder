@@ -3,6 +3,7 @@ import { Edit2, Store, Tag } from "lucide-react";
 
 import { AdminEmptyState } from "./AdminEmptyState";
 import { AdminToolbar } from "./AdminToolbar";
+import { UserActiveBadge } from "./AdminStatusBadge";
 
 export interface AdminCategoriesViewProps {
   categories: any[];
@@ -111,6 +112,7 @@ export const AdminCategoriesView = ({
                     <th className="px-5 py-3.5">Kategorie</th>
                     <th className="px-4 py-3.5">Pfandvorgabe</th>
                     <th className="px-4 py-3.5">Vorgegebene Zielstation</th>
+                    <th className="px-4 py-3.5">Status</th>
                     <th className="px-4 py-3.5">Sortierung</th>
                     <th className="px-5 py-3.5 text-right">Aktionen</th>
                   </tr>
@@ -154,6 +156,9 @@ export const AdminCategoriesView = ({
                               Zentrale Ausgabe (Standard)
                             </span>
                           )}
+                        </td>
+                        <td className="px-4 py-4">
+                          <UserActiveBadge isActive={cat.isActive ?? true} />
                         </td>
                         <td className="px-4 py-4 text-xs font-mono text-slate-400">
                           Reihenfolge: {cat.sortOrder ?? 0}
@@ -206,6 +211,9 @@ export const AdminCategoriesView = ({
                         {Number.isInteger(cat.deposit) && cat.deposit > 0
                           ? `Pfandvorgabe: ${(cat.deposit / 100).toFixed(2).replace(".", ",")} €`
                           : "Keine Pfandvorgabe"}
+                      </div>
+                      <div className="mt-1.5">
+                        <UserActiveBadge isActive={cat.isActive ?? true} />
                       </div>
                     </div>
 

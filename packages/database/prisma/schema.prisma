@@ -157,12 +157,23 @@ model Station {
 // gehen in die Kueche, Getraenke an die Schank; die Angabe wird einmal je
 // Gruppe gepflegt statt an jedem Artikel wiederholt.
 model ProductCategory {
-  id        String @id @default(uuid())
+  id        String  @id @default(uuid())
   name      String
-  sortOrder Int    @default(0)
-  deposit   Int    @default(0) // in cents, Vorgabe fuer Produkte ohne eigenen Pfandbetrag
+  sortOrder Int     @default(0)
+  deposit   Int     @default(0) // in cents, Vorgabe fuer Produkte ohne eigenen Pfandbetrag
+  // Gruppenschalter statt Loeschen (Issue #170, analog zu User.isActive und
+  // Station.isActive seit Issue #168). Wirkt ausschliesslich auf die
+  // Sichtbarkeit im Kassenkontext (getQuickSaleContext/getStationSaleContext
+  // in orders.service.ts, findAllActive in products.service.ts) und auf die
+  // Verkaufssperre in InventoryService.reserveSale - NICHT auf
+  // target-station.ts: die Zielstationsableitung liest weiterhin
+  // ausschliesslich targetStationId, unabhaengig vom Aktivstatus. Verwaltung,
+  // Berichte und Revision filtern nicht danach, sonst liesse sich eine
+  // stillgelegte Gruppe nie wieder aktivieren und ihre Historie verschwaende
+  // aus den Auswertungen.
+  isActive  Boolean @default(true)
   eventId   String
-  event     Event  @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  event     Event   @relation(fields: [eventId], references: [id], onDelete: Cascade)
 
   // Vorgabe-Zielstation der Warengruppe. Gilt fuer jedes Produkt der Gruppe,
   // das keine eigene Ausnahme traegt. NULL bedeutet zentrale Ausgabe.

@@ -49,6 +49,11 @@ const TABLE_FIELDS = {
     "name",
     "sortOrder",
     "deposit",
+    // Issue #170: Gruppenschalter, analog zu "isActive" bei "stations" oben.
+    // Sicherung und Wiederherstellung transportieren ihn unveraendert, ohne
+    // ihn auszuwerten - eine stillgelegte Warengruppe bleibt nach der
+    // Wiederherstellung stillgelegt.
+    "isActive",
     "eventId",
     "targetStationId",
     "createdAt",

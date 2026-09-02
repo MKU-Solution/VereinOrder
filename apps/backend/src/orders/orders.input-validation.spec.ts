@@ -141,4 +141,51 @@ describe("OrdersService – Eingabegrenzen und Atomizität", () => {
     });
     expect(prisma.order.create).not.toHaveBeenCalled();
   });
+
+  // Issue #170: eine stillgelegte Warengruppe (ProductCategory.isActive:
+  // false) sperrt auch die normale Bestellaufnahme (createOrder), obwohl der
+  // manuelle Override des Produkts selbst AVAILABLE bleibt - der
+  // Gruppenschalter schraenkt nur ein, er wird durch nichts am Produkt
+  // aufgehoben.
+  it("lehnt ein Produkt einer stillgelegten Warengruppe in createOrder ab, obwohl das Produkt AVAILABLE ist", async () => {
+    const product = {
+      id: "product-1",
+      name: "Saft",
+      price: 300,
+      manualAvailability: "AVAILABLE",
+      availability: "AVAILABLE",
+      category: { deposit: 0, isActive: false },
+      optionGroups: [],
+    };
+    const prisma: any = {
+      $transaction: jest.fn((callback) => callback(prisma)),
+      $queryRaw: jest
+        .fn()
+        .mockResolvedValue([{ status: "TEST_MODE", testMode: true }]),
+      product: { findMany: jest.fn().mockResolvedValue([product]) },
+      cashierSession: { findFirst: jest.fn().mockResolvedValue(null) },
+      user: {
+        findUnique: jest
+          .fn()
+          .mockResolvedValue({ id: "waiter-1", isActive: true }),
+      },
+      order: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        create: jest.fn(),
+      },
+    };
+    const service = new OrdersService(prisma, createAuditServiceStub() as any);
+
+    const promise = service.createOrder("waiter-1", {
+      eventId: "event-1",
+      items: [{ productId: product.id, quantity: 1 }],
+    });
+    await expect(promise).rejects.toBeInstanceOf(BadRequestException);
+    await expect(promise).rejects.toMatchObject({
+      response: expect.objectContaining({
+        code: ORDER_REJECTION_CODES.PRODUCT_UNAVAILABLE,
+      }),
+    });
+    expect(prisma.order.create).not.toHaveBeenCalled();
+  });
 });

@@ -328,6 +328,28 @@ describe("OrdersService – Bonkassen-Schnellverkauf für Issue #52", () => {
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
+  // Issue #170: eine stillgelegte Warengruppe (ProductCategory.isActive:
+  // false) sperrt den Verkauf, obwohl der manuelle Override des Produkts
+  // selbst weiterhin AVAILABLE ist - der Gruppenschalter schraenkt nur ein.
+  it("weist ein Produkt einer stillgelegten Warengruppe zurück, obwohl das Produkt selbst AVAILABLE ist", async () => {
+    prisma.product.findMany.mockResolvedValue([
+      {
+        ...product,
+        category: { ...product.category, isActive: false },
+      },
+    ]);
+
+    await expect(
+      service.createQuickSale("cashier-1", {
+        eventId: "event-1",
+        idempotencyKey: "quick-sale-category-disabled",
+        items: [{ productId: product.id, quantity: 1 }],
+        paymentMethod: "CASH",
+        tenderedAmount: 500,
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
   it("gibt einen vorhandenen idempotenten Verkauf ohne zweite Buchung zurück", async () => {
     prisma.order.findUnique.mockResolvedValue({
       id: "order-existing",

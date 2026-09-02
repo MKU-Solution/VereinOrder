@@ -90,12 +90,14 @@ const CATEGORY_CREATE_FIELD_KEYS = [
   "deposit",
   "eventId",
   "targetStationId",
+  "isActive",
 ] as const;
 const CATEGORY_UPDATE_FIELD_KEYS = [
   "name",
   "sortOrder",
   "deposit",
   "targetStationId",
+  "isActive",
 ] as const;
 
 function pickCategoryFields<T extends object, K extends readonly (keyof T)[]>(
@@ -140,6 +142,13 @@ export class ProductsService {
       where: {
         manualAvailability: { not: "DISABLED" },
         event: { status: { in: ["ACTIVE", "TEST_MODE"] } },
+        // Issue #170: eine stillgelegte Warengruppe wirkt als Gruppenschalter
+        // fuer ihre Produkte - dieselbe strukturelle Ausblendung wie oben fuer
+        // manualAvailability=DISABLED, nicht nur eine andere Anzeige. Diese
+        // Liste bedient die Bestellaufnahme (GET /products); Verwaltung
+        // (findAllProductsAdmin/findAllCategoriesAdmin) und Berichte/Revision
+        // filtern bewusst NICHT danach.
+        category: { isActive: true },
       },
       include: {
         event: { select: { status: true, testMode: true } },
