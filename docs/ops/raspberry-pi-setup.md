@@ -61,9 +61,9 @@ steht seit der Ersteinrichtung selbst auch dauerhaft im Assistenten.
 ### Aktualisierung eines laufenden Systems
 
 Für ein bereits eingerichtetes System — nicht für den ersten Start — läuft eine
-Aktualisierung ausschließlich über den abgesicherten Betriebsweg. Das Skript baut das
-Bündel dabei selbst neu (#199); auf dem Server wird **kein** eigenes
-`docker compose up -d --build` mehr davor oder danach ausgeführt:
+Aktualisierung ausschließlich über den abgesicherten Betriebsweg. Das Skript nimmt die
+neuen Abbilder dabei selbst in Betrieb (#199); auf dem Server wird **kein** eigenes
+`docker compose up -d` oder `--build` davor oder danach ausgeführt:
 
 ```bash
 export ADMIN_TOKEN='<aktuelles Administrator-JWT>'
@@ -75,9 +75,28 @@ ist gegenüber früheren Fassungen dieser Anleitung umgekehrt. Das Skript brauch
 Token bereits für den allerersten Schritt, um den Wartungsmodus zu setzen; der Neubau
 folgt erst danach als Teil des Skripts selbst, nicht mehr vorab von Hand.
 
+**Seit #200 wird auf dem Pi nichts mehr gebaut.** Das Skript zieht die fertigen
+Abbilder mit `docker compose pull` aus der Registry — dieselben, die die CI für `arm64`
+ohnehin baut und bisher weggeworfen hat. Vorher zwang jede Aktualisierung das Gerät, das
+gleichzeitig Bestellungen bedient, zu bis zu sechs `pnpm install`-Läufen und setzte eine
+erreichbare npm-Registry voraus.
+
+Damit braucht der Pi **zum Zeitpunkt der Aktualisierung** eine Verbindung zu
+`ghcr.io` — im laufenden Festbetrieb weiterhin nicht. Zugangsdaten braucht er keine: Die
+drei Pakete sind öffentlich.
+
+Wer ohne Registry arbeiten muss — ein Stand, der nie nach `main` gelangt ist, oder ein
+Gerät ganz ohne Netz —, ruft dasselbe Skript mit `VEREINORDER_BUILD=1` auf und bekommt
+den bisherigen örtlichen Bau:
+
+```bash
+export ADMIN_TOKEN='<aktuelles Administrator-JWT>'
+VEREINORDER_BUILD=1 ./scripts/ops/upgrade.sh
+```
+
 Der Ablauf ist damit ein einziger Befehl: Wartungsmodus setzen, eine geprüfte
-`PRE_MIGRATION`-Sicherung erzeugen — beides **vor** jeder Schemaänderung —, danach
-`docker compose up -d --build` ausführen. Die automatische Migration im Entrypoint
+`PRE_MIGRATION`-Sicherung erzeugen — beides **vor** jeder Schemaänderung —, danach die
+neuen Abbilder ziehen und starten. Die automatische Migration im Entrypoint
 (`apps/backend/docker-entrypoint.sh`, #172) bleibt dabei unverändert eingeschaltet und
 läuft dadurch genau im geschützten Fenster zwischen Sperre und Sicherung einerseits und
 der Wiederöffnung andererseits. Danach wartet das Skript mit Zeitgrenze auf ein wieder
@@ -89,8 +108,12 @@ nach Erfolg wieder. Details und der Notfall-Restore stehen in
 Das Skript gibt dabei aus, welcher Schritt betroffen war und wie man — nach Klärung der
 Ursache — wieder herauskommt; es öffnet den Wartungsmodus im Fehlerfall nie von selbst.
 
+Schlägt das Ziehen fehl — kein Netz, oder eine in `VEREINORDER_VERSION` gepinnte
+Fassung, die es nicht gibt —, bricht das Skript ab, **bevor** irgendetwas ausgetauscht
+wurde, und lässt das System gesperrt. Die Meldung nennt beide Auswege.
+
 **Sonderfall Installationen von vor #175:** Lief die bisherige Installation ohne
-gesetztes `JWT_SECRET`, erzeugt der Neubau in Schritt 4 einen neuen Schlüssel — das
+gesetztes `JWT_SECRET`, erzeugt der Austausch in Schritt 4 einen neuen Schlüssel — das
 eingangs geholte `ADMIN_TOKEN` wird dadurch ungültig, und das abschließende Entsperren
 scheitert vorhersehbar mit 401, obwohl Sicherung und Migration bereits erfolgreich
 gelaufen sind. Das Skript erkennt diesen Fall vorab (bevor der Neubau überhaupt

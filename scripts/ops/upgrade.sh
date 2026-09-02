@@ -28,7 +28,13 @@
 #      sofort wieder. Ohne diesen Schritt gibt es nach einem fehlgeschlagenen
 #      Neubau keinen Weg zurueck ausser einem vollstaendigen Neubau aus einem
 #      alten Stand - siehe scripts/ops/rollback.sh fuer den Rueckweg selbst.
-#   5. docker compose up -d --build. SKIP_AUTO_MIGRATE wird ABSICHTLICH
+#   5. Die neuen Abbilder in Betrieb nehmen. Seit #200 ist das im
+#      Regelfall "docker compose pull" plus "docker compose up -d" - die
+#      Abbilder baut die CI, nicht mehr das Geraet, das gleichzeitig
+#      Bestellungen bedient. Mit VEREINORDER_BUILD=1 baut das Skript wie
+#      bisher oertlich ("docker compose up -d --build"); genau das tut die CI
+#      im Auftrag "Docker-Buendel Aktualisierung", die die Abbilder des
+#      gerade geprueften Standes gar nicht ziehen KANN. SKIP_AUTO_MIGRATE wird ABSICHTLICH
 #      NICHT gesetzt: Die Automigration im Entrypoint ist erwuenscht, nur
 #      ihr Zeitpunkt war falsch. Sie laeuft jetzt genau hier, im
 #      geschuetzten Fenster zwischen Sicherung und Wiederoeffnung.
@@ -243,8 +249,34 @@ fi
 # ein einfaches "docker image prune" entfernt "<Abbildname>:previous" daher
 # nicht. Nur "docker image prune -a" wuerde es entfernen, sobald kein
 # Container mehr darauf verweist (docs/ops/backup-recovery.md).
+# --- Abbildkennungen aus der Compose-Konfiguration (#200) --------------------
+# Seit #200 tragen backend, frontend und print-worker ein "image:"
+# (ghcr.io/...). Der frueher hier berechnete Name "<Projekt>-<Dienst>" - den
+# Compose selbst vergibt, SOLANGE nur "build:" dasteht - trifft damit nicht
+# mehr zu. Gefragt wird deshalb Compose selbst, wie schon beim
+# PostgreSQL-Abbild weiter unten: nicht geraten, sondern erfragt.
+COMPOSE_CONFIG_JSON=$(docker compose config --format json) || {
+  printf 'Compose-Konfiguration konnte nicht gelesen werden. Dieses Skript im\n' >&2
+  printf 'Projektverzeichnis mit "docker-compose.yml" ausfuehren.\n' >&2
+  exit 3
+}
+
+# Die konfigurierte Kennung eines Dienstes, samt Marke:
+#   "ghcr.io/seipekm/vereinorder-backend:latest"
+vereinorder_configured_image() {
+  printf '%s' "$COMPOSE_CONFIG_JSON" |
+    jq -er --arg dienst "$1" '.services[$dienst].image'
+}
+
+# Dieselbe Kennung ohne Marke, als Ablageort fuer ":previous":
+#   "ghcr.io/seipekm/vereinorder-backend"
+# Der Ausdruck schneidet nur eine Marke ab, keinen Port im Registrynamen -
+# nach dem letzten ":" darf kein "/" mehr folgen.
+vereinorder_image_repository() {
+  printf '%s' "$1" | sed 's|:[^:/]*$||'
+}
+
 step="Vorige Abbilder sichern (#201)"
-COMPOSE_PROJECT_FOR_ROLLBACK=$(docker compose config --format json | jq -er '.name')
 for rollback_service in backend frontend print-worker; do
   running_container_id=$(docker compose ps -q "$rollback_service")
   if [ -z "$running_container_id" ]; then
@@ -254,7 +286,8 @@ for rollback_service in backend frontend print-worker; do
     continue
   fi
   running_image_id=$(docker inspect --format '{{.Image}}' "$running_container_id")
-  rollback_image_name="${COMPOSE_PROJECT_FOR_ROLLBACK}-${rollback_service}"
+  rollback_image_name=$(vereinorder_image_repository \
+    "$(vereinorder_configured_image "$rollback_service")")
   docker tag "$running_image_id" "${rollback_image_name}:previous"
   printf 'Voriges Abbild gesichert: %s:previous (%s)\n' "$rollback_image_name" "$running_image_id"
 done
@@ -309,9 +342,35 @@ last_migration_finished_at=$(docker compose exec -T postgres psql --no-psqlrc \
 printf '%s\n' "$last_migration_finished_at" |
   docker compose exec -T backend sh -c 'cat > /app/state/rollback-previous-migration-marker'
 
-# --- 4. Neubau: der Entrypoint migriert dabei automatisch (#199, Punkt 4) --
-step="Neubau (docker compose up -d --build)"
-docker compose up -d --build
+# --- 4. Neue Abbilder in Betrieb nehmen; der Entrypoint migriert dabei
+# automatisch (#199, Punkt 4) ------------------------------------------------
+# Seit #200 ist Ziehen der Regelfall und Bauen die Ausnahme. Die Umkehrung ist
+# absichtlich: Auf dem Raspberry Pi soll eine Aktualisierung KEINE
+# Werkzeugkette und keine erreichbare npm-Registry mehr verlangen. Wer ohne
+# Registry arbeitet - Entwicklung, CI, ein Stand, der nie nach "main" kam -,
+# setzt VEREINORDER_BUILD=1.
+if [ "${VEREINORDER_BUILD:-0}" = "1" ]; then
+  step="Neubau (docker compose up -d --build)"
+  docker compose up -d --build
+else
+  # Nur die drei eigenen Dienste ziehen: Das PostgreSQL-Abbild steht mit
+  # fester Fassung in docker-compose.yml und aendert sich bei einer
+  # Aktualisierung der Anwendung nicht.
+  step="Neue Abbilder ziehen (docker compose pull)"
+  if ! docker compose pull backend frontend print-worker; then
+    printf '\n' >&2
+    printf 'Die Abbilder konnten nicht gezogen werden. Haeufigste Ursachen:\n' >&2
+    printf ' - keine Verbindung zur Registry (ghcr.io) von diesem Geraet aus,\n' >&2
+    printf ' - eine in VEREINORDER_VERSION gepinnte Fassung, die es nicht gibt.\n' >&2
+    printf 'Das System bleibt im Wartungsmodus gesperrt; es wurde noch nichts\n' >&2
+    printf 'ausgetauscht. Wer stattdessen oertlich bauen will (Entwicklung, oder\n' >&2
+    printf 'ein Stand, der nie nach "main" kam), ruft dieses Skript mit\n' >&2
+    printf 'VEREINORDER_BUILD=1 erneut auf.\n' >&2
+    exit 13
+  fi
+  step="Gezogene Abbilder in Betrieb nehmen (docker compose up -d)"
+  docker compose up -d
+fi
 
 # --- 5. Auf ein wieder antwortendes Backend warten, mit Zeitgrenze --------
 # GET /maintenance ist auf Klassenebene @MaintenancePublic() (siehe

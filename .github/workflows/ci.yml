@@ -704,6 +704,14 @@ jobs:
           );
           EOF
       - name: scripts/ops/upgrade.sh ausführen (eigentliche Aussage dieses Auftrags)
+        # VEREINORDER_BUILD=1 seit #200: Das Skript zieht im Regelfall fertige
+        # Abbilder aus der Registry. Hier ist das unmoeglich UND unerwuenscht -
+        # es gibt kein veroeffentlichtes Abbild fuer den Stand, der gerade
+        # geprueft wird, und ein gezogenes "latest" wuerde die Aussage dieses
+        # Auftrags still auf fremden Code verschieben. Der oertliche Bau ist
+        # damit nicht der Notnagel, sondern genau der richtige Weg.
+        env:
+          VEREINORDER_BUILD: "1"
         run: ./scripts/ops/upgrade.sh
       - name: Beleg A - PRE_MIGRATION-Sicherung enthält die Wegwerfmigration NICHT
         run: |
@@ -756,6 +764,122 @@ jobs:
       - name: Bündel abbauen
         if: always()
         run: docker compose down -v
+
+  docker-publish:
+    name: Docker-Abbild veröffentlichen ${{ matrix.component }} ${{ matrix.platform }}
+    # NUR auf "main", und erst NACH allen Pflichtprüfungen: Veröffentlicht wird
+    # ausschliesslich ein Stand, der vollstaendig gruen ist. Auf einem Pull
+    # Request laeuft dieser Auftrag gar nicht - er taucht dort nicht auf und
+    # kann den Zweigschutz deshalb auch nicht beeinflussen.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs:
+      - quality
+      - postgres
+      - e2e
+      - docker
+      - docker-compose-migration
+      - docker-compose-upgrade
+      - secrets
+    permissions:
+      contents: read
+      packages: write
+    # Dieselbe Runner-Wahl wie im Auftrag "docker": jede Plattform baut nativ.
+    # Unter QEMU-Emulation stuerzte "pnpm install" fuer arm64 mit einer Illegal
+    # Instruction ab.
+    runs-on: ${{ matrix.platform == 'linux/arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        component: [backend, frontend, print-worker]
+        platform: [linux/amd64, linux/arm64]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Abbild bauen und per Digest veröffentlichen
+        id: bau
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/${{ matrix.component }}/Dockerfile
+          platforms: ${{ matrix.platform }}
+          # "push-by-digest" laedt die Plattformfassung OHNE Marke hoch. Erst
+          # der Auftrag "docker-manifest" unten fasst die beiden Digests zu
+          # EINER Marke zusammen. Der Umweg ist noetig, weil beide Fassungen
+          # auf verschiedenen Runnern entstehen: Ein direktes "push" mit Marke
+          # wuerde die jeweils andere Plattform ueberschreiben statt ergaenzen.
+          outputs: type=image,name=ghcr.io/${{ github.repository_owner }}/vereinorder-${{ matrix.component }},push-by-digest=true,name-canonical=true,push=true
+          # Nur lesend: Der Auftrag "docker" oben hat denselben Stand mit
+          # demselben Bereich bereits gebaut und den Cache geschrieben. Hier
+          # faellt deshalb im Regelfall kein zweiter Bau an, sondern nur der
+          # Export und das Hochladen.
+          cache-from: type=gha,scope=${{ matrix.component }}-${{ matrix.platform }}
+      - name: Digest ablegen
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/digests
+          digest="${{ steps.bau.outputs.digest }}"
+          test -n "$digest"
+          touch "/tmp/digests/${digest#sha256:}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ matrix.component }}-${{ matrix.platform == 'linux/arm64' && 'arm64' || 'amd64' }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  docker-manifest:
+    name: Docker-Abbild zusammenfassen ${{ matrix.component }}
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: docker-publish
+    permissions:
+      contents: read
+      packages: write
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        component: [backend, frontend, print-worker]
+    steps:
+      - uses: docker/setup-buildx-action@v3
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: digest-${{ matrix.component }}-*
+          path: /tmp/digests
+          merge-multiple: true
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Marken setzen (latest und Commit-SHA)
+        run: |
+          set -euo pipefail
+          abbild="ghcr.io/${{ github.repository_owner }}/vereinorder-${{ matrix.component }}"
+          cd /tmp/digests
+          # Zwei Marken mit Absicht: "latest" ist das, worauf
+          # docker-compose.yml ohne gesetzte VEREINORDER_VERSION zeigt; die
+          # Commit-SHA ist die Marke, mit der sich vor einem Fest eine
+          # bestimmte gepruefte Fassung festhalten laesst.
+          docker buildx imagetools create \
+            --tag "${abbild}:latest" \
+            --tag "${abbild}:${{ github.sha }}" \
+            $(printf "${abbild}@sha256:%s " *)
+      - name: Beide Plattformen sind in der Marke enthalten
+        run: |
+          set -euo pipefail
+          abbild="ghcr.io/${{ github.repository_owner }}/vereinorder-${{ matrix.component }}"
+          docker buildx imagetools inspect "${abbild}:latest" | tee /tmp/manifest.txt
+          # Der Raspberry Pi ist arm64, die Entwicklungsrechner sind amd64.
+          # Fehlt eine der beiden Fassungen, ist die Marke fuer die Haelfte
+          # der Zielgeraete wertlos - und das faellt sonst erst beim Ziehen auf.
+          grep -q "linux/amd64" /tmp/manifest.txt
+          grep -q "linux/arm64" /tmp/manifest.txt
+          rm -f /tmp/manifest.txt
 
   secrets:
     name: Geheimnisprüfung
