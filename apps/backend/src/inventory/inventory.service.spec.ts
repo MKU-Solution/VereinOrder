@@ -407,6 +407,54 @@ describe("InventoryService – Wächterregeln", () => {
       response: expect.objectContaining({ code: "PRODUCT_UNAVAILABLE" }),
     });
   });
+
+  // Issue #170: Warengruppe als Gruppenschalter. categoryActive: false ist
+  // derselbe harte Ausschluss wie manualAvailability "DISABLED", unabhaengig
+  // vom manuellen Override und ohne Bestandszeile.
+  it("sperrt ein Produkt einer stillgelegten Warengruppe, obwohl der manuelle Override AVAILABLE bleibt", async () => {
+    const { service, tx } = createService();
+    tx.$queryRaw = jest.fn().mockResolvedValue([]);
+
+    await expect(
+      service.reserveSale(tx as any, {
+        eventId,
+        dataMode: OperationalDataMode.LIVE,
+        lines: [
+          {
+            productId,
+            quantity: 1,
+            productName: "Stillgelegt",
+            manualAvailability: "AVAILABLE",
+            categoryActive: false,
+          },
+        ],
+      }),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({ code: "PRODUCT_UNAVAILABLE" }),
+    });
+  });
+
+  // Gegenprobe: fehlt categoryActive ganz (bestehende Aufrufer, die das Feld
+  // noch nicht kennen), gilt die Warengruppe unveraendert als aktiv.
+  it("laesst ein Produkt ohne categoryActive-Angabe unveraendert durch (Rueckwaertskompatibilitaet)", async () => {
+    const { service, tx } = createService();
+    tx.$queryRaw = jest.fn().mockResolvedValue([]);
+
+    await expect(
+      service.reserveSale(tx as any, {
+        eventId,
+        dataMode: OperationalDataMode.LIVE,
+        lines: [
+          {
+            productId,
+            quantity: 1,
+            productName: "Ohne Angabe",
+            manualAvailability: "AVAILABLE",
+          },
+        ],
+      }),
+    ).resolves.toEqual([]);
+  });
 });
 
 // Issue #141, Fehler B: Dashboard.tsx setzt den Warnhinweis bei LOW_STOCK/

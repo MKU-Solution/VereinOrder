@@ -29,6 +29,13 @@ export type InventorySaleLine = {
   quantity: number;
   productName: string;
   manualAvailability: ProductAvailability;
+  // Issue #170: Gruppenschalter der Warengruppe (ProductCategory.isActive).
+  // Optional und ausschliesslich als expliziter Ausschluss ausgewertet
+  // (=== false), damit bestehende Aufrufer und Tests ohne dieses Feld
+  // unveraendert als aktiv gelten - derselbe Grundsatz wie ueberall im
+  // Projekt: eine manuelle Uebersteuerung schraenkt nur ein, sie erweitert
+  // nie.
+  categoryActive?: boolean;
 };
 
 export type ReservedInventorySale = {
@@ -188,7 +195,12 @@ export class InventoryService {
       if (
         line.manualAvailability === "DISABLED" ||
         line.manualAvailability === "OUT_OF_STOCK" ||
-        stock?.manualBlocked
+        stock?.manualBlocked ||
+        // Issue #170: eine stillgelegte Warengruppe ist derselbe harte
+        // Ausschluss wie manualAvailability "DISABLED", nicht ein
+        // Bestandszustand - deshalb hier und nicht bei der
+        // Mengenverfuegbarkeit unten geprueft.
+        line.categoryActive === false
       ) {
         throw new ConflictException({
           code: "PRODUCT_UNAVAILABLE",

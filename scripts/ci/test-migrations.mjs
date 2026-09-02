@@ -201,6 +201,19 @@ const PAYMENT_TENDER_VIOLATION_SEED = {
   paymentId: "j0000000-0000-4000-8000-000000000010",
 };
 
+// Gueltiger Altstand fuer die Migration
+// "20260902100000_add_product_category_is_active" (Issue #170): eine
+// bestehende Warengruppe samt Produkt, wie sie vor der Migration ohne
+// "isActive"-Spalte aussieht. Es gibt keinen Zustand, der die neue Spalte
+// verletzen koennte (DEFAULT true fuellt jede Bestandszeile), deshalb gibt es
+// zu dieser Migration - anders als bei den beiden CHECK-Constraints oben -
+// keinen eigenen Verletzungsfall.
+const PRODUCT_CATEGORY_ACTIVE_SEED = {
+  eventId: "k0000000-0000-4000-8000-000000000001",
+  categoryId: "k0000000-0000-4000-8000-000000000002",
+  productId: "k0000000-0000-4000-8000-000000000003",
+};
+
 function fail(message) {
   throw new Error(message);
 }
@@ -1575,6 +1588,79 @@ INSERT INTO "Payment" (
 `;
 }
 
+// Fuegt den gueltigen Altstand fuer die Migration
+// "20260902100000_add_product_category_is_active" ein (Issue #170): eine
+// Veranstaltung mit einer Warengruppe und einem Produkt, wie sie unmittelbar
+// vor der Migration aussehen - ohne "isActive"-Spalte an "ProductCategory".
+function seedLegacyProductCategoryActiveSql(ids) {
+  return `
+INSERT INTO "Event" (id, name, "createdAt", "updatedAt")
+VALUES ('${ids.eventId}', 'CI Migrationstest Gruppenschalter', now(), now());
+
+INSERT INTO "ProductCategory" (id, name, "eventId", "createdAt", "updatedAt")
+VALUES ('${ids.categoryId}', 'CI Bestandswarengruppe', '${ids.eventId}', now(), now());
+
+INSERT INTO "Product" (id, name, price, "categoryId", "eventId", "createdAt", "updatedAt")
+VALUES ('${ids.productId}', 'CI Bestandsprodukt', 100, '${ids.categoryId}', '${ids.eventId}', now(), now());
+`;
+}
+
+// Prueft nach "migrate deploy", dass die Bestandswarengruppe unveraendert
+// aktiv geblieben ist (DEFAULT true), dass die Spalte tatsaechlich
+// beschreibbar ist (Deaktivieren und Reaktivieren funktionieren) und dass
+// dabei weder die Gruppe noch ihr Produkt verloren gehen.
+function verifyProductCategoryIsActiveMigrationSql(ids) {
+  return `
+-- 1. Die Bestandswarengruppe ist nach der Migration unveraendert vorhanden
+--    und per DEFAULT aktiv - eine stille Stilllegung waere Datenverlust an
+--    der Sichtbarkeit ihrer Produkte.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM "ProductCategory"
+    WHERE id = '${ids.categoryId}' AND "eventId" = '${ids.eventId}' AND "isActive" = true
+  ) THEN
+    RAISE EXCEPTION 'Die Bestandswarengruppe ist nach der Migration nicht mehr aktiv oder fehlt.';
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM "Product" WHERE id = '${ids.productId}' AND "categoryId" = '${ids.categoryId}'
+  ) THEN
+    RAISE EXCEPTION 'Das Bestandsprodukt der Warengruppe ist nach der Migration nicht mehr vorhanden.';
+  END IF;
+END $$;
+
+-- 2. Die neue Spalte ist echt beschreibbar (kein zu eng gefasster Default
+--    ohne Schreibrecht) und laesst sich wieder aktivieren.
+DO $$
+BEGIN
+  UPDATE "ProductCategory" SET "isActive" = false WHERE id = '${ids.categoryId}';
+  IF (SELECT "isActive" FROM "ProductCategory" WHERE id = '${ids.categoryId}') <> false THEN
+    RAISE EXCEPTION 'Die Warengruppe liess sich nach der Migration nicht deaktivieren.';
+  END IF;
+
+  UPDATE "ProductCategory" SET "isActive" = true WHERE id = '${ids.categoryId}';
+  IF (SELECT "isActive" FROM "ProductCategory" WHERE id = '${ids.categoryId}') <> true THEN
+    RAISE EXCEPTION 'Die Warengruppe liess sich nach der Migration nicht wieder aktivieren.';
+  END IF;
+END $$;
+
+-- 3. NOT NULL gilt tatsaechlich: ein expliziter NULL-Wert wird abgewiesen.
+DO $$
+DECLARE
+  null_rejected boolean := false;
+BEGIN
+  BEGIN
+    UPDATE "ProductCategory" SET "isActive" = NULL WHERE id = '${ids.categoryId}';
+  EXCEPTION WHEN not_null_violation THEN
+    null_rejected := true;
+  END;
+  IF NOT null_rejected THEN
+    RAISE EXCEPTION 'Die Spalte "isActive" akzeptierte NULL, obwohl sie NOT NULL sein muss.';
+  END IF;
+END $$;
+`;
+}
+
 function dropDatabase(target, database) {
   const literal = database.replaceAll("'", "''");
   psql(
@@ -1665,6 +1751,17 @@ const DATA_MIGRATION_CHECKS = [
     verifyLabel:
       "Tender-Constraint greift, ohne gültige Bestandszahlungen abzuweisen",
     verify: () => verifyPaymentTenderMigrationSql(PAYMENT_TENDER_SEED),
+  },
+  {
+    migration: "20260902100000_add_product_category_is_active",
+    seedLabel:
+      "gültigen Altstand für den Warengruppen-Gruppenschalter einspielen (Kategorie samt Produkt ohne isActive-Spalte)",
+    seed: () =>
+      seedLegacyProductCategoryActiveSql(PRODUCT_CATEGORY_ACTIVE_SEED),
+    verifyLabel:
+      "Warengruppe bleibt per Default aktiv und die Spalte ist echt beschreibbar",
+    verify: () =>
+      verifyProductCategoryIsActiveMigrationSql(PRODUCT_CATEGORY_ACTIVE_SEED),
   },
 ];
 

@@ -286,7 +286,16 @@ export class OrdersService {
           status: true,
           testMode: true,
           products: {
-            where: { manualAvailability: { not: "DISABLED" } },
+            // Issue #170: eine stillgelegte Warengruppe wirkt als
+            // Gruppenschalter fuer ihre Produkte und blendet sie hier
+            // strukturell aus - dieselbe Behandlung wie manualAvailability
+            // "DISABLED" oben, nicht nur eine andere Anzeige. Gilt fuer
+            // Bon- UND Stationskasse (getStationSaleContext ruft diese
+            // Methode auf), nicht fuer Verwaltung/Berichte/Revision.
+            where: {
+              manualAvailability: { not: "DISABLED" },
+              category: { isActive: true },
+            },
             select: {
               id: true,
               name: true,
@@ -892,7 +901,9 @@ export class OrdersService {
           where: { id: { in: productIds }, eventId: dto.eventId },
           include: {
             optionGroups: { include: { options: true } },
-            category: { select: { targetStationId: true, deposit: true } },
+            category: {
+              select: { targetStationId: true, deposit: true, isActive: true },
+            },
           },
         });
         const productsById = new Map(
@@ -918,6 +929,17 @@ export class OrdersService {
           ) {
             throw new BadRequestException(
               ORDER_REJECTION_MESSAGES.PRODUCT_NOT_AT_STATION_QUICK_SALE,
+            );
+          }
+          // Issue #170: dieselbe Fassung wie unten der manuelle Override -
+          // ohne InventoryService (siehe Klassenkommentar zu this.inventory)
+          // ist dies die einzige Verkaufssperre, mit InventoryService
+          // uebernimmt reserveSale (inventory.service.ts) dieselbe Pruefung
+          // ueber categoryActive. Eine stillgelegte Warengruppe ist ein
+          // harter Ausschluss, kein Bestandszustand.
+          if (!this.inventory && product.category?.isActive === false) {
+            throw new BadRequestException(
+              ORDER_REJECTION_MESSAGES.PRODUCT_OUT_OF_STOCK(product.name),
             );
           }
           if (
@@ -1006,6 +1028,9 @@ export class OrdersService {
               quantity: item.quantity,
               productName: product.name,
               manualAvailability: product.manualAvailability,
+              // Issue #170: Gruppenschalter, reserveSale blockt bei false
+              // wie bei manualAvailability "DISABLED".
+              categoryActive: product.category?.isActive !== false,
             };
           }),
         });
@@ -1534,7 +1559,7 @@ export class OrdersService {
           where: { id: { in: productIds }, eventId: dto.eventId },
           include: {
             optionGroups: { include: { options: true } },
-            category: { select: { deposit: true } },
+            category: { select: { deposit: true, isActive: true } },
           },
         });
         const productMap = new Map(
@@ -1609,6 +1634,19 @@ export class OrdersService {
         let totalAmount = 0;
         const orderItemsData = dto.items.map((item) => {
           const product = productMap.get(item.productId);
+          // Issue #170: dieselbe Fassung wie unten der manuelle Override -
+          // ohne InventoryService ist dies die einzige Verkaufssperre, mit
+          // InventoryService uebernimmt reserveSale (inventory.service.ts)
+          // dieselbe Pruefung ueber categoryActive. Eine stillgelegte
+          // Warengruppe ist ein harter Ausschluss, kein Bestandszustand.
+          if (!this.inventory && product.category?.isActive === false) {
+            throw new BadRequestException(
+              orderRejection(
+                ORDER_REJECTION_CODES.PRODUCT_UNAVAILABLE,
+                ORDER_REJECTION_MESSAGES.PRODUCT_OUT_OF_STOCK(product.name),
+              ),
+            );
+          }
           if (
             !this.inventory &&
             ((product as any).manualAvailability ??
@@ -1678,6 +1716,9 @@ export class OrdersService {
               quantity: item.quantity,
               productName: product.name,
               manualAvailability: product.manualAvailability,
+              // Issue #170: Gruppenschalter, reserveSale blockt bei false
+              // wie bei manualAvailability "DISABLED".
+              categoryActive: product.category?.isActive !== false,
             };
           }),
         });

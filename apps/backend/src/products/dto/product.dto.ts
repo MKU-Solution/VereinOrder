@@ -113,6 +113,9 @@ class CategoryFieldsDto {
   @IsOptional() @IsInt() @Min(0) @Max(2147483647) sortOrder?: number;
   @IsOptional() @IsInt() @Min(0) @Max(2147483647) deposit?: number;
   @IsOptional() @IsUUID("4") targetStationId?: string | null;
+  // Gruppenschalter statt Loeschen (Issue #170), analog zu
+  // StationFieldsDto.isActive.
+  @IsOptional() @IsBoolean() isActive?: boolean;
 }
 export class CreateCategoryDto extends CategoryFieldsDto {
   @Transform(trim) @IsString() @IsNotEmpty() @MaxLength(200) name: string;
