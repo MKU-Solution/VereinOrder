@@ -53,12 +53,65 @@ docker compose logs -f backend
 
 ## 3. Bereitgestellte Dienste & Ports
 
-| Dienst           | Container-Name             | Port (Host)      | Beschreibung                                                                                                       |
-| ---------------- | -------------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------ |
-| **Frontend**     | `vereinorder_frontend`     | `80`             | Nginx Webserver mit React PWA. Im Container lauscht er auf `8080`, siehe unten                                     |
-| **Backend**      | `vereinorder_backend`      | `3000`           | NestJS REST-API & SSE-Echtzeitstream                                                                               |
-| **Datenbank**    | `vereinorder_postgres`     | `127.0.0.1:5432` | PostgreSQL 16. Bewusst nur auf der Loopback-Adresse veroeffentlicht und damit aus dem Netz nicht erreichbar (#181) |
-| **Druck-Worker** | `vereinorder_print_worker` | -                | Asynchroner Druckauftragsprozessor                                                                                 |
+| Dienst           | Compose-Name   | Host-Port (Vorgabe) | Variable        | Beschreibung                                                                                                       |
+| ---------------- | -------------- | ------------------- | --------------- | ------------------------------------------------------------------------------------------------------------------ |
+| **Frontend**     | `frontend`     | `80`                | `FRONTEND_PORT` | Nginx Webserver mit React PWA. Im Container lauscht er auf `8080`, siehe unten                                     |
+| **Backend**      | `backend`      | `3000`              | `BACKEND_PORT`  | NestJS REST-API & SSE-Echtzeitstream                                                                               |
+| **Datenbank**    | `postgres`     | `127.0.0.1:5432`    | `POSTGRES_PORT` | PostgreSQL 16. Bewusst nur auf der Loopback-Adresse veroeffentlicht und damit aus dem Netz nicht erreichbar (#181) |
+| **Druck-Worker** | `print-worker` | -                   | -               | Asynchroner Druckauftragsprozessor                                                                                 |
+
+Die Host-Ports sind seit #185 **Vorgaben, keine Festlegungen**: Ist einer davon auf dem
+Rechner belegt, setzt man die Variable in der `.env` und startet neu – ohne
+`docker-compose.yml` anzufassen und ohne Override-Datei. Fest bleibt allein die Bindung
+der Datenbank an `127.0.0.1`; das ist die Entscheidung aus #181 und keine Vorgabe.
+
+### Container ansprechen
+
+Seit #185 vergibt `docker-compose.yml` **keine festen Containernamen** mehr. Ein solcher
+Name gilt je Docker-Dienst, nicht je Compose-Projekt – ein zweites Bündel auf demselben
+Rechner scheiterte daran selbst bei völlig freien Ports, und `COMPOSE_PROJECT_NAME` blieb
+wirkungslos. Beides ist jetzt möglich, aber ein zweites Bündel braucht mehr als einen
+Projektnamen: siehe die Warnung weiter unten.
+
+Angesprochen werden die Container über ihren **Compose-Namen** aus der Spalte oben, nicht
+über einen geratenen Containernamen:
+
+```bash
+docker compose ps
+docker compose logs -f backend
+docker compose exec backend sh
+docker compose restart print-worker
+```
+
+Diese Form ist ohnehin die robustere, weil sie vom Projektnamen unabhängig ist. Sie
+setzt voraus, dass man im Verzeichnis mit der `docker-compose.yml` steht – von woanders
+aus hilft `docker compose --project-directory /pfad/zum/repo …`.
+
+### Ein zweites Bündel auf demselben Rechner
+
+> **Warnung.** Ein zweiter Projektname allein genügt **nicht**. Die Volumes tragen feste
+> Namen (`vereinorder_postgres_data` und die beiden anderen), und ein Volumename gilt –
+> wie früher der Containername – je Docker-Dienst, nicht je Compose-Projekt. Ohne
+> geänderte Volumenamen hängen beide Bündel **dieselben** Volumes ein: Ein zweiter
+> PostgreSQL-Server nimmt dasselbe Datenverzeichnis in Betrieb, während der erste noch
+> läuft. Die Sperrdatei `postmaster.pid` verhindert das nicht – jeder Container hat
+> seinen eigenen PID-Namensraum, der zweite Server hält die Sperre für verwaist und
+> räumt sie weg. Nachgemessen: Der zweite Server führte eine Wiederherstellung auf dem
+> laufenden Datenverzeichnis aus und meldete sich als bereit.
+
+Vollständig getrennt läuft ein zweites Bündel deshalb nur so – Projektname, alle drei
+Ports **und** alle drei Volumenamen:
+
+```bash
+POSTGRES_PORT=25432 BACKEND_PORT=23000 FRONTEND_PORT=28080 \
+POSTGRES_DATA_VOLUME=probe_postgres_data \
+BACKUP_DATA_VOLUME=probe_backup_data \
+STATE_DATA_VOLUME=probe_state_data \
+docker compose -p vereinorder-probe up -d
+```
+
+Wer das nur einmal braucht, ist mit einem eigenen Verzeichnis und einer eigenen `.env`
+besser bedient als mit einer langen Befehlszeile.
 
 ### Benutzerrechte in den Containern (#180)
 

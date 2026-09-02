@@ -256,8 +256,11 @@ jobs:
           # Backend, bevor es den Print-Worker startet - dass beide Dienste
           # ueberhaupt je "healthy" melden, ist damit Voraussetzung fuer alles,
           # was in diesem Auftrag danach kommt.
-          for dienst in vereinorder_backend vereinorder_frontend; do
-            zustand=$(docker inspect -f '{{.State.Health.Status}}' "$dienst")
+          # Ueber den Dienstnamen, nicht ueber einen festen Containernamen:
+          # docker-compose.yml vergibt seit #185 keinen mehr.
+          for dienst in backend frontend; do
+            container=$(docker compose ps -q "$dienst")
+            zustand=$(docker inspect -f '{{.State.Health.Status}}' "$container")
             echo "$dienst meldet $zustand"
             test "$zustand" = "healthy"
           done

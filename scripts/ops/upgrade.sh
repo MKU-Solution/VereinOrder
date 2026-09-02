@@ -226,9 +226,10 @@ fi
 # Neubau - das vorige Abbild verliert seinen Namen und ist ohne diesen
 # Schritt nur noch ueber seine Abbild-ID ansprechbar, wenn ueberhaupt (ein
 # "docker image prune" raeumt unbenannte/"dangling" Abbilder weg). Der
-# "container_name" (z. B. "vereinorder_backend") ist NICHT der Abbildname
-# und dient hier nur dazu, ueber den tatsaechlich laufenden Container an das
-# tatsaechlich laufende Abbild zu kommen - erraten wird nichts.
+# Containername ist NICHT der Abbildname; er dient hier nur dazu, ueber den
+# tatsaechlich laufenden Container an das tatsaechlich laufende Abbild zu
+# kommen - erraten wird nichts. Seit #185 vergibt docker-compose.yml ihn
+# ohnehin nicht mehr selbst, sondern ueberlaesst ihn Compose.
 #
 # Genau EINE Vorgaengerfassung wird aufbewahrt (Tag ":previous", bei jedem
 # Lauf ueberschrieben): Jeder Aktualisierungslauf erzeugt genau eine neue

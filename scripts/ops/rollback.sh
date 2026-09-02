@@ -13,8 +13,10 @@
 # Abbild unter "<Abbildname>:previous". Dieses Skript aktiviert genau diese
 # Sicherung wieder - durch Umbenennen ("docker tag"), nicht durch Bauen.
 #
-# WARUM UEBER DEN LAUFENDEN CONTAINER, NICHT UEBER GERATENE NAMEN: Der feste
-# "container_name" (z. B. "vereinorder_backend") ist NICHT der Abbildname.
+# WARUM UEBER DEN LAUFENDEN CONTAINER, NICHT UEBER GERATENE NAMEN: Der
+# Containername ist NICHT der Abbildname - und seit #185 vergibt
+# docker-compose.yml ihn nicht einmal mehr selbst, sondern ueberlaesst ihn
+# Compose (Projekt- plus Dienstname). Erst recht nichts zu raten also.
 # "scripts/ops/upgrade.sh" ermittelt das zu sichernde Abbild deshalb ueber
 # "docker inspect" auf den tatsaechlich laufenden Container. Dieses Skript
 # hier braucht den Abbildnamen nur fuer die Zielseite (welchen Namen Compose
