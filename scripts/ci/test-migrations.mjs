@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -205,22 +205,55 @@ function fail(message) {
   throw new Error(message);
 }
 
+// MIGRATION_TEST_ADMIN_URL hat immer Vorrang, damit sich am CI-Weg (siehe
+// .github/workflows/ci.yml) nichts aendert. Fehlt sie, wird ersatzweise
+// DATABASE_URL herangezogen, wie es jede andere datenbankgestuetzte Pruefung
+// des Projekts ohnehin schon verlangt (siehe docs/development/testing.md).
+// DATABASE_URL zeigt dabei ueblicherweise auf eine Testdatenbank wie
+// vereinorder_integration_test, niemals auf die Verwaltungsdatenbank
+// "postgres" - deshalb wird nur der Datenbankname ersetzt, Host, Zugang und
+// Port bleiben unveraendert. Das Muster ist die Umkehrung von
+// createTargetUrl() in
+// apps/backend/test/inventory-stock-concurrency.integration-spec.ts, die aus
+// derselben DATABASE_URL in die andere Richtung eine Zieldatenbank ableitet.
+function resolveAdminUrlSource() {
+  const explicit = process.env.MIGRATION_TEST_ADMIN_URL;
+  if (explicit) {
+    return { rawUrl: explicit, source: "MIGRATION_TEST_ADMIN_URL" };
+  }
+  const fallback = process.env.DATABASE_URL;
+  if (fallback) {
+    const derived = new URL(fallback);
+    derived.pathname = "/postgres";
+    return {
+      rawUrl: derived.toString(),
+      source:
+        'DATABASE_URL (ersatzweise verwendet, Datenbankname durch "postgres" ersetzt)',
+    };
+  }
+  fail(
+    "MIGRATION_TEST_ADMIN_URL fehlt und auch DATABASE_URL ist nicht gesetzt. " +
+      "Setze eine lokale Verwaltungsverbindung, z. B. " +
+      "MIGRATION_TEST_ADMIN_URL='postgresql://<user>:<passwort>@127.0.0.1:5432/postgres', " +
+      "oder DATABASE_URL auf die lokale Testdatenbank.",
+  );
+}
+
 function parseAdminTarget() {
   if (process.env.TEST_DATABASE_CONFIRMATION !== CONFIRMATION) {
     fail(`TEST_DATABASE_CONFIRMATION muss exakt ${CONFIRMATION} sein.`);
   }
-  const rawUrl = process.env.MIGRATION_TEST_ADMIN_URL;
-  if (!rawUrl) fail("MIGRATION_TEST_ADMIN_URL fehlt.");
+  const { rawUrl, source } = resolveAdminUrlSource();
   const parsed = new URL(rawUrl);
   if (!["127.0.0.1", "localhost"].includes(parsed.hostname)) {
     fail(
-      `Nur eine lokale PostgreSQL-Testinstanz ist erlaubt, nicht ${parsed.hostname}.`,
+      `Nur eine lokale PostgreSQL-Testinstanz ist erlaubt, nicht ${parsed.hostname} (aus ${source}).`,
     );
   }
   const database = decodeURIComponent(parsed.pathname.replace(/^\//, ""));
   if (database !== "postgres") {
     fail(
-      "MIGRATION_TEST_ADMIN_URL muss auf die Verwaltungsdatenbank postgres zeigen.",
+      `${source} muss auf die Verwaltungsdatenbank postgres zeigen (gefunden: ${database || "<leer>"}).`,
     );
   }
   return parsed;
@@ -243,6 +276,70 @@ function postgresArgs(target, database) {
   return args;
 }
 
+// Unter Windows liegt der PostgreSQL-Client ueblicherweise NICHT auf PATH,
+// sondern unter "C:\Program Files\PostgreSQL\<Hauptversion>\bin". Eine feste
+// Versionsnummer (wie im Existenzcheck von
+// apps/backend/test/inventory-stock-concurrency.integration-spec.ts) altert,
+// sobald hier eine neuere Hauptversion installiert wird. Deshalb wird
+// stattdessen das Installationsverzeichnis nach allen vorhandenen
+// Versionsordnern durchsucht und die neueste installierte Version verwendet,
+// bei der die gesuchte Programmdatei tatsaechlich existiert.
+// MIGRATION_TEST_POSTGRES_BIN_DIR hat ausdruecklich Vorrang vor dieser Suche,
+// falls PostgreSQL an einem abweichenden Ort installiert ist. Unter Linux und
+// in CI (siehe .github/workflows/ci.yml) bleibt es unveraendert beim
+// bisherigen Weg ueber PATH.
+const WINDOWS_POSTGRES_INSTALL_ROOT = "C:\\Program Files\\PostgreSQL";
+const resolvedPostgresCommands = new Map();
+
+function windowsExecutableName(command) {
+  return `${command}.exe`;
+}
+
+function findNewestWindowsPostgresBinary(command) {
+  let versionDirs;
+  try {
+    versionDirs = readdirSync(WINDOWS_POSTGRES_INSTALL_ROOT, {
+      withFileTypes: true,
+    })
+      .filter((entry) => entry.isDirectory() && /^\d+$/.test(entry.name))
+      .map((entry) => entry.name)
+      .sort((a, b) => Number(b) - Number(a));
+  } catch {
+    return undefined;
+  }
+  for (const version of versionDirs) {
+    const candidate = resolve(
+      WINDOWS_POSTGRES_INSTALL_ROOT,
+      version,
+      "bin",
+      windowsExecutableName(command),
+    );
+    if (existsSync(candidate)) return candidate;
+  }
+  return undefined;
+}
+
+function resolvePostgresCommand(command) {
+  if (resolvedPostgresCommands.has(command)) {
+    return resolvedPostgresCommands.get(command);
+  }
+  let resolved = command;
+  const override = process.env.MIGRATION_TEST_POSTGRES_BIN_DIR;
+  if (override) {
+    const candidate = resolve(override, windowsExecutableName(command));
+    if (!existsSync(candidate)) {
+      fail(
+        `MIGRATION_TEST_POSTGRES_BIN_DIR ist gesetzt, aber ${candidate} existiert nicht.`,
+      );
+    }
+    resolved = candidate;
+  } else if (process.platform === "win32") {
+    resolved = findNewestWindowsPostgresBinary(command) ?? command;
+  }
+  resolvedPostgresCommands.set(command, resolved);
+  return resolved;
+}
+
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
     cwd: repoRoot,
@@ -253,7 +350,9 @@ function run(command, args, options = {}) {
   });
   if (result.error?.code === "ENOENT") {
     fail(
-      `${command} wurde nicht gefunden. PostgreSQL-Client und pnpm müssen im PATH liegen.`,
+      `${command} wurde nicht gefunden. PostgreSQL-Client und pnpm müssen im PATH liegen ` +
+        "(unter Windows kann alternativ MIGRATION_TEST_POSTGRES_BIN_DIR auf das bin-Verzeichnis " +
+        "der PostgreSQL-Installation zeigen).",
     );
   }
   if (result.error) {
@@ -268,7 +367,7 @@ function run(command, args, options = {}) {
 }
 
 function psql(target, database, sql) {
-  return run("psql", postgresArgs(target, database), {
+  return run(resolvePostgresCommand("psql"), postgresArgs(target, database), {
     input: sql,
     env: {
       ...process.env,
@@ -278,7 +377,8 @@ function psql(target, database, sql) {
 }
 
 function psqlExpectFailure(target, database, sql, expectedMessage) {
-  const result = spawnSync("psql", postgresArgs(target, database), {
+  const command = resolvePostgresCommand("psql");
+  const result = spawnSync(command, postgresArgs(target, database), {
     cwd: repoRoot,
     encoding: "utf8",
     stdio: ["pipe", "pipe", "pipe"],
@@ -288,8 +388,15 @@ function psqlExpectFailure(target, database, sql, expectedMessage) {
       PGPASSWORD: decodeURIComponent(target.password),
     },
   });
+  if (result.error?.code === "ENOENT") {
+    fail(
+      `${command} wurde nicht gefunden. PostgreSQL-Client und pnpm müssen im PATH liegen ` +
+        "(unter Windows kann alternativ MIGRATION_TEST_POSTGRES_BIN_DIR auf das bin-Verzeichnis " +
+        "der PostgreSQL-Installation zeigen).",
+    );
+  }
   if (result.error) {
-    fail(`psql konnte nicht gestartet werden: ${result.error.message}`);
+    fail(`${command} konnte nicht gestartet werden: ${result.error.message}`);
   }
   if (result.status === 0) {
     fail("Die absichtlich ungültige Migration wurde unerwartet akzeptiert.");

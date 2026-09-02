@@ -52,7 +52,10 @@ pnpm test:integration
 ```
 
 Der Migrationstest benötigt zusätzlich eine lokale Verwaltungsverbindung. Er erzeugt und
-löscht ausschließlich `vereinorder_ci_test_empty` und `vereinorder_ci_test_upgrade`:
+löscht ausschließlich Datenbanken mit dem Namensmuster `vereinorder_ci_test_*` (Stand heute:
+`vereinorder_ci_test_empty`, `_upgrade`, `_duplicate`, `_invalid_event_refs`,
+`_event_status_testmode_violation` und `_payment_tender_violation`; maßgeblich sind die
+`_DATABASE`-Konstanten am Kopf von `scripts/ci/test-migrations.mjs`):
 
 ```bash
 export MIGRATION_TEST_ADMIN_URL='postgresql://postgres:postgres@127.0.0.1:5432/postgres'
@@ -61,6 +64,21 @@ pnpm test:migrations
 
 Der leere Stand erhält alle Migrationen. Der Upgrade-Stand erhält zunächst alle bis auf die
 neueste Migration und wird anschließend mit Prisma auf den aktuellen Stand gebracht.
+
+Ohne `MIGRATION_TEST_ADMIN_URL` fällt der Migrationstest auf `DATABASE_URL` zurück und ersetzt
+darin nur den Datenbanknamen durch `postgres` – Host, Zugang und Port bleiben unverändert. Wer
+also bereits eine lokale Testdatenbank konfiguriert hat, kommt ohne die zusätzliche Variable aus:
+
+```bash
+export DATABASE_URL='postgresql://postgres:postgres@127.0.0.1:5432/vereinorder_integration_test?schema=public'
+export TEST_DATABASE_CONFIRMATION='VEREINORDER_TEST_ONLY'
+pnpm test:migrations
+```
+
+Unter Windows liegt `psql` meist nicht im `PATH`. Der Migrationstest sucht dann selbstständig im
+aktuellsten `bin`-Verzeichnis unter `C:\Program Files\PostgreSQL\<Version>`; eine abweichende
+Installation lässt sich mit `MIGRATION_TEST_POSTGRES_BIN_DIR` ausdrücklich vorgeben, etwa
+`MIGRATION_TEST_POSTGRES_BIN_DIR='C:\Program Files\PostgreSQL\18\bin'`.
 
 ## Browser-Smoke
 
