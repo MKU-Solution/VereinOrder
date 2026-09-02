@@ -20,6 +20,7 @@ import { MaintenanceModule } from "./maintenance/maintenance.module";
 import { ValueVouchersModule } from "./value-vouchers/value-vouchers.module";
 import { InventoryModule } from "./inventory/inventory.module";
 import { SetupModule } from "./setup/setup.module";
+import { HealthModule } from "./health/health.module";
 
 @Module({
   imports: [
@@ -44,6 +45,10 @@ import { SetupModule } from "./setup/setup.module";
     // Weg unangemeldet erreichbar ist und nur existiert, solange die
     // Benutzertabelle leer ist - siehe setup.module.ts.
     SetupModule,
+    // Issue #184: Bereitschaftspruefung. Eigenes Modul neben
+    // DiagnosticsModule, weil der Weg unangemeldet erreichbar ist - siehe
+    // health.module.ts.
+    HealthModule,
     AreasModule,
     SessionsModule,
     RealtimeModule,

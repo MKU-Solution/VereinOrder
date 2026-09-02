@@ -86,6 +86,49 @@ Zwei Folgen davon sind im Betrieb sichtbar:
 Der Datenbankcontainer ist davon nicht betroffen: Das PostgreSQL-Abbild bringt seine
 eigene Benutzerbehandlung mit und wird nicht angefasst.
 
+### Bereitschaftszustand der Dienste (#184)
+
+`backend` und `frontend` melden Docker seit #184 einen Zustand; `docker compose ps`
+zeigt ihn in der Spalte **Status** als `healthy` oder `unhealthy` an.
+
+Das Backend prüft dafür `GET /health`. Der Weg ist **unangemeldet** erreichbar – ein
+Healthcheck im Container hat keine Anmeldedaten – und antwortet mit genau einem von
+zwei Rümpfen:
+
+| Antwort                        | Bedeutung                                                             |
+| ------------------------------ | --------------------------------------------------------------------- |
+| `200 {"status":"ok"}`          | Die Anwendung läuft, und das Schema in der Datenbank ist ansprechbar. |
+| `503 {"status":"unavailable"}` | Eines von beidem trifft nicht zu.                                     |
+
+Mehr gibt der Weg nicht preis: keine Verbindungszeichenfolge, keinen Migrationsstand,
+keine Fehlermeldung der Datenbank. Er liegt im Festbetrieb im selben WLAN wie die
+Bediengeräte und die Gäste. Welche der beiden Ursachen vorliegt, steht im
+Containerprotokoll (`docker compose logs backend`, Zeile
+`Bereitschaftsprüfung fehlgeschlagen (Prisma-Code …)`) – `P1001` heißt „Datenbank nicht
+erreichbar", `P2021` „Tabelle fehlt". Einzelheiten für Angemeldete liefert wie bisher
+`GET /diagnostics/status` hinter einem Administrator-Token.
+
+Über nginx ist der Weg als `http://<SERVER-IP>/api/health` erreichbar, ohne dass der
+Backend-Port bekannt sein muss.
+
+Zwei Punkte, die im Betrieb regelmäßig für Rückfragen sorgen:
+
+- **`unhealthy` löst keinen Neustart aus.** `restart: always` reagiert auf das Ende des
+  Prozesses, nicht auf den Gesundheitszustand; das täte nur Docker Swarm. Ein Backend
+  ohne Datenbank bleibt also stehen und meldet `unhealthy`, bis die Datenbank
+  zurückkommt – dann wird es von selbst wieder `healthy`.
+- **Das Frontend wartet bewusst nicht auf ein gesundes Backend**, nur auf ein
+  gestartetes. Es ist ein statischer Dateiserver und braucht das Backend zum Ausliefern
+  der Oberfläche nicht. Andernfalls lieferte der Server bei einem Kaltstart mit kaputter
+  Datenbank überhaupt keine Seite aus – ausgerechnet dann, wenn jemand am Gerät
+  nachsehen will. Der Print-Worker wartet dagegen sehr wohl auf `healthy`: Ohne
+  antwortendes Backend hat er nichts zu tun und füllte sein Protokoll bisher mit
+  Fehlern, die keine waren.
+
+Der erste Start darf lange dauern: Der Entrypoint bringt die Datenbank vor dem
+Anwendungsstart auf den Migrationsstand. Die `start_period` des Healthchecks ist
+deshalb auf drei Minuten gesetzt; währenddessen zählt keine fehlgeschlagene Prüfung.
+
 An den Rechten der Sicherungsdateien ändert sich nichts: Sie bleiben `0600` in einem
 Verzeichnis mit `0700` (`apps/backend/src/backup/native-backup.service.ts`), nur der
 Eigentümer wechselt von `root` auf `node`. Der in `docs/ops/backup-recovery.md`
