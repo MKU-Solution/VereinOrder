@@ -71,6 +71,32 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    # #184: Bis hierher meldete ausser postgres kein Dienst einen Zustand.
+    # GET /health antwortet unangemeldet und prueft dabei bis auf das Schema
+    # durch (apps/backend/src/health/health.service.ts) - ein blosses
+    # "Prozess laeuft" haette den Zustand aus #172 als gesund gemeldet.
+    #
+    # "wget" kommt aus BusyBox und ist in node:20-alpine enthalten; ein
+    # zusaetzliches Paket braucht diese Pruefung nicht. "--spider" waere der
+    # naheliegende Schalter, verschickt bei BusyBox aber ein HEAD, und der
+    # Weg beantwortet GET - deshalb "-O /dev/null".
+    #
+    # start_period grosszuegig: Der Entrypoint fuehrt vor dem Anwendungsstart
+    # "prisma migrate deploy" aus (#172). Auf einem Raspberry Pi dauert die
+    # erste Migration ueber 35 Schritte spuerbar laenger als auf einem
+    # Entwicklungsrechner. Waehrend start_period zaehlen fehlgeschlagene
+    # Versuche nicht gegen "retries" - anders als im Umfang von #184
+    # angenommen fuehrt eine fehlgeschlagene Pruefung ohnehin zu KEINEM
+    # Neustart: "restart: always" reagiert auf das Ende des Prozesses, nicht
+    # auf den Gesundheitszustand (das tut nur Docker Swarm). Der grosszuegige
+    # Wert verhindert also keine Neustartschleife, sondern eine irrefuehrende
+    # Anzeige "unhealthy" waehrend eines voellig regulaeren ersten Starts.
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:3000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 180s
 
   frontend:
     build:
@@ -85,8 +111,25 @@ services:
     # nichts: Die Anwendung bleibt unter http://<SERVER-IP>/ erreichbar.
     ports:
       - "80:8080"
+    # #184: "depends_on" bleibt hier bewusst OHNE "condition: service_healthy",
+    # abweichend vom Wortlaut des Umfangs. Das Frontend ist ein statischer
+    # Dateiserver; zum Ausliefern der Oberflaeche braucht es das Backend
+    # nicht. Wartete es auf ein GESUNDES Backend, lieferte der Server bei
+    # einem Kaltstart mit kaputter Datenbank ueberhaupt keine Seite aus -
+    # ausgerechnet in dem Augenblick, in dem jemand am Geraet nachsehen will,
+    # was los ist. Ein Backend, das nicht antwortet, ergibt so ein 502 im
+    # Browser statt einer toten Adresse.
     depends_on:
       - backend
+    # Eigener Healthcheck trotzdem: Er beantwortet "liefert nginx aus?" in
+    # "docker compose ps" und in der CI. Jeder Pfad ist zulaessig, weil
+    # nginx.conf ueber "try_files" alles mit index.html beantwortet.
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
   print-worker:
     build:
@@ -115,8 +158,16 @@ services:
       - state_data:/app/state:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    # #184: Hier ist "service_healthy" der ganze Punkt. Vorher wartete der
+    # Worker nur darauf, dass der Backend-CONTAINER gestartet wurde, und lief
+    # damit zwangslaeufig ins Leere: Sein Protokoll war von der ersten Sekunde
+    # an voll mit "backend.claim_failed" (connect ECONNREFUSED), bis das
+    # Backend lauschte. Nebenbei erledigt sich damit auch der zweite
+    # Startfehler - der Worker liest sein Token aus STATE_DIR, und die Datei
+    # legt der Entrypoint des Backends an, bevor die Anwendung lauscht.
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
 
 volumes:
   postgres_data:

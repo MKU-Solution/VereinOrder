@@ -248,6 +248,55 @@ jobs:
           body=$(curl -s http://127.0.0.1:3000/setup/status)
           echo "GET /setup/status (vor der Ersteinrichtung): $body"
           echo "$body" | grep -q '"setupRequired":true'
+      - name: Backend und Frontend melden einen Bereitschaftszustand (#184)
+        run: |
+          set -euo pipefail
+          # Vor #184 hatte ausser postgres kein Dienst einen healthcheck.
+          # "docker compose up -d" oben wartet seitdem selbst auf ein GESUNDES
+          # Backend, bevor es den Print-Worker startet - dass beide Dienste
+          # ueberhaupt je "healthy" melden, ist damit Voraussetzung fuer alles,
+          # was in diesem Auftrag danach kommt.
+          for dienst in vereinorder_backend vereinorder_frontend; do
+            zustand=$(docker inspect -f '{{.State.Health.Status}}' "$dienst")
+            echo "$dienst meldet $zustand"
+            test "$zustand" = "healthy"
+          done
+      - name: GET /health antwortet unangemeldet und gibt nichts preis (#184)
+        run: |
+          set -euo pipefail
+          rumpf=$(curl -s -o /tmp/health.json -w '%{http_code}' http://127.0.0.1:3000/health)
+          echo "GET /health antwortet mit $rumpf: $(cat /tmp/health.json)"
+          test "$rumpf" = "200"
+          # Wortgleich, nicht "enthaelt": Der Weg liegt im Festbetrieb
+          # unangemeldet im selben WLAN wie die Gaeste. Ein zusaetzliches Feld
+          # - ein Migrationsstand, eine Datenbankmeldung, eine
+          # Verbindungszeichenfolge - soll diesen Schritt umwerfen.
+          test "$(cat /tmp/health.json)" = '{"status":"ok"}'
+          # Auch ueber nginx erreichbar, damit ein Mensch die Adresse im
+          # Browser oeffnen kann, ohne den Backend-Port zu kennen.
+          ueber_nginx=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:80/api/health)
+          echo "GET /api/health ueber nginx antwortet mit $ueber_nginx"
+          test "$ueber_nginx" = "200"
+          rm -f /tmp/health.json
+      - name: Print-Worker startet ohne Fehlermeldungen (die Aussage von #184)
+        run: |
+          set -euo pipefail
+          # Das ist der Befund, mit dem #184 aufgemacht hat: Der Worker wartete
+          # nur darauf, dass der Backend-CONTAINER gestartet wurde, und lief
+          # deshalb zwangslaeufig ins Leere - sein Protokoll war von der ersten
+          # Sekunde an voll mit "backend.claim_failed" (connect ECONNREFUSED).
+          # Seit er auf "condition: service_healthy" wartet, darf dort keine
+          # einzige solche Zeile mehr stehen.
+          docker compose logs --no-color print-worker > /tmp/worker.log
+          treffer=$(grep -c "claim_failed" /tmp/worker.log || true)
+          echo "backend.claim_failed im Worker-Protokoll: $treffer"
+          if [ "$treffer" != "0" ]; then
+            echo "Der Print-Worker laeuft beim Start weiterhin ins Leere - #184 nicht behoben." >&2
+            cat /tmp/worker.log >&2
+            exit 1
+          fi
+          grep -q '"event":"worker.started"' /tmp/worker.log
+          rm -f /tmp/worker.log
       - name: Alle drei Dienste laufen unprivilegiert (#180)
         run: |
           set -euo pipefail
