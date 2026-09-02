@@ -30,10 +30,43 @@ Vor jedem `git push` muss das Projekt zwingend auf Funktion geprüft werden (z. 
   Hintergrund: Als die CI vom 24.08. bis 31.08.2026 wegen eines Abrechnungsproblems ausfiel,
   gelangten 58 Commits ungeprüft auf `main`, 21 davon zusätzlich mit `[skip ci]`. Der erste echte
   Lauf danach fand sechs rote Prüfungen mit vier Ursachen; zwei davon gingen unmittelbar auf
-  `[skip ci]`-Commits zurück und wären im eigenen Pull Request sofort aufgefallen. Sobald der für
-  `main` vorgesehene Zweigschutz greift (nach #207), macht er dieses Verbot selbsttragend: Ohne
-  Prüfung kein grüner Pflichtstatus, ohne grünen Status kein Merge. Bis dahin ist das Verbot allein
-  auf Einhaltung angewiesen – auch durch Agenten, die diesen Vorfall nicht miterlebt haben.
+  `[skip ci]`-Commits zurück und wären im eigenen Pull Request sofort aufgefallen. Der für `main`
+  eingerichtete Zweigschutz macht dieses Verbot selbsttragend: Ohne Prüfung kein grüner
+  Pflichtstatus, ohne grünen Status kein Merge.
+- **Zweigschutz für `main`:** Zwölf Pflichtprüfungen müssen grün sein, bevor gemergt werden kann –
+  alle Aufträge der CI, nicht nur die schnellen:
+
+  - Format, Lint, Typen, Unit-Tests und Build
+  - PostgreSQL-Integration und Migrationen
+  - Browser-Smoke admin und kellner1
+  - Geheimnisprüfung
+  - Docker backend linux/amd64
+  - Docker backend linux/arm64
+  - Docker frontend linux/amd64
+  - Docker frontend linux/arm64
+  - Docker print-worker linux/amd64
+  - Docker print-worker linux/arm64
+  - Docker-Bündel Migrationsstart
+  - Docker-Bündel Aktualisierung (upgrade.sh, PRE_MIGRATION vor Migration)
+
+  Warum alle zwölf und nicht nur Lint und Typen: VereinOrder läuft im Festbetrieb auf einem
+  Raspberry Pi, ohne Netz. Die CI ist die einzige Instanz, die das Docker-Bündel vor dem Ernstfall
+  vollständig hochfährt – deshalb sind gerade die Docker- und Bündel-Aufträge Pflicht, nicht nur
+  Lint und Typen. Der Zweig muss vor dem Merge auf dem aktuellen Stand von `main` sein, ein Pull
+  Request ist verpflichtend (ohne Pflicht zu einer Freigabe durch Dritte – das kann ein
+  Einzelentwickler nicht leisten), erzwungene Pushes und das Löschen von `main` sind gesperrt. Der
+  Schutz gilt auch für Administratoren.
+
+  Notfallweg: Nur der Repository-Inhaber kann den Schutz aufheben, weil er der einzige
+  Administrator ist. Der Weg lautet: Schutz vorübergehend abschalten, mergen, sofort wieder
+  einschalten, und den Vorgang im betroffenen Pull Request vermerken. Der Vermerk ist der Punkt –
+  eine Ausnahme, die niemand nachlesen kann, ist keine Ausnahme, sondern eine Lücke.
+
+  Betriebsfalle: Pflichtprüfungen werden über den **Namen** des Auftrags zugeordnet. Wird ein
+  Auftrag in `.github/workflows/ci.yml` umbenannt oder entfernt, wartet der Zweigschutz dauerhaft
+  auf eine Meldung, die nie kommt – der Merge bleibt blockiert, ohne dass etwas rot ist. Wer einen
+  Auftragsnamen ändert, muss die Liste der Pflichtprüfungen oben mitziehen. Das ist der
+  wahrscheinlichste Weg, sich hier selbst auszusperren.
 
 ## Delegierte Aufgaben und Modellwahl
 

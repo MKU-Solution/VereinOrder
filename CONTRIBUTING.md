@@ -28,7 +28,25 @@ VereinOrder wird nach verbindlichen Qualitäts-, Sicherheits- und Teststandards 
 7. **Kein `[skip ci]`:**
    - Commit-Nachrichten und Pull-Request-Titel dürfen keine CI-Sprungmarke enthalten: weder `[skip ci]` noch die von GitHub Actions gleichwirkend ausgewerteten `[ci skip]`, `[no ci]`, `[skip actions]`, `[actions skip]` oder den Nachsatz `skip-checks:true` (bzw. `skip-checks: true`) – auch nicht für reine Dokumentationsänderungen.
    - Grund: Vom 24.08. bis 31.08.2026 lief die CI wegen eines Abrechnungsproblems gar nicht. In dieser Zeit gelangten 58 Commits ungeprüft auf `main`, 21 davon zusätzlich mit `[skip ci]` versehen. Der erste echte Lauf danach zeigte sechs rote Prüfungen mit vier Ursachen, davon zwei unmittelbar auf `[skip ci]`-Commits zurückgehend – Fehler, die je im eigenen Pull Request sofort sichtbar gewesen wären, statt gemeinsam mit drei fremden Ursachen entwirrt werden zu müssen.
-   - Sobald der für `main` vorgesehene Zweigschutz greift (gebunden an die Behebung von #207), macht er dieses Verbot selbsttragend: Pflichtprüfungen müssen dann grün sein, und `[skip ci]` sorgt dafür, dass gar keine Prüfung meldet – der Merge ist damit blockiert, unabhängig davon, ob jemand die Commit-Nachricht liest. Bis der Zweigschutz eingerichtet ist, gilt das Verbot ausschließlich kraft Einhaltung durch alle Mitwirkenden, einschließlich künftiger Agenten.
+   - Der für `main` vorgesehene Zweigschutz greift seit der Behebung von #207 und macht dieses Verbot selbsttragend: Pflichtprüfungen müssen grün sein, und `[skip ci]` sorgt dafür, dass gar keine Prüfung meldet – der Merge ist damit blockiert, unabhängig davon, ob jemand die Commit-Nachricht liest.
+8. **Zweigschutz für `main`:**
+   - Zwölf Pflichtprüfungen müssen grün sein, bevor gemergt werden kann – alle Aufträge der CI, nicht nur die schnellen:
+     - Format, Lint, Typen, Unit-Tests und Build
+     - PostgreSQL-Integration und Migrationen
+     - Browser-Smoke admin und kellner1
+     - Geheimnisprüfung
+     - Docker backend linux/amd64
+     - Docker backend linux/arm64
+     - Docker frontend linux/amd64
+     - Docker frontend linux/arm64
+     - Docker print-worker linux/amd64
+     - Docker print-worker linux/arm64
+     - Docker-Bündel Migrationsstart
+     - Docker-Bündel Aktualisierung (upgrade.sh, PRE_MIGRATION vor Migration)
+   - Grund für alle zwölf statt nur Lint und Typen: VereinOrder läuft im Festbetrieb auf einem Raspberry Pi, ohne Netz. Die CI ist die einzige Instanz, die das Docker-Bündel vor dem Ernstfall vollständig hochfährt – deshalb sind gerade die Docker- und Bündel-Aufträge Pflicht, nicht nur die schnellen Prüfungen.
+   - Der Zweig muss vor dem Merge auf dem aktuellen Stand von `main` sein, ein Pull Request ist verpflichtend (ohne Pflicht zu einer Freigabe durch Dritte – das kann ein Einzelentwickler nicht leisten), erzwungene Pushes und das Löschen von `main` sind gesperrt. Der Schutz gilt auch für Administratoren.
+   - Notfallweg: Nur der Repository-Inhaber kann den Schutz aufheben, weil er der einzige Administrator ist. Der Weg lautet: Schutz vorübergehend abschalten, mergen, sofort wieder einschalten, und den Vorgang im betroffenen Pull Request vermerken. Der Vermerk ist der Punkt – eine Ausnahme, die niemand nachlesen kann, ist keine Ausnahme, sondern eine Lücke.
+   - Betriebsfalle: Pflichtprüfungen werden über den **Namen** des Auftrags zugeordnet. Wird ein Auftrag in `.github/workflows/ci.yml` umbenannt oder entfernt, wartet der Zweigschutz dauerhaft auf eine Meldung, die nie kommt – der Merge bleibt blockiert, ohne dass etwas rot ist. Wer einen Auftragsnamen ändert, muss die Liste der Pflichtprüfungen oben mitziehen. Das ist der wahrscheinlichste Weg, sich hier selbst auszusperren.
 
 ---
 
