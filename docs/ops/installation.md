@@ -55,10 +55,42 @@ docker compose logs -f backend
 
 | Dienst           | Container-Name             | Port (Host)      | Beschreibung                                                                                                       |
 | ---------------- | -------------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------ |
-| **Frontend**     | `vereinorder_frontend`     | `80`             | Nginx Webserver mit React PWA                                                                                      |
+| **Frontend**     | `vereinorder_frontend`     | `80`             | Nginx Webserver mit React PWA. Im Container lauscht er auf `8080`, siehe unten                                     |
 | **Backend**      | `vereinorder_backend`      | `3000`           | NestJS REST-API & SSE-Echtzeitstream                                                                               |
 | **Datenbank**    | `vereinorder_postgres`     | `127.0.0.1:5432` | PostgreSQL 16. Bewusst nur auf der Loopback-Adresse veroeffentlicht und damit aus dem Netz nicht erreichbar (#181) |
 | **Druck-Worker** | `vereinorder_print_worker` | -                | Asynchroner Druckauftragsprozessor                                                                                 |
+
+### Benutzerrechte in den Containern (#180)
+
+Keiner der drei selbst gebauten Dienste läuft noch als `root`:
+
+| Dienst         | Benutzer im Container | Uid    |
+| -------------- | --------------------- | ------ |
+| `backend`      | `node`                | `1000` |
+| `frontend`     | `nginx`               | `101`  |
+| `print-worker` | `node`                | `1000` |
+
+Zwei Folgen davon sind im Betrieb sichtbar:
+
+- **Der Containerport des Frontends ist `8080`, nicht `80`.** Ein unprivilegierter
+  Prozess kann keinen Port unterhalb von 1024 binden. Am Host bleibt es bei `80`;
+  `docker-compose.yml` bildet `80` auf `8080` ab. Für den Zugriff ändert sich nichts.
+- **Die Dateien in den Volumes `vereinorder_backup_data` und `vereinorder_state_data`
+  gehören dem Benutzer `node` (uid 1000).** In einer Installation, die vor #180
+  angelegt wurde, gehören sie noch `root`. Der Entrypoint des Backend-Abbilds
+  übereignet sie deshalb beim ersten Start nach dem Update ein einziges Mal und
+  protokolliert das mit der Zeile
+  `docker-entrypoint: uebereigne /app/backups an node (einmalig, #180).` Es ist kein
+  Handgriff nötig, und ab dem nächsten Start unterbleibt der Schritt.
+
+Der Datenbankcontainer ist davon nicht betroffen: Das PostgreSQL-Abbild bringt seine
+eigene Benutzerbehandlung mit und wird nicht angefasst.
+
+An den Rechten der Sicherungsdateien ändert sich nichts: Sie bleiben `0600` in einem
+Verzeichnis mit `0700` (`apps/backend/src/backup/native-backup.service.ts`), nur der
+Eigentümer wechselt von `root` auf `node`. Der in `docs/ops/backup-recovery.md`
+beschriebene Weg über den Datenbankcontainer (`docker compose exec postgres ...`)
+läuft als `root` und erreicht sie unverändert.
 
 ---
 

@@ -248,6 +248,79 @@ jobs:
           body=$(curl -s http://127.0.0.1:3000/setup/status)
           echo "GET /setup/status (vor der Ersteinrichtung): $body"
           echo "$body" | grep -q '"setupRequired":true'
+      - name: Alle drei Dienste laufen unprivilegiert (#180)
+        run: |
+          set -euo pipefail
+          # Gemessen wird der PROZESS, nicht die Abbildmetadaten: Das Backend
+          # traegt bewusst kein "USER node", weil sein Entrypoint die
+          # vorhandenen Volumes erst als root uebereignen muss und danach
+          # ueber "su-exec" wechselt (apps/backend/Dockerfile). Ein Blick auf
+          # "docker inspect --format '{{.Config.User}}'" saehe davon nichts und
+          # pruefte die Zusage aus #180 ausgerechnet bei dem Dienst nicht, bei
+          # dem sie am meisten zaehlt.
+          #
+          # "--user 0" gilt nur fuer die hier gestartete Hilfsshell, nicht fuer
+          # den laufenden Dienst: Ohne sie koennte die Shell des Frontends
+          # /proc/1/status gar nicht lesen.
+          fehler=0
+          for dienst in backend:1000 frontend:101 print-worker:1000; do
+            name="${dienst%%:*}"
+            erwartet="${dienst##*:}"
+            gemessen=$(docker compose exec -T --user 0 "$name" \
+              awk '/^Uid:/ { print $2 }' /proc/1/status | tr -d '\r')
+            echo "$name: PID 1 laeuft mit Uid $gemessen (erwartet $erwartet)"
+            if [ "$gemessen" != "$erwartet" ]; then
+              echo "Dienst $name laeuft nicht unter der erwarteten Uid - #180 verletzt." >&2
+              fehler=1
+            fi
+          done
+          test "$fehler" -eq 0
+      - name: Frontend antwortet trotz unprivilegiertem nginx am Host-Port 80 (#180)
+        run: |
+          set -euo pipefail
+          # Der Containerport wanderte mit #180 auf 8080, weil der
+          # nginx-Hauptprozess keinen Port unterhalb von 1024 mehr binden kann.
+          # Am Host muss es bei 80 bleiben - das ist die einzige Zusage aus
+          # #180, die ein Betreiber ueberhaupt bemerkt. Ohne diesen Schritt
+          # bliebe eine falsche Portabbildung in docker-compose.yml
+          # unentdeckt: Kein anderer Auftrag ruft das Frontend je auf.
+          status=000
+          for i in $(seq 1 30); do
+            status=$(curl -s -o /tmp/frontend-index.html -w '%{http_code}' \
+              http://127.0.0.1:80/) || status=000
+            [ "$status" = "200" ] && break
+            sleep 2
+          done
+          echo "GET http://127.0.0.1:80/ antwortet mit $status"
+          if [ "$status" != "200" ]; then
+            docker compose logs --no-color --tail 50 frontend >&2
+            exit 1
+          fi
+          grep -q 'id="root"' /tmp/frontend-index.html
+          # Auch der Weiterleitungspfad auf das Backend muss stehen: nginx
+          # spricht den Dienst "backend" ueber das Compose-Netz an, nicht ueber
+          # dessen veroeffentlichten Host-Port.
+          api=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:80/api/setup/status)
+          echo "GET http://127.0.0.1:80/api/setup/status antwortet mit $api"
+          test "$api" = "200"
+          rm -f /tmp/frontend-index.html
+      - name: Sicherungs- und Zustandsverzeichnis gehoeren dem Laufzeitbenutzer (#180)
+        run: |
+          set -euo pipefail
+          for verzeichnis in /app/backups /app/state; do
+            eigentuemer=$(docker compose exec -T --user 0 backend \
+              stat -c '%u:%g' "$verzeichnis" | tr -d '\r')
+            echo "$verzeichnis gehoert $eigentuemer"
+            test "$eigentuemer" = "1000:1000"
+          done
+          # Gegenprobe zur Eigentuemerangabe: Der Dienst muss dort auch
+          # tatsaechlich schreiben koennen. "--user node" bildet den Zustand
+          # des laufenden Prozesses nach; "docker compose exec" allein liefe
+          # als root und bewiese nichts.
+          docker compose exec -T --user node backend \
+            sh -c 'touch /app/state/.ci-schreibprobe && rm /app/state/.ci-schreibprobe'
+          docker compose exec -T --user node backend \
+            sh -c 'touch /app/backups/.ci-schreibprobe && rm /app/backups/.ci-schreibprobe'
       - name: Migrationsstand im Container prüfen
         run: docker compose exec -T backend pnpm --filter @vereinorder/database exec prisma migrate status
       - name: Tabellen in PostgreSQL prüfen
@@ -433,8 +506,74 @@ jobs:
     # nachweislich vor ihrer Anwendung.
     steps:
       - uses: actions/checkout@v4
+      - name: Installation von vor #180 nachstellen (root-eigene Volumes)
+        run: |
+          set -euo pipefail
+          # Der eigentliche Stolperstein von #180 ist nicht die
+          # Neuinstallation, sondern der naechste gewoehnliche Start einer
+          # BESTEHENDEN: Deren Volumes enthalten Dateien, die als root
+          # entstanden sind. Ein frisches Buendel zeigte das nie, weil ein neu
+          # angelegtes Volume Eigentuemer und Rechte aus dem Abbild uebernimmt
+          # und damit von vornherein richtig ist.
+          #
+          # Die Volumes tragen in docker-compose.yml feste Namen; Compose
+          # uebernimmt die hier vorbereiteten, statt neue anzulegen.
+          #
+          # In BEIDE Verzeichnisse muss eine Datei: Ein LEERES benanntes Volume
+          # befuellt Docker beim ersten Einhaengen aus dem Abbild und
+          # uebernimmt dabei auch Eigentuemer und Rechte des Einhaengepunkts -
+          # seit #180 also "node". Der hier gesetzte Eigentuemer root waere
+          # damit wieder weg, und die Altinstallation, die dieser Schritt
+          # nachstellen soll, gaebe es gar nicht. Genau daran ist dieser
+          # Auftrag beim ersten Anlauf gescheitert: /backups blieb leer, kam
+          # als node-eigen im Container an, und der Entrypoint hatte zu Recht
+          # nichts zu uebereignen.
+          docker volume create vereinorder_state_data
+          docker volume create vereinorder_backup_data
+          docker run --rm \
+            -v vereinorder_state_data:/state \
+            -v vereinorder_backup_data:/backups \
+            alpine sh -euc '
+              printf "%s" "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" > /state/jwt-secret
+              printf "%s" "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210" > /state/print-worker-token
+              printf "%s" "{\"phase\":\"OPEN\",\"since\":null,\"byUserId\":null,\"byUsername\":null,\"reason\":null,\"expectedUntil\":null}" > /state/maintenance.json
+              echo "kein echter Dump, nur damit das Volume nicht leer ist" > /backups/vereinorder_2026-01-01T00-00-00.000Z_manual.dump
+              chmod 600 /state/jwt-secret /state/print-worker-token /backups/*.dump
+              chmod 700 /backups
+              chown -R 0:0 /state /backups
+              ls -la /state /backups
+            '
       - name: Bündel bauen und hochfahren (Ersteinrichtung folgt, wie im Auftrag oben)
         run: docker compose up -d --build
+      - name: Beleg - die root-eigenen Volumes wurden einmalig uebereignet (#180)
+        run: |
+          set -euo pipefail
+          # Erste Aussage: Der Entrypoint hat den Schritt ueberhaupt getan.
+          # Bei einem Fehlschlag ist das Protokoll die einzige Spur - "grep -q"
+          # allein sagt nur, dass etwas fehlt, nicht was dastand.
+          docker compose logs --no-color backend > /tmp/backend-start.log
+          for verzeichnis in /app/state /app/backups; do
+            if ! grep -q "uebereigne $verzeichnis an node" /tmp/backend-start.log; then
+              echo "Keine Uebereignung fuer $verzeichnis im Backend-Protokoll." >&2
+              echo "Eigentuemer im Container:" >&2
+              docker compose exec -T --user 0 backend stat -c '%n %u:%g %a' /app/state /app/backups >&2
+              head -40 /tmp/backend-start.log >&2
+              exit 1
+            fi
+          done
+          # Zweite Aussage, die wichtigere: Die vorgefundenen Geheimnisse haben
+          # ueberlebt. Wuerde der Entrypoint sie neu erzeugen, waeren auf einer
+          # echten Installation im selben Augenblick alle ausgegebenen Token
+          # ungueltig - und der Print-Worker im Nachbarcontainer spraeche mit
+          # einem anderen Token als das Backend.
+          if grep -q 'JWT_SECRET wurde beim ersten Start neu erzeugt' /tmp/backend-start.log; then
+            echo "Der vorhandene JWT_SECRET wurde ersetzt statt uebernommen." >&2
+            exit 1
+          fi
+          vorgefunden="0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+          jetzt=$(docker compose exec -T --user 0 backend cat /app/state/jwt-secret | tr -d '\r')
+          test "$jetzt" = "$vorgefunden"
+          rm -f /tmp/backend-start.log
       - name: Auf migriertes Backend warten
         run: |
           set -euo pipefail

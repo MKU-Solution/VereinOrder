@@ -58,9 +58,15 @@ abzulösen.
 | `PORT`     | Port, auf dem das NestJS-Backend (Fastify-Adapter) hört   | `3000`       |
 | `NODE_ENV` | Ausführungsumgebung (`development`, `production`, `test`) | `production` |
 
-Der Port der Webanwendung selbst ist nicht über eine Umgebungsvariable konfigurierbar:
-`apps/frontend/Dockerfile` und `apps/frontend/nginx.conf` legen ihn fest auf `80`, und
-`docker-compose.yml` bildet ihn auf denselben Host-Port `80` ab.
+Der Port der Webanwendung selbst ist nicht über eine Umgebungsvariable konfigurierbar.
+Am Host ist und bleibt es Port `80`; im Container ist es seit #180 Port `8080`.
+`apps/frontend/nginx.conf` und `apps/frontend/Dockerfile` legen den Containerport fest,
+`docker-compose.yml` bildet den Host-Port `80` darauf ab.
+
+Der Grund für die beiden verschiedenen Zahlen: Der nginx-Hauptprozess läuft seit #180
+unprivilegiert (`USER nginx`) und kann keinen Port unterhalb von 1024 mehr binden. Für
+den Betrieb ändert das nichts – die Anwendung bleibt unter `http://<SERVER-IP>/`
+erreichbar. Wer den Containerport ändert, muss beide Stellen mitziehen.
 
 ---
 
