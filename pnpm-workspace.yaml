@@ -1,8 +1,7 @@
 packages:
   - "apps/*"
   - "packages/*"
-allowBuilds:
-  '@nestjs/core': set this to true or false
-  '@prisma/client': true
-  '@prisma/engines': true
-  prisma: true
+# Absichtlich kein "onlyBuiltDependencies" hier (#190): pnpm@9.15.4 liest
+# diesen Schluessel nur aus package.json unter "pnpm.onlyBuiltDependencies",
+# nicht aus dieser Datei. Ein hier eingetragener Schluessel waere wirkungslos,
+# wie es "allowBuilds" an dieser Stelle bereits war.
