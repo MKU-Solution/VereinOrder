@@ -45,6 +45,8 @@ jobs:
         run: pnpm test
       - name: Backend-, Frontend- und Worker-Build
         run: pnpm build
+      - name: Frontend-Cache-Regeln
+        run: pnpm test:frontend-cache
 
   postgres:
     name: PostgreSQL-Integration und Migrationen
