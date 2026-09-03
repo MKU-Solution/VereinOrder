@@ -199,25 +199,35 @@ export const AdminProductsView = ({
                           <div className="flex items-center gap-2.5">
                             <Package
                               aria-hidden="true"
-                              className="h-4 w-4 text-indigo-300"
+                              className="h-4 w-4 shrink-0 text-indigo-300"
                             />
-                            <span>{prod.name}</span>
+                            <span className="break-words">{prod.name}</span>
                           </div>
+                          {prod.manualAvailability === "DISABLED" && (
+                            <div className="mt-1.5">
+                              <SortimentRemovedBadge />
+                            </div>
+                          )}
                         </td>
                         <td className="px-4 py-4 text-xs text-slate-300">
-                          {category ? (
-                            <span className="inline-flex items-center gap-1 rounded-md border border-slate-700 bg-slate-800 px-2 py-1 font-medium text-slate-200">
-                              <Tag
-                                aria-hidden="true"
-                                className="h-3 w-3 text-slate-400"
-                              />
-                              {category.name}
-                            </span>
-                          ) : (
-                            <span className="text-rose-400 font-bold">
-                              Keine Kategorie
-                            </span>
-                          )}
+                          <div className="flex flex-col items-start gap-1">
+                            {category ? (
+                              <span className="inline-flex items-center gap-1 rounded-md border border-slate-700 bg-slate-800 px-2 py-1 font-medium text-slate-200">
+                                <Tag
+                                  aria-hidden="true"
+                                  className="h-3 w-3 text-slate-400"
+                                />
+                                {category.name}
+                              </span>
+                            ) : (
+                              <span className="text-rose-400 font-bold">
+                                Keine Kategorie
+                              </span>
+                            )}
+                            {category?.isActive === false && (
+                              <InactiveCategoryBadge />
+                            )}
+                          </div>
                         </td>
                         <td className="px-4 py-4 font-mono text-slate-100">
                           <div className="font-bold">€ {priceInEuros}</div>
@@ -312,13 +322,13 @@ export const AdminProductsView = ({
                               }
                               title={
                                 prod.manualAvailability === "DISABLED"
-                                  ? "Produkt aktivieren"
-                                  : "Produkt deaktivieren"
+                                  ? "Wieder ins Sortiment aufnehmen"
+                                  : "Ganz aus dem Sortiment nehmen"
                               }
                               aria-label={
                                 prod.manualAvailability === "DISABLED"
-                                  ? `Produkt ${prod.name} aktivieren`
-                                  : `Produkt ${prod.name} deaktivieren`
+                                  ? `Produkt ${prod.name} wieder ins Sortiment aufnehmen`
+                                  : `Produkt ${prod.name} ganz aus dem Sortiment nehmen`
                               }
                             >
                               {prod.manualAvailability === "DISABLED" ? (
@@ -373,6 +383,11 @@ export const AdminProductsView = ({
                           {prod.name}
                         </h3>
                       </div>
+                      {prod.manualAvailability === "DISABLED" && (
+                        <div className="mt-1">
+                          <SortimentRemovedBadge />
+                        </div>
+                      )}
                       <div className="mt-1 flex flex-wrap items-center gap-2 text-xs">
                         {category && (
                           <span className="inline-flex items-center gap-1 rounded-md border border-slate-700 bg-slate-800 px-2 py-0.5 font-medium text-slate-200">
@@ -382,6 +397,9 @@ export const AdminProductsView = ({
                             />
                             {category.name}
                           </span>
+                        )}
+                        {category?.isActive === false && (
+                          <InactiveCategoryBadge />
                         )}
                         {optionGroupCount > 0 && (
                           <span className="inline-flex items-center gap-1 rounded-md border border-indigo-500/30 bg-indigo-500/15 px-2 py-0.5 font-semibold text-indigo-300">
@@ -456,13 +474,13 @@ export const AdminProductsView = ({
                         }
                         title={
                           prod.manualAvailability === "DISABLED"
-                            ? "Produkt aktivieren"
-                            : "Produkt deaktivieren"
+                            ? "Wieder ins Sortiment aufnehmen"
+                            : "Ganz aus dem Sortiment nehmen"
                         }
                         aria-label={
                           prod.manualAvailability === "DISABLED"
-                            ? `Produkt ${prod.name} aktivieren`
-                            : `Produkt ${prod.name} deaktivieren`
+                            ? `Produkt ${prod.name} wieder ins Sortiment aufnehmen`
+                            : `Produkt ${prod.name} ganz aus dem Sortiment nehmen`
                         }
                       >
                         {prod.manualAvailability === "DISABLED" ? (
@@ -493,3 +511,37 @@ export const AdminProductsView = ({
     </div>
   );
 };
+
+// Issue #171, Teil 1: manualAvailability = DISABLED wirkt global fuer beide
+// Betriebsarten dieser Veranstaltung (ein Produkt gehoert laut Schema zu
+// genau einer Veranstaltung - "alle Veranstaltungen" waere hier fachlich
+// falsch). Das Badge macht diese Ursache sichtbar, getrennt von der
+// veranstaltungsbezogenen Sperre (manualBlocked, InventoryControls).
+const SortimentRemovedBadge = () => (
+  <span
+    className="inline-flex items-center gap-1 rounded-md border border-rose-500/30 bg-rose-500/20 px-2 py-0.5 text-xs font-semibold text-rose-300"
+    title="Verkauft in keiner Betriebsart dieser Veranstaltung - weder Test- noch Echtbetrieb."
+  >
+    <Lock aria-hidden="true" className="h-3 w-3" />
+    Aus dem Sortiment genommen
+  </span>
+);
+
+// Issue #171, Teil 2 (Nachtrag zu #170): effectiveAvailability kennt die
+// Warengruppe nicht - die Filterung geschieht in der Abfrage, nicht in der
+// Verfuegbarkeitsberechnung. Ein Produkt in einer stillgelegten Warengruppe
+// erscheint deshalb als verfuegbar, obwohl die Kassen es nicht anbieten.
+// Dieses Badge rendert deshalb ausschliesslich aus category.isActive, nicht
+// aus prod.availability - keine neue Verfuegbarkeitslogik, nur zwei
+// vorhandene Fakten nebeneinandergestellt. Optik wie das vorhandene
+// Inaktiv-Badge in AdminCategoriesView (border-slate-700 bg-slate-800
+// text-slate-400, 5,71:1).
+const InactiveCategoryBadge = () => (
+  <span
+    className="inline-flex items-center gap-1 rounded-md border border-slate-700 bg-slate-800 px-2 py-1 font-medium text-slate-400"
+    title="Diese Warengruppe wurde stillgelegt. Ihre Produkte werden an der Kasse nicht angeboten - unabhängig davon, was diese Zeile sonst zeigt. Ändern lässt sich das nur in der Warengruppenverwaltung."
+  >
+    <Tag aria-hidden="true" className="h-3 w-3" />
+    Warengruppe inaktiv
+  </span>
+);

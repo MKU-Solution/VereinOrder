@@ -278,13 +278,17 @@ describe("Warengruppe deaktivieren (Issue #170)", () => {
   });
 });
 
-describe("Produkt deaktivieren (Issue #168)", () => {
+// Issue #171: Die Beschriftung wurde von "deaktivieren" auf "ganz aus dem
+// Sortiment nehmen" umgestellt, damit sie nicht mit der veranstaltungs-
+// bezogenen Sperre (manualBlocked, InventoryControls) verwechselt wird. Der
+// aufgerufene Endpunkt (manualAvailability = DISABLED) bleibt unverändert.
+describe("Produkt deaktivieren (Issue #168, #171)", () => {
   async function clickToggle() {
     await openTab("/admin/products");
     await screen.findAllByText("Bier 0,5l");
     fireEvent.click(
       screen.getAllByRole("button", {
-        name: "Produkt Bier 0,5l deaktivieren",
+        name: "Produkt Bier 0,5l ganz aus dem Sortiment nehmen",
       })[0],
     );
   }
@@ -300,7 +304,7 @@ describe("Produkt deaktivieren (Issue #168)", () => {
     );
   });
 
-  it("bietet für bereits deaktivierte Produkte einen Aktivieren-Knopf, der AVAILABLE setzt", async () => {
+  it("bietet für bereits deaktivierte Produkte einen Wieder-Aufnehmen-Knopf, der AVAILABLE setzt", async () => {
     mockedApi.get.mockImplementation((url: string) => {
       if (url.startsWith("/products/admin")) {
         return Promise.resolve({
@@ -314,7 +318,7 @@ describe("Produkt deaktivieren (Issue #168)", () => {
     await screen.findAllByText("Bier 0,5l");
     fireEvent.click(
       screen.getAllByRole("button", {
-        name: "Produkt Bier 0,5l aktivieren",
+        name: "Produkt Bier 0,5l wieder ins Sortiment aufnehmen",
       })[0],
     );
 

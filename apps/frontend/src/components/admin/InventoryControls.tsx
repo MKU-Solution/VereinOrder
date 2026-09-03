@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import {
   AlertTriangle,
   Archive,
+  CalendarOff,
   History,
   Lock,
   PackageCheck,
@@ -18,6 +19,9 @@ export interface InventoryProduct {
   inventoryTracked?: boolean;
   stockQuantity?: number | null;
   lowStockThreshold?: number | null;
+  // Issue #171: rohes Flag, getrennt von der gefalteten availability -
+  // unterscheidet "Fuer dieses Fest gesperrt" von automatisch "Ausverkauft".
+  manualBlocked?: boolean;
 }
 
 interface InventoryControlsProps {
@@ -27,8 +31,15 @@ interface InventoryControlsProps {
   onChanged: () => void;
 }
 
+// Issue #171, Teil 3: manualBlocked (veranstaltungsbezogen gesperrt) und
+// automatischer Bestand 0 (ausverkauft) verschmolzen bisher zum selben Wort
+// "Ausverkauft". Wer das liest, weiss nicht, ob Nachfuellen genuegt oder ob
+// jemand bewusst gesperrt hat. Die Reihenfolge spiegelt effectiveAvailability
+// (inventory.service.ts): DISABLED hat Vorrang vor allem, manualBlocked hat
+// Vorrang vor einem zufaellig gleichzeitig leeren Bestand.
 const statusLabel = (product: InventoryProduct) => {
   if (product.availability === "DISABLED") return "Manuell deaktiviert";
+  if (product.manualBlocked === true) return "Für dieses Fest gesperrt";
   if (product.availability === "OUT_OF_STOCK") return "Ausverkauft";
   if (product.availability === "LOW_STOCK") return "Niedriger Bestand";
   return product.inventoryTracked ? "Bestand ausreichend" : "Nicht gezählt";
@@ -40,15 +51,29 @@ export const InventorySummary = ({
   product: InventoryProduct;
 }) => {
   const status = statusLabel(product);
+  // Bewusst Amber statt Rose: eine befristete, veranstaltungsgebundene
+  // Sperre ist etwas anderes als "ganz aus dem Sortiment genommen" (Rose,
+  // AdminProductsView). amber-300 auf amber-500/15, 10,43:1 in der Zeile,
+  // 9,97:1 in der Karte (siehe Konzept zu Issue #171).
+  const isBlockedForEvent =
+    product.manualBlocked === true && product.availability !== "DISABLED";
   const Icon =
     product.availability === "DISABLED"
       ? Lock
-      : product.availability === "OUT_OF_STOCK" ||
-          product.availability === "LOW_STOCK"
-        ? AlertTriangle
-        : PackageCheck;
+      : isBlockedForEvent
+        ? CalendarOff
+        : product.availability === "OUT_OF_STOCK" ||
+            product.availability === "LOW_STOCK"
+          ? AlertTriangle
+          : PackageCheck;
   return (
-    <span className="inline-flex max-w-full items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-800 px-2 py-1 text-xs font-semibold text-slate-200">
+    <span
+      className={`inline-flex max-w-full items-center gap-1.5 rounded-lg border px-2 py-1 text-xs font-semibold ${
+        isBlockedForEvent
+          ? "border-amber-500/30 bg-amber-500/15 text-amber-300"
+          : "border-slate-700 bg-slate-800 text-slate-200"
+      }`}
+    >
       <Icon
         aria-hidden="true"
         className="h-3.5 w-3.5 shrink-0 text-amber-300"
@@ -58,7 +83,9 @@ export const InventorySummary = ({
           ? `${product.stockQuantity ?? 0} Stk. · Schwelle ${product.lowStockThreshold ?? 0}`
           : "Nicht gezählt"}
       </span>
-      <span className="text-slate-400">· {status}</span>
+      <span className={isBlockedForEvent ? "text-amber-300" : "text-slate-400"}>
+        · {status}
+      </span>
     </span>
   );
 };
@@ -216,6 +243,9 @@ export const InventoryControls = ({
                 </h2>
                 <p className="mt-1 text-sm text-slate-400">
                   Manuelle Sperre und automatischer Warnstatus bleiben getrennt.
+                  Das Produkt ganz aus dem Sortiment nehmen kannst du in der
+                  Produktliste (Schloss-Symbol) - das gilt dann für beide
+                  Betriebsarten dieser Veranstaltung.
                 </p>
               </div>
               <InventorySummary product={{ ...product, ...detail }} />
@@ -247,6 +277,7 @@ export const InventoryControls = ({
                 <BlockToggle
                   value={manualBlocked}
                   onChange={setManualBlocked}
+                  dataMode={dataMode}
                 />
                 <Action onClick={saveInitial} busy={saving}>
                   Bestand mitzählen
@@ -269,6 +300,7 @@ export const InventoryControls = ({
                 <BlockToggle
                   value={manualBlocked}
                   onChange={setManualBlocked}
+                  dataMode={dataMode}
                 />
                 <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                   <Action onClick={saveSettings} busy={saving}>
@@ -341,9 +373,11 @@ const Field = ({
 const BlockToggle = ({
   value,
   onChange,
+  dataMode,
 }: {
   value: boolean;
   onChange: (value: boolean) => void;
+  dataMode: DataMode;
 }) => (
   <label className="flex min-h-12 items-center gap-3 rounded-xl border border-slate-700 bg-slate-800/70 p-3 text-sm text-slate-100">
     <input
@@ -353,9 +387,12 @@ const BlockToggle = ({
       className="h-5 w-5 accent-amber-400"
     />
     <span>
-      <strong>Manuell sperren</strong>
+      <strong>Nur für dieses Fest sperren</strong>
       <span className="block text-xs text-slate-400">
-        Stoppt den Verkauf unabhängig vom gezählten Bestand.
+        Gilt ausschließlich für den oben gezeigten Betrieb (
+        {dataMode === "TEST" ? "Testbetrieb" : "Echtbetrieb"}) dieser
+        Veranstaltung. Der Bestand bleibt erhalten - beim nächsten Fest ist das
+        Produkt automatisch wieder da.
       </span>
     </span>
   </label>

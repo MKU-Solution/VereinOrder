@@ -134,6 +134,12 @@ export class ProductsService {
         ? stock.lowStockThreshold
         : null,
       inventoryVersion: stock?.version ?? 0,
+      // Issue #171: manualBlocked ging bislang nur gefaltet in availability
+      // ein (effectiveAvailability faltet es zu OUT_OF_STOCK). Die
+      // Produktverwaltung braucht das rohe Flag zusaetzlich, um "Fuer dieses
+      // Fest gesperrt" von einem automatisch leergelaufenen "Ausverkauft" zu
+      // unterscheiden - reines Sichtbarmachen, keine neue Entscheidung.
+      manualBlocked: stock?.manualBlocked ?? false,
     };
   }
 
