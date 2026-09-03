@@ -754,15 +754,33 @@ function postgresErrorCode(error: unknown): string | null {
  * Liest den Namen der verletzten Fremdschluesselbedingung aus einem
  * Prisma-Fehler. PostgreSQL nennt ihn im Meldungstext; er ist das einzige
  * Merkmal, an dem sich die Bestandssperre von jedem anderen Fremdschluessel
- * unterscheiden laesst. Ab Fassung 18 schiebt der Server bei RESTRICT ein
- * "RESTRICT setting of" in den Text ein.
+ * unterscheiden laesst.
+ *
+ * Der umgebende Satz ist NICHT sprachunabhaengig: ein englischer Server
+ * schreibt `violates foreign key constraint "..."` (ab Fassung 18 mit
+ * eingeschobenem "RESTRICT setting of"), ein deutscher dagegen
+ * `verletzt die RESTRICT-Einstellung des Fremdschluessel-Constraints
+ * »...«` - andere Woerter UND andere Anfuehrungszeichen (» «, nicht " ").
+ * Nachgewiesen an diesem Rechner: `SHOW lc_messages` liefert hier
+ * `German_Germany.1252`, CI meldet dagegen englisch - beide Faelle muessen
+ * tragen (#219). Ein rein englischer Ausdruck faende den Namen deshalb nur
+ * in CI und liefe hier still leer, ohne dass sich das im SQLSTATE zeigen
+ * wuerde.
+ *
+ * Was in beiden Sprachfassungen gleich bleibt, ist das unuebersetzte Wort
+ * "constraint" selbst (PostgreSQL uebernimmt es auch in der deutschen
+ * Uebersetzung woertlich, siehe "Fremdschluessel-Constraints" oben) sowie
+ * die Tatsache, dass ihm der in Anfuehrungszeichen gesetzte Bezeichner
+ * unmittelbar folgt - nur eben in " " oder in » «. Genau darauf stuetzt
+ * sich dieser Ausdruck, NICHT auf eine der beiden vollen Formulierungen.
+ * Wer ihn "vereinfacht", indem er eine der beiden Sprachfassungen
+ * herausnimmt, macht den Test wieder von der Serversprache abhaengig.
  */
 function postgresConstraintName(error: unknown): string | null {
-  return (
-    /violates (?:RESTRICT setting of )?foreign key constraint "([^"]+)"/.exec(
-      describeError(error),
-    )?.[1] ?? null
+  const match = /constraint[^"»]*(?:"([^"]+)"|»([^«]+)«)/i.exec(
+    describeError(error),
   );
+  return match?.[1] ?? match?.[2] ?? null;
 }
 
 function describeError(error: unknown): string {
