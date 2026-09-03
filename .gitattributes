@@ -1,19 +1,36 @@
-# Erzwungene LF-Zeilenenden fuer Dateien, die per Shebang von einer Shell
-# ausgefuehrt werden oder deren CRLF-Verunreinigung ein Docker-Abbild kaputt
-# macht (#172-Nachbesserung).
+# Repoweite LF-Zeilenenden (#196).
 #
-# Ohne diese Datei wandelt "core.autocrlf=true" beim Auschecken auf Windows
-# LF in CRLF um, unabhaengig davon, wie die Datei im Blob gespeichert ist.
-# Ein so ausgechecktes Entrypoint baut fehlerfrei (Docker liest Bytes ohne
-# Rueckrechnung), stirbt aber beim Containerstart mit
+# Es gibt keine .prettierrc, also gilt Prettiers Vorgabe endOfLine: "lf".
+# Die Blobs im Repository sind LF, aber "core.autocrlf=true" - die uebliche
+# Git-Voreinstellung unter Windows - wandelt sie beim Auschecken in CRLF um.
+# Ergebnis: "pnpm format:check" scheiterte auf einem frischen Windows-Klon an
+# praktisch jeder Text-Datei, nicht am Inhalt, sondern an den Zeilenenden, die
+# der Checkout selbst erzeugt hat. Die CI zeigte das nie, weil sie auf Linux
+# laeuft und dort ausgecheckte Dateien LF behalten.
+#
+# "text=auto eol=lf" loest das an der Wurzel: Git erkennt Text-Dateien anhand
+# ihres Inhalts (wie ohne dieses Attribut auch) und checkt sie unabhaengig von
+# "core.autocrlf" auf der jeweiligen Maschine immer mit LF aus. Dadurch findet
+# jeder Mitwirkende dieselben Zeilenenden vor, ganz gleich unter welchem
+# Betriebssystem geklont wird.
+* text=auto eol=lf
+
+# Die beiden folgenden Regeln waren die urspruengliche, gezielte Behebung
+# (#172) fuer ein betriebskritisches Problem und sind durch die Regel oben im
+# Ergebnis abgedeckt: fuer *.sh und Dockerfile gilt ohnehin schon eol=lf.
+# Sie bleiben trotzdem stehen, und zwar wegen dieser Begruendung, nicht wegen
+# der Regel selbst:
+#
+# Ein per CRLF ausgechecktes Entrypoint baut fehlerfrei (Docker liest Bytes
+# ohne Rueckrechnung), stirbt aber beim Containerstart mit
 # "exec ...: no such file or directory", weil "/bin/sh\r" kein gueltiger
 # Interpreter-Pfad ist - und das in einer "restart: always"-Schleife ohne
-# hilfreiche Meldung. "eol=lf" verhindert das: Git checkt diese Dateien immer
-# mit LF aus, unabhaengig von "core.autocrlf" auf der jeweiligen Maschine.
+# hilfreiche Meldung. Diese Dateien sind Festbetriebs-kritisch; sollte die
+# repoweite Regel oben je eingeschraenkt oder entfernt werden, sichert dieser
+# explizite Eintrag weiterhin genau den Fall ab, an dem es einmal einen
+# echten Ausfall gab. Multi-Zeilen-RUN-Befehle mit Backslash-Fortsetzung
+# (z. B. apps/backend/Dockerfile) sind auf CRLF nach dem Backslash ebenfalls
+# empfindlich - dieselbe Zusicherung deshalb auch fuer alle Dockerfiles.
 
 *.sh text eol=lf
-
-# Multi-Zeilen-RUN-Befehle mit Backslash-Fortsetzung (z. B.
-# apps/backend/Dockerfile) sind auf CRLF nach dem Backslash ebenfalls
-# empfindlich - dieselbe Zusicherung deshalb auch fuer alle Dockerfiles.
 Dockerfile text eol=lf
