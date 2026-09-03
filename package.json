@@ -25,12 +25,12 @@
     "pnpm": ">=9.0.0"
   },
   "pnpm": {
-    "approvedBuilds": {
-      "@nestjs/core": "10.4.22",
-      "@prisma/client": "5.22.0",
-      "@prisma/engines": "5.22.0",
-      "prisma": "5.22.0"
-    }
+    "onlyBuiltDependencies": [
+      "@prisma/client",
+      "@prisma/engines",
+      "prisma",
+      "esbuild"
+    ]
   },
   "devDependencies": {
     "@playwright/test": "1.49.1",

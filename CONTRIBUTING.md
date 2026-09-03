@@ -91,6 +91,9 @@ Commit-Nachrichten folgen dem Schema `<typ>(<bereich>): <beschreibung>`:
 ## 4. Lokale Entwicklungsbefehle
 
 ```bash
+# Einrichtung (einmalig nach dem Klonen)
+pnpm install
+
 # Gesamte Anwendung starten
 pnpm dev
 
