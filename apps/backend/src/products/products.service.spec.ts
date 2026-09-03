@@ -222,6 +222,59 @@ describe("ProductsService – Eventgrenzen und Allowlists", () => {
     expect(prisma.product.update).not.toHaveBeenCalled();
   });
 
+  // Issue #171: Verwaltung und Kassen teilen sich effectiveAvailability,
+  // aber die Verwaltung braucht zusaetzlich das rohe manualBlocked-Flag, um
+  // "Fuer dieses Fest gesperrt" von einem automatisch leergelaufenen
+  // "Ausverkauft" unterscheiden zu koennen. Das Flag wird hier lediglich
+  // sichtbar gemacht, nicht neu berechnet - effectiveAvailability bleibt
+  // unveraendert.
+  it("gibt das rohe manualBlocked-Flag als eigenes Feld zurück, getrennt von der gefalteten availability (Issue #171)", async () => {
+    const { service, prisma } = createService();
+    prisma.product.findMany = jest.fn().mockResolvedValue([
+      {
+        ...product,
+        event: { status: "ACTIVE", testMode: false },
+        inventoryStocks: [
+          {
+            dataMode: "LIVE",
+            trackingEnabled: true,
+            // Bestand ist reichlich vorhanden - OUT_OF_STOCK entsteht hier
+            // ausschliesslich durch manualBlocked, nicht durch Bestand 0.
+            stockQuantity: 12,
+            lowStockThreshold: 2,
+            manualBlocked: true,
+            version: 5,
+          },
+        ],
+      },
+    ]);
+
+    const [admin] = await service.findAllProductsAdmin(eventId);
+
+    expect(admin).toEqual(
+      expect.objectContaining({
+        availability: "OUT_OF_STOCK",
+        manualBlocked: true,
+        stockQuantity: 12,
+      }),
+    );
+  });
+
+  it("meldet manualBlocked als false, wenn kein Bestand fuer die Betriebsart existiert", async () => {
+    const { service, prisma } = createService();
+    prisma.product.findMany = jest.fn().mockResolvedValue([
+      {
+        ...product,
+        event: { status: "ACTIVE", testMode: false },
+        inventoryStocks: [],
+      },
+    ]);
+
+    const [admin] = await service.findAllProductsAdmin(eventId);
+
+    expect(admin).toEqual(expect.objectContaining({ manualBlocked: false }));
+  });
+
   it("speichert eine alte manuelle Statusänderung ausschließlich als manualAvailability", async () => {
     const { service, prisma } = createService();
     prisma.product.findUnique.mockResolvedValue({

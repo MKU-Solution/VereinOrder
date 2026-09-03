@@ -103,7 +103,11 @@ describe("AdminProductsView", () => {
   // Produkt ist per RESTRICT ohnehin unlöschbar, sonst wäre die
   // Bestellhistorie nicht mehr lesbar. Er wurde durch den bereits
   // vorhandenen Verfügbarkeitsweg (manualAvailability = DISABLED) ersetzt.
-  it("zeigt keinen Löschen-Knopf mehr, sondern einen Deaktivieren-Knopf (Issue #168)", () => {
+  //
+  // Issue #171: Die Beschriftung wurde von "deaktivieren" auf "ganz aus dem
+  // Sortiment nehmen" umgestellt, damit sie nicht mit der veranstaltungs-
+  // bezogenen Sperre (manualBlocked, InventoryControls) verwechselt wird.
+  it("zeigt keinen Löschen-Knopf mehr, sondern einen Knopf zum Sortiment-Entfernen (Issue #168, #171)", () => {
     render(
       <AdminProductsView
         products={mockProducts}
@@ -120,11 +124,13 @@ describe("AdminProductsView", () => {
       screen.queryByRole("button", { name: /löschen/i }),
     ).not.toBeInTheDocument();
     expect(
-      screen.getAllByRole("button", { name: /Bier 0,5l deaktivieren/i }).length,
+      screen.getAllByRole("button", {
+        name: /Bier 0,5l ganz aus dem Sortiment nehmen/i,
+      }).length,
     ).toBeGreaterThan(0);
   });
 
-  it("ruft onToggleAvailability beim Klick auf den Deaktivieren-Knopf auf", () => {
+  it("ruft onToggleAvailability beim Klick auf den Sortiment-entfernen-Knopf auf", () => {
     const onToggleAvailability = vi.fn();
     render(
       <AdminProductsView
@@ -139,7 +145,9 @@ describe("AdminProductsView", () => {
     );
 
     fireEvent.click(
-      screen.getAllByRole("button", { name: /Bier 0,5l deaktivieren/i })[0],
+      screen.getAllByRole("button", {
+        name: /Bier 0,5l ganz aus dem Sortiment nehmen/i,
+      })[0],
     );
 
     expect(onToggleAvailability).toHaveBeenCalledTimes(1);
@@ -148,7 +156,7 @@ describe("AdminProductsView", () => {
     );
   });
 
-  it("zeigt einen Aktivieren-Knopf für bereits deaktivierte Produkte", () => {
+  it("zeigt einen Knopf zum Wieder-Aufnehmen für bereits aus dem Sortiment genommene Produkte", () => {
     const disabledProduct = [
       { ...mockProducts[0], manualAvailability: "DISABLED" },
     ];
@@ -165,7 +173,174 @@ describe("AdminProductsView", () => {
     );
 
     expect(
-      screen.getAllByRole("button", { name: /Bier 0,5l aktivieren/i }).length,
+      screen.getAllByRole("button", {
+        name: /Bier 0,5l wieder ins Sortiment aufnehmen/i,
+      }).length,
     ).toBeGreaterThan(0);
+  });
+
+  // Issue #171, Teil 1: Ein eigenes Badge macht "ganz aus dem Sortiment
+  // genommen" (global, beide Betriebsarten dieser Veranstaltung) sichtbar,
+  // getrennt von der veranstaltungsbezogenen Sperre.
+  it("zeigt das Badge 'Aus dem Sortiment genommen' nur bei manualAvailability DISABLED", () => {
+    const disabledProduct = [
+      { ...mockProducts[0], manualAvailability: "DISABLED" },
+    ];
+    const { rerender } = render(
+      <AdminProductsView
+        products={mockProducts}
+        categoriesList={mockCategories}
+        stationsList={mockStations}
+        onRefresh={vi.fn()}
+        onOpenCreate={vi.fn()}
+        onEdit={vi.fn()}
+        onToggleAvailability={vi.fn()}
+      />,
+    );
+    expect(
+      screen.queryByText("Aus dem Sortiment genommen"),
+    ).not.toBeInTheDocument();
+
+    rerender(
+      <AdminProductsView
+        products={disabledProduct}
+        categoriesList={mockCategories}
+        stationsList={mockStations}
+        onRefresh={vi.fn()}
+        onOpenCreate={vi.fn()}
+        onEdit={vi.fn()}
+        onToggleAvailability={vi.fn()}
+      />,
+    );
+    expect(
+      screen.getAllByText("Aus dem Sortiment genommen").length,
+    ).toBeGreaterThan(0);
+  });
+
+  // Issue #171, Teil 2: Der blinde Fleck aus dem Nachtrag zu #170 -
+  // effectiveAvailability kennt die Warengruppe nicht, ein Produkt in einer
+  // stillgelegten Gruppe erscheint deshalb als AVAILABLE, obwohl die Kassen
+  // es nicht anbieten. Das Badge muss deshalb unabhängig von
+  // prod.availability erscheinen, allein aus category.isActive.
+  it("zeigt das Badge 'Warengruppe inaktiv' auch dann, wenn das Produkt selbst AVAILABLE ist", () => {
+    const inactiveCategories = [
+      { ...mockCategories[0], isActive: false },
+      mockCategories[1],
+    ];
+    const productInInactiveCategory = [
+      { ...mockProducts[0], availability: "AVAILABLE" },
+    ];
+
+    render(
+      <AdminProductsView
+        products={productInInactiveCategory}
+        categoriesList={inactiveCategories}
+        stationsList={mockStations}
+        onRefresh={vi.fn()}
+        onOpenCreate={vi.fn()}
+        onEdit={vi.fn()}
+        onToggleAvailability={vi.fn()}
+      />,
+    );
+
+    expect(screen.getAllByText("Warengruppe inaktiv").length).toBeGreaterThan(
+      0,
+    );
+  });
+
+  it("zeigt das Badge 'Warengruppe inaktiv' nicht, wenn die Kategorie aktiv ist", () => {
+    render(
+      <AdminProductsView
+        products={mockProducts}
+        categoriesList={mockCategories}
+        stationsList={mockStations}
+        onRefresh={vi.fn()}
+        onOpenCreate={vi.fn()}
+        onEdit={vi.fn()}
+        onToggleAvailability={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByText("Warengruppe inaktiv")).not.toBeInTheDocument();
+  });
+
+  // Issue #171, Teil 3: manualBlocked und automatischer Bestand 0
+  // verschmolzen bisher zum selben Wort "Ausverkauft".
+  it("unterscheidet 'Für dieses Fest gesperrt' (manualBlocked) von automatisch 'Ausverkauft'", () => {
+    const products = [
+      {
+        ...mockProducts[0],
+        id: "prod-blocked",
+        availability: "OUT_OF_STOCK",
+        manualBlocked: true,
+        inventoryTracked: true,
+        stockQuantity: 12,
+        lowStockThreshold: 2,
+      },
+      {
+        ...mockProducts[1],
+        id: "prod-soldout",
+        availability: "OUT_OF_STOCK",
+        manualBlocked: false,
+        inventoryTracked: true,
+        stockQuantity: 0,
+        lowStockThreshold: 2,
+      },
+    ];
+
+    render(
+      <AdminProductsView
+        products={products}
+        categoriesList={mockCategories}
+        stationsList={mockStations}
+        onRefresh={vi.fn()}
+        onOpenCreate={vi.fn()}
+        onEdit={vi.fn()}
+        onToggleAvailability={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getAllByText(/Für dieses Fest gesperrt/).length,
+    ).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Ausverkauft/).length).toBeGreaterThan(0);
+  });
+
+  // Mehrere Gründe gleichzeitig: global aus dem Sortiment genommen, in einer
+  // stillgelegten Warengruppe und für dieses Fest gesperrt - alle drei
+  // Kennzeichen müssen nebeneinander erscheinen, ohne einander zu verdecken.
+  it("zeigt alle zutreffenden Kennzeichen gleichzeitig, wenn mehrere Gründe vorliegen", () => {
+    const multiReasonCategories = [
+      { ...mockCategories[0], isActive: false },
+      mockCategories[1],
+    ];
+    const multiReasonProduct = [
+      {
+        ...mockProducts[0],
+        manualAvailability: "DISABLED",
+        availability: "DISABLED",
+        manualBlocked: true,
+      },
+    ];
+
+    render(
+      <AdminProductsView
+        products={multiReasonProduct}
+        categoriesList={multiReasonCategories}
+        stationsList={mockStations}
+        onRefresh={vi.fn()}
+        onOpenCreate={vi.fn()}
+        onEdit={vi.fn()}
+        onToggleAvailability={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getAllByText("Aus dem Sortiment genommen").length,
+    ).toBeGreaterThan(0);
+    expect(screen.getAllByText("Warengruppe inaktiv").length).toBeGreaterThan(
+      0,
+    );
+    expect(screen.getAllByText("Bier 0,5l").length).toBeGreaterThan(0);
   });
 });
