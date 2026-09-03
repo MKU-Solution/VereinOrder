@@ -7,7 +7,7 @@ import { OFFLINE_SYNC_HEADER } from "./offlineSync";
 // docs/development/offline-warteschlange.md Abschnitt 2). 15 s deckt sich
 // mit OFFLINE_SYNC_REQUEST_TIMEOUT_MS, das die Warteschlange je Anfrage
 // zusätzlich selbst setzt.
-const DEFAULT_REQUEST_TIMEOUT_MS = 15_000;
+export const DEFAULT_REQUEST_TIMEOUT_MS = 15_000;
 
 export const api = axios.create({
   baseURL: "/api",

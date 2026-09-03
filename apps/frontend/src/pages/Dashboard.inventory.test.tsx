@@ -102,6 +102,26 @@ describe("Bestandsschutz in der Bestellaufnahme (Issue #141)", () => {
     await waitFor(() => expect(tile).toBeDisabled());
   });
 
+  it("lässt einen unbekannten Nachrichtentyp (z. B. den Herzschlag aus #186) folgenlos", async () => {
+    render(<Dashboard />);
+    const tile = await screen.findByRole("button", { name: /Bier/ });
+    await waitFor(() => expect(sources.length).toBeGreaterThan(0));
+
+    sources[sources.length - 1]?.onmessage?.({
+      data: JSON.stringify({
+        type: "HEARTBEAT",
+        data: null,
+        timestamp: "2026-09-03T00:00:00.000Z",
+      }),
+    } as MessageEvent);
+
+    // Keine Reaktion: Kachel bleibt unverändert, kein Toast erscheint.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(tile).not.toBeDisabled();
+    expect(screen.queryByText(/AUSVERKAUFT/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Knapp/)).not.toBeInTheDocument();
+  });
+
   it("behält den Warenkorb bei INVENTORY_INSUFFICIENT unverändert", async () => {
     mockedApi.post.mockRejectedValue({
       response: { status: 409, data: { code: "INVENTORY_INSUFFICIENT" } },

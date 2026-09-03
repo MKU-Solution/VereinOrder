@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../lib/api";
 import { useAuthStore } from "../store/useAuthStore";
 import { AdminDashboard } from "./AdminDashboard";
+import { BACKUP_REQUEST_TIMEOUT_MS } from "../components/admin/AdminDashboardController";
 
 vi.mock("../lib/api", () => ({
   api: {
@@ -224,6 +225,7 @@ describe("Native Datensicherung V1 in der Administration (Issue #67)", () => {
           confirmedCreatedAt: nativeBackup.createdAt,
           queuesConfirmed: true,
         },
+        { timeout: BACKUP_REQUEST_TIMEOUT_MS },
       ),
     );
     await vi.waitFor(() =>
@@ -285,6 +287,7 @@ describe("Native Datensicherung V1 in der Administration (Issue #67)", () => {
           swapId: operation.swapId,
           confirmedCreatedAt: nativeBackup.createdAt,
         },
+        { timeout: BACKUP_REQUEST_TIMEOUT_MS },
       ),
     );
   });
@@ -303,6 +306,8 @@ describe("Native Datensicherung V1 in der Administration (Issue #67)", () => {
     await vi.waitFor(() =>
       expect(mockedApi.post).toHaveBeenCalledWith(
         `/backup/verify-restore/${nativeBackup.filename}`,
+        undefined,
+        { timeout: BACKUP_REQUEST_TIMEOUT_MS },
       ),
     );
     await vi.waitFor(() => expect(alertSpy).toHaveBeenCalledTimes(1));
