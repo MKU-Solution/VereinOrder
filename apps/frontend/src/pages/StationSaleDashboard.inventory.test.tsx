@@ -106,4 +106,25 @@ describe("Echtzeitbestand der Stationskasse (Issue #141)", () => {
     expect(tile).not.toBeDisabled();
     expect(screen.queryByText("Ausverkauft")).not.toBeInTheDocument();
   });
+
+  it("lässt einen unbekannten Nachrichtentyp (z. B. den Herzschlag aus #186) folgenlos", async () => {
+    render(<StationSaleDashboard />);
+    fireEvent.click(await screen.findByRole("button", { name: /Ausschank/ }));
+    const tile = await screen.findByRole("button", { name: /Bier/ });
+    expect(tile).not.toBeDisabled();
+    await waitFor(() => expect(sources.length).toBeGreaterThan(0));
+
+    sources[sources.length - 1]?.onmessage?.({
+      data: JSON.stringify({
+        type: "HEARTBEAT",
+        data: null,
+        timestamp: "2026-09-03T00:00:00.000Z",
+      }),
+    } as MessageEvent);
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(tile).not.toBeDisabled();
+    expect(screen.queryByText("Ausverkauft")).not.toBeInTheDocument();
+    expect(screen.queryByText("Knapp")).not.toBeInTheDocument();
+  });
 });

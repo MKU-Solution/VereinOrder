@@ -43,6 +43,18 @@ import {
   type OpenOfflineQueueSummary,
 } from "../../lib/offlineQueueDb";
 
+// #186: Die Sicherungs- und Wiederherstellungsaufrufe laufen laut
+// apps/backend/src/backup/postgresql-backup.tools.ts (RESTORE_TIMEOUT_MS,
+// MIGRATION_TIMEOUT_MS) im schlimmsten Fall bis zu 30 Minuten. Das Zeitlimit
+// der Axios-Instanz (apps/frontend/src/lib/api.ts, 15 s) bleibt dafür
+// bewusst unangetastet - eine globale Erhöhung würde das Verhalten der
+// Offline-Warteschlange aus Issue #65 beschädigen; nötig ist ein
+// abweichender Wert nur an den wenigen langen Aufrufen unten. Dieser Wert
+// ist zugleich an apps/frontend/nginx.conf, Location /api/
+// (proxy_read_timeout/proxy_send_timeout) GEBUNDEN - bleibt der dortige Wert
+// kleiner, kappt nginx die Verbindung, bevor der Browser aufgibt.
+export const BACKUP_REQUEST_TIMEOUT_MS = 30 * 60_000;
+
 type Tab = AdminAreaId;
 
 interface AdminDashboardControllerProps {
@@ -840,7 +852,9 @@ export const AdminDashboardController = ({
   const handleCreateBackup = async () => {
     setIsBackingUp(true);
     try {
-      await api.post("/backup/create");
+      await api.post("/backup/create", undefined, {
+        timeout: BACKUP_REQUEST_TIMEOUT_MS,
+      });
       alert("Datensicherung erfolgreich erstellt!");
       fetchData();
     } catch (err) {
@@ -855,6 +869,7 @@ export const AdminDashboardController = ({
     try {
       const response = await api.get(`/backup/download/${filename}`, {
         responseType: "blob",
+        timeout: BACKUP_REQUEST_TIMEOUT_MS,
       });
       const url = window.URL.createObjectURL(new Blob([response.data]));
       const link = document.createElement("a");
@@ -878,7 +893,9 @@ export const AdminDashboardController = ({
       return;
     }
     try {
-      const res = await api.post(`/backup/restore/${filename}`);
+      const res = await api.post(`/backup/restore/${filename}`, undefined, {
+        timeout: BACKUP_REQUEST_TIMEOUT_MS,
+      });
       alert(`Wiederherstellung erfolgreich!\n\n${res.data.message || ""}`);
       fetchData();
     } catch (err) {
@@ -891,7 +908,9 @@ export const AdminDashboardController = ({
 
   const handleVerifyRestore = async (filename: string) => {
     try {
-      await api.post(`/backup/verify-restore/${filename}`);
+      await api.post(`/backup/verify-restore/${filename}`, undefined, {
+        timeout: BACKUP_REQUEST_TIMEOUT_MS,
+      });
       alert(
         "Wiederherstellungsprüfung erfolgreich. Der Dump wurde vollständig in eine isolierte Nebendatenbank eingespielt, fachlich verglichen und anschließend wieder entfernt. Die Festdatenbank blieb unverändert.",
       );
@@ -931,6 +950,7 @@ export const AdminDashboardController = ({
           confirmedCreatedAt: restoreCreatedAtConfirmation,
           queuesConfirmed: restoreQueuesConfirmed,
         },
+        { timeout: BACKUP_REQUEST_TIMEOUT_MS },
       );
       alert(
         `Wiederherstellung erfolgreich umgeschaltet. Die Sicherheitssicherung bleibt bis zur ausdrücklichen Abnahme erhalten.${response.data.restartScheduled ? " Das Backend startet jetzt kontrolliert neu." : ""}`,
@@ -954,10 +974,14 @@ export const AdminDashboardController = ({
     if (!restoreOperation) return;
     setRestoreOperationBusy(true);
     try {
-      await api.post(`/backup/restore-operation/${action}`, {
-        swapId: restoreOperation.swapId,
-        confirmedCreatedAt: restoreOperationConfirmation,
-      });
+      await api.post(
+        `/backup/restore-operation/${action}`,
+        {
+          swapId: restoreOperation.swapId,
+          confirmedCreatedAt: restoreOperationConfirmation,
+        },
+        { timeout: BACKUP_REQUEST_TIMEOUT_MS },
+      );
       alert(
         action === "rollback"
           ? "Die Wiederherstellung wurde auf die vorherige Datenbank zurückgenommen. Bitte prüfen und anschließend ausdrücklich abnehmen."
