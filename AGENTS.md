@@ -114,12 +114,14 @@ Arbeitsauftrag wird eine neue, passend konfigurierte Instanz verwendet.
 ### Hinterlegte Mitarbeiterdefinitionen
 
 Zwei wiederkehrende Rollen sind unter `.claude/agents/` als Dauerauftrag hinterlegt, damit Modell,
-Denkstufe und Pflichten nicht bei jeder Delegation neu entschieden werden müssen:
+Denkstufe und Pflichten nicht bei jeder Delegation neu entschieden werden müssen. Der Rollenname,
+unter dem eine Definition angesprochen wird, kommt aus dem Frontmatter-Feld `name` der jeweiligen
+Datei, nicht aus dem Dateinamen; beide stimmen hier bewusst überein.
 
-| Datei                             | Rolle         | Modell   | Denkstufe |
-| --------------------------------- | ------------- | -------- | --------- |
-| `.claude/agents/ui-ux-konzept.md` | UI/UX-Konzept | `sonnet` | `high`    |
-| `.claude/agents/waechtertests.md` | Wächtertests  | `sonnet` | `medium`  |
+| Datei                             | Rolle         | Frontmatter `name` | Modell   | Denkstufe |
+| --------------------------------- | ------------- | ------------------ | -------- | --------- |
+| `.claude/agents/ui-ux-konzept.md` | UI/UX-Konzept | `ui-ux-konzept`    | `sonnet` | `high`    |
+| `.claude/agents/waechtertests.md` | Wächtertests  | `waechtertests`    | `sonnet` | `medium`  |
 
 **Warum das UI/UX-Konzept `sonnet` mit `high` bekommt und nicht `opus`.** Die Denkstufe trägt hier
 mehr als die Modellklasse: Die Fehler, die in Issue #86 auftraten, waren Rechen- und
