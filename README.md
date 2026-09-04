@@ -44,8 +44,7 @@ VereinOrder/
 ├── packages/
 │   ├── database/        # Prisma ORM Schema & PostgreSQL-Migrationen
 │   └── shared/          # Gemeinsame TypeScript-Typen, Enums & Validierungen
-├── docs/                # Umfassende Architektur- und Betriebsdokumentation
-└── infrastructure/      # Dockerfiles & Docker Compose Konfigurationen
+└── docs/                # Umfassende Architektur- und Betriebsdokumentation
 ```
 
 ---
@@ -99,21 +98,21 @@ Zeitfenster vor Abschluss der Ersteinrichtung, stehen in der
 
 ## 📚 Dokumentationsindex
 
-Eine vollständige Übersicht aller Fach- und Betriebsthemen findest du in der [Dokumentation](file:///c:/Users/Administrator/Documents/Projects/nodejs/VereinOrder/docs):
+Eine vollständige Übersicht aller Fach- und Betriebsthemen findest du in der [Dokumentation](docs):
 
-| Bereich            | Dokument                                                                                                                                 | Beschreibung                                                                |
-| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
-| **Architektur**    | [Systemarchitektur](file:///c:/Users/Administrator/Documents/Projects/nodejs/VereinOrder/docs/architecture/uebersicht.md)                | Komponenten, Schichten, Datenfluss & Technologieentscheidungen              |
-|                    | [Datenmodell & Status](file:///c:/Users/Administrator/Documents/Projects/nodejs/VereinOrder/docs/architecture/datenmodell.md)            | ER-Diagramm, PostgreSQL-Schema, Invarianten & Statusmaschinen               |
-|                    | [Rollen- & Berechtigungsmatrix](file:///c:/Users/Administrator/Documents/Projects/nodejs/VereinOrder/docs/architecture/rollen-matrix.md) | Berechtigungen, Guards & Zugriffskontrolle je Benutzerrolle                 |
-|                    | [ADR-Verzeichnis](file:///c:/Users/Administrator/Documents/Projects/nodejs/VereinOrder/docs/architecture/decisions/README.md)            | Architecture Decision Records zu Datensicherung, Auth u. v. m.              |
-| **Schnittstellen** | [REST-API-Referenz](file:///c:/Users/Administrator/Documents/Projects/nodejs/VereinOrder/docs/api/endpunkte.md)                          | Alle Endpunkte, DTOs, Validierungen & Fehlercodes                           |
-|                    | [Echtzeit-Katalog (SSE)](file:///c:/Users/Administrator/Documents/Projects/nodejs/VereinOrder/docs/api/echtzeit.md)                      | Server-Sent Events für Ausverkauft-Meldungen, Bestellungen & Druck          |
-| **Betrieb (Ops)**  | [Installationsanleitung](file:///c:/Users/Administrator/Documents/Projects/nodejs/VereinOrder/docs/ops/installation.md)                  | Setup mit Docker Compose auf Servern & Mini-PCs                             |
-|                    | [Raspberry Pi Handbuch](file:///c:/Users/Administrator/Documents/Projects/nodejs/VereinOrder/docs/ops/raspberry-pi.md)                   | Schritt-für-Schritt-Anleitung für Raspberry Pi OS, Access Point & mDNS      |
-|                    | [Druckerhandbuch](file:///c:/Users/Administrator/Documents/Projects/nodejs/VereinOrder/docs/ops/druckerhandbuch.md)                      | ESC/POS-Netzwerkdrucker, USB-Drucker via CUPS, Failover & Fehlerbehebung    |
-|                    | [Betriebs- & Wartungshandbuch](file:///c:/Users/Administrator/Documents/Projects/nodejs/VereinOrder/docs/ops/betrieb-wartung.md)         | Kassenablauf, Backups, Restore-Swap, Updates & Notfallwiederherstellung     |
-|                    | [Umgebungsvariablen](file:///c:/Users/Administrator/Documents/Projects/nodejs/VereinOrder/docs/ops/umgebungsvariablen.md)                | Vollständige Referenz aller Konfigurationsschlüssel                         |
-| **Bedienung**      | [Bedienungsabläufe](file:///c:/Users/Administrator/Documents/Projects/nodejs/VereinOrder/docs/product/bedienablaeufe.md)                 | Schritt-für-Schritt-Anleitungen für Admin, Kellner, Kasse, Station & Runner |
-| **Entwicklung**    | [CONTRIBUTING.md](file:///c:/Users/Administrator/Documents/Projects/nodejs/VereinOrder/CONTRIBUTING.md)                                  | Beitragsrichtlinien, Qualitäts-Workflow & Teststandards                     |
-|                    | [SECURITY.md](file:///c:/Users/Administrator/Documents/Projects/nodejs/VereinOrder/SECURITY.md)                                          | Sicherheitsmodell, Absicherung im lokalen Netz & Meldewege                  |
+| Bereich            | Dokument                                                            | Beschreibung                                                                |
+| ------------------ | ------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| **Architektur**    | [Systemarchitektur](docs/architecture/uebersicht.md)                | Komponenten, Schichten, Datenfluss & Technologieentscheidungen              |
+|                    | [Datenmodell & Status](docs/architecture/datenmodell.md)            | ER-Diagramm, PostgreSQL-Schema, Invarianten & Statusmaschinen               |
+|                    | [Rollen- & Berechtigungsmatrix](docs/architecture/rollen-matrix.md) | Berechtigungen, Guards & Zugriffskontrolle je Benutzerrolle                 |
+|                    | [ADR-Verzeichnis](docs/architecture/decisions/README.md)            | Architecture Decision Records zu Datensicherung, Auth u. v. m.              |
+| **Schnittstellen** | [REST-API-Referenz](docs/api/endpunkte.md)                          | Alle Endpunkte, DTOs, Validierungen & Fehlercodes                           |
+|                    | [Echtzeit-Katalog (SSE)](docs/api/echtzeit.md)                      | Server-Sent Events für Ausverkauft-Meldungen, Bestellungen & Druck          |
+| **Betrieb (Ops)**  | [Installationsanleitung](docs/ops/installation.md)                  | Setup mit Docker Compose auf Servern & Mini-PCs                             |
+|                    | [Raspberry Pi Handbuch](docs/ops/raspberry-pi.md)                   | Schritt-für-Schritt-Anleitung für Raspberry Pi OS, Access Point & mDNS      |
+|                    | [Druckerhandbuch](docs/ops/druckerhandbuch.md)                      | ESC/POS-Netzwerkdrucker, USB-Drucker via CUPS, Failover & Fehlerbehebung    |
+|                    | [Betriebs- & Wartungshandbuch](docs/ops/betrieb-wartung.md)         | Kassenablauf, Backups, Restore-Swap, Updates & Notfallwiederherstellung     |
+|                    | [Umgebungsvariablen](docs/ops/umgebungsvariablen.md)                | Vollständige Referenz aller Konfigurationsschlüssel                         |
+| **Bedienung**      | [Bedienungsabläufe](docs/product/bedienablaeufe.md)                 | Schritt-für-Schritt-Anleitungen für Admin, Kellner, Kasse, Station & Runner |
+| **Entwicklung**    | [CONTRIBUTING.md](CONTRIBUTING.md)                                  | Beitragsrichtlinien, Qualitäts-Workflow & Teststandards                     |
+|                    | [SECURITY.md](SECURITY.md)                                          | Sicherheitsmodell, Absicherung im lokalen Netz & Meldewege                  |

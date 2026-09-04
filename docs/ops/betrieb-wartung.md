@@ -31,10 +31,11 @@ Dieses Handbuch beschreibt die operativen Abläufe während eines Festes, Datens
 
 ## 2. Datensicherung & Backup-Konzept
 
-VereinOrder speichert Sicherungen als **native PostgreSQL-Custom-Dumps (`.dump`)** im Verzeichnis `backups/`:
+VereinOrder speichert Sicherungen als **native PostgreSQL-Custom-Dumps (`.dump`)**. Ein Verzeichnis `backups/` gibt es auf dem Host nicht: Der Backend-Container schreibt nach `/app/backups`, und dieser Pfad ist das benannte Docker-Volume `vereinorder_backup_data` (`docker-compose.yml`, Schlüssel `backup_data`).
 
 - **Automatisches Vor-Migrations-Backup:** Vor jeder Datenbankmigration wird automatisch eine Sicherung angelegt.
 - **Manuelles Backup im laufenden Betrieb:** Über das Admin-Panel (_Datensicherung -> Neues Backup erstellen_) wird ein konsistenter Snapshot ohne Betriebsunterbrechung erzeugt.
+- **Zugriff auf die Dump-Datei, z. B. für den USB-Stick-Export nach Festende (Abschnitt 1, „Nach Festende (Abschluss)", Tages-Backup):** Der einfachste Weg ist die Schaltfläche **„Herunterladen"** neben jeder Sicherung im Admin-Panel unter _Datensicherung_ — sie lädt die Datei direkt aus dem Browser herunter (nur für Administratoren, `apps/backend/src/backup/backup.controller.ts`, `GET /backup/download/:filename`). Ohne laufende Anwendung führt der Weg über das Docker-Volume selbst, siehe [`backup-recovery.md`](backup-recovery.md), Abschnitt 4.
 
 ---
 

@@ -61,8 +61,7 @@ VereinOrder/
 ├── packages/
 │   ├── database/        # Prisma ORM, Schema, SQL-Migrationen & Seeds
 │   └── shared/          # Gemeinsame Schnittstellen, Enums & Typen
-├── docs/                # Dokumentation
-└── infrastructure/      # Dockerfiles & Compose-Setups
+└── docs/                # Dokumentation
 ```
 
 ---

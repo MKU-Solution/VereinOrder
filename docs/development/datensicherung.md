@@ -1,7 +1,8 @@
 # Datensicherung, Wiederherstellung und Aufbewahrung (Issue #67)
 
 Verbindlicher Entwurf für die Umsetzung. Betrifft `apps/backend/src/backup/`, das
-Backend-Abbild, `docker-compose.yml`, `infrastructure/scripts/`, die Administration und
+Backend-Abbild, `docker-compose.yml`, `infrastructure/scripts/` (**gelöscht mit Commit
+f1d2726, #67; siehe Abschnitt 14, Punkt 5**), die Administration und
 die CI. Ergänzt `offline-warteschlange.md` (Abschnitt 6 dieses Entwurfs hängt daran),
 `../ops/backup-recovery.md` und `../product/master-prompt.md`, Abschnitt 31.
 
@@ -25,7 +26,8 @@ Der heutige Sicherungsweg besteht aus 354 Zeilen in
 `apps/backend/src/backup/backup.service.ts`, vier Endpunkten in
 `backup.controller.ts`, zwei Schaltflächen im Administrationsbereich
 (`apps/frontend/src/pages/AdminDashboard.tsx:1032-1080`) und zwei Shell-Skripten in
-`infrastructure/scripts/`, die einen völlig anderen Weg gehen als die Anwendung.
+`infrastructure/scripts/` (**gelöscht mit Commit f1d2726, #67; siehe Abschnitt 14,
+Punkt 5**), die einen völlig anderen Weg gehen als die Anwendung.
 
 ### Bestätigte Befunde der Projektleitung
 
@@ -157,8 +159,10 @@ Datenbank — oder scheitern, weil es sie nicht gibt. `infrastructure/docker-com
 ist ein zweites, veraltetes Compose-Bündel, das ebenfalls `VereinOrder_test` anlegt und
 mit dem Compose-Bündel im Wurzelverzeichnis um denselben Containernamen
 `vereinorder_postgres` konkurrierte. **Der Namensstreit ist mit #185 entfallen:** Das
-Bündel im Wurzelverzeichnis vergibt keine festen Containernamen mehr. Der eigentliche
-Befund – die fest verdrahtete falsche Datenbank – besteht unverändert fort.
+Bündel im Wurzelverzeichnis vergibt keine festen Containernamen mehr. **Gelöscht mit
+Commit f1d2726 (#67), wie unter Abschnitt 14, Punkt 5 beschlossen:** `backup.sh`,
+`restore.sh` und `infrastructure/docker-compose.yml` bestehen nicht mehr; der Befund
+betrifft keine bestehende Datei mehr.
 
 **B18 — Die Betriebsanleitung beschreibt einen Weg, den es nicht gibt.**
 `../ops/backup-recovery.md:35` weist an, eine Datei
@@ -588,7 +592,9 @@ Wiederherstellung selbst das versagende Werkzeug ist — hat drei gestaffelte An
 
    > **Der letzte Rückweg darf niemals die Anwendung voraussetzen.**
 
-   Dafür wird `infrastructure/scripts/restore.sh` neu geschrieben. Es braucht nur
+   Dafür wird `infrastructure/scripts/restore.sh` neu geschrieben. **Gelöscht mit
+   Commit f1d2726 (#67), wie unter Abschnitt 14, Punkt 5 beschlossen; umgesetzt als
+   `scripts/ops/restore.sh`.** Es braucht nur
    `psql`, `pg_restore`, den Dump und das Manifest — kein Backend, kein Node, kein
    Prisma. Es prüft dieselbe Prüfsumme, macht dieselbe `pg_restore --list`-Vorprüfung,
    verlangt dieselbe wörtliche Bestätigung und legt dieselbe Nebendatenbank an. Es ist
@@ -923,11 +929,11 @@ vermerkt.
 | `apps/backend/src/diagnostics/diagnostics.service.ts:85` | `listBackups()` bei jedem Diagnoseabruf; liest und hasht den gesamten Sicherungsbestand (B12).                                                                                                                                                                                                                                                                                                                                                                                                   |
 | `apps/frontend/src/pages/AdminDashboard.tsx:2244`        | Spalte „Integrität (SHA256)" zeigt eine beim Auflisten neu berechnete Prüfsumme. Sie kann nie abweichen und sagt nichts aus (B11).                                                                                                                                                                                                                                                                                                                                                               |
 | `apps/frontend/src/pages/AdminDashboard.tsx:1064-1080`   | Die Wiederherstellung wird mit einem einzelnen `confirm()` ausgelöst, ohne Eingabe einer Bestätigung, ohne Anzeige des Sicherungszeitpunkts und ohne Warnung über offene Sitzungen.                                                                                                                                                                                                                                                                                                              |
-| `scripts/ci/check-repository-hygiene.mjs:17`             | Das Muster endet auf `$` und greift deshalb bei `.sql.gz` nicht — also genau bei den Dateien, die `infrastructure/scripts/backup.sh:7` erzeugt (B19).                                                                                                                                                                                                                                                                                                                                            |
+| `scripts/ci/check-repository-hygiene.mjs:17`             | Das Muster endet auf `$` und greift deshalb bei `.sql.gz` nicht — also genau bei den Dateien, die `infrastructure/scripts/backup.sh:7` erzeugt (B19). **Gelöscht mit Commit f1d2726 (#67)**; siehe Abschnitt 14, Punkt 5.                                                                                                                                                                                                                                                                        |
 | `.gitignore` (letzte zwei Zeilen)                        | Nur `apps/backend/backups/*` ist ignoriert. Ein `backups/`-Verzeichnis im Wurzelverzeichnis, das `backup.sh:5` als Vorgabe nahelegt, ist nicht ignoriert (B19).                                                                                                                                                                                                                                                                                                                                  |
-| `infrastructure/scripts/backup.sh:14`, `:16`             | Fest verdrahtete Datenbank `VereinOrder_test` statt `${POSTGRES_DB}` (B17).                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| `infrastructure/scripts/restore.sh:28`, `:30`            | Dieselbe fest verdrahtete Datenbank; das Skript überschreibt im Ernstfall die falsche (B17).                                                                                                                                                                                                                                                                                                                                                                                                     |
-| `infrastructure/docker-compose.yml:1-21`                 | Zweites, veraltetes Compose-Bündel mit demselben Containernamen `vereinorder_postgres` wie `docker-compose.yml`. Zwei Bündel, die um denselben Namen streiten (B17). **Namensstreit behoben durch #185** (keine festen Containernamen mehr); das veraltete Bündel selbst besteht fort.                                                                                                                                                                                                           |
+| `infrastructure/scripts/backup.sh:14`, `:16`             | Fest verdrahtete Datenbank `VereinOrder_test` statt `${POSTGRES_DB}` (B17). **Gelöscht mit Commit f1d2726 (#67)**; siehe Abschnitt 14, Punkt 5.                                                                                                                                                                                                                                                                                                                                                  |
+| `infrastructure/scripts/restore.sh:28`, `:30`            | Dieselbe fest verdrahtete Datenbank; das Skript überschreibt im Ernstfall die falsche (B17). **Gelöscht mit Commit f1d2726 (#67)**; siehe Abschnitt 14, Punkt 5.                                                                                                                                                                                                                                                                                                                                 |
+| `infrastructure/docker-compose.yml:1-21`                 | Zweites, veraltetes Compose-Bündel mit demselben Containernamen `vereinorder_postgres` wie `docker-compose.yml`. Zwei Bündel, die um denselben Namen streiten (B17). **Namensstreit behoben durch #185** (keine festen Containernamen mehr). **Gelöscht mit Commit f1d2726 (#67)**, wie unter Abschnitt 14, Punkt 5 beschlossen; die Datei besteht nicht mehr.                                                                                                                                   |
 | `docs/ops/backup-recovery.md:35`                         | Weist auf `restore.sh` mit einer `.sql.gz`-Datei hin, die kein Weg im System erzeugt (B18).                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `docs/ops/raspberry-pi-setup.md`, gesamtes Dokument      | **Behoben durch #172, unabhängig von diesem Vorgang.** Ursprünglicher Befund: Beschrieb die Inbetriebnahme ohne einen einzigen Migrationsschritt, nichts im Festbetrieb rief `prisma migrate deploy` auf (B20). Seit #172 führt `apps/backend/docker-entrypoint.sh` die Migration beim Containerstart selbsttätig aus; `docs/ops/raspberry-pi-setup.md` verlangt `scripts/ops/upgrade.sh` seither nur noch für Aktualisierungen eines laufenden Systems, nicht mehr vor dem ersten Start (#176). |
 | `apps/backend/src/backup/backup.service.ts:98`           | `version: "0.1.0"` ist fest verdrahtet und nicht die Anwendungsversion aus `package.json`. Eine Kompatibilitätsprüfung darauf wäre wertlos.                                                                                                                                                                                                                                                                                                                                                      |
