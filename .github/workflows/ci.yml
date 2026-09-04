@@ -22,11 +22,11 @@ jobs:
     name: Format, Lint, Typen, Unit-Tests und Build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v5
         with:
           version: ${{ env.PNPM_VERSION }}
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
@@ -70,11 +70,11 @@ jobs:
       MIGRATION_TEST_ADMIN_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
       TEST_DATABASE_CONFIRMATION: VEREINORDER_TEST_ONLY
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v5
         with:
           version: ${{ env.PNPM_VERSION }}
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
@@ -120,11 +120,11 @@ jobs:
       DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/vereinorder_e2e_test?schema=public
       TEST_DATABASE_CONFIRMATION: VEREINORDER_TEST_ONLY
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v5
         with:
           version: ${{ env.PNPM_VERSION }}
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
@@ -147,7 +147,7 @@ jobs:
         run: pnpm test:e2e
       - name: Browser-Artefakte hochladen
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: playwright-report
           path: |
@@ -167,10 +167,10 @@ jobs:
         component: [backend, frontend, print-worker]
         platform: [linux/amd64, linux/arm64]
     steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
       - name: Image bauen
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: apps/${{ matrix.component }}/Dockerfile
@@ -213,7 +213,7 @@ jobs:
     # eine neue Aussage ueber die Migration selbst zu liefern - unnoetiger
     # Ressourcenverbrauch fuer diesen Auftrag.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # Seit #175 werden hier BEWUSST keine Geheimnisse mehr gesetzt. Genau
       # das ist die Zusage: "docker compose up -d" laeuft ohne .env und ohne
       # gesetzte Variablen durch. Vorher erzwang docker-compose.yml
@@ -559,7 +559,7 @@ jobs:
     # schöpft). Fehlt die Wegwerfmigration in dieser Liste, stand der Dump
     # nachweislich vor ihrer Anwendung.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Installation von vor #180 nachstellen (root-eigene Volumes)
         run: |
           set -euo pipefail
@@ -795,7 +795,7 @@ jobs:
         component: [backend, frontend, print-worker]
         platform: [linux/amd64, linux/arm64]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Registry-Namensraum klein schreiben (#243)
         # Der Pfadanteil einer Docker-Abbildkennung muss durchgehend klein
         # geschrieben sein; "github.repository_owner" reicht Grossbuchstaben
@@ -809,15 +809,15 @@ jobs:
         # regulaer als "${{ env.OWNER_LOWER }}" zur Verfuegung. Heute aendert
         # das nichts: "seipekm" ist bereits vollstaendig klein geschrieben.
         run: echo "OWNER_LOWER=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_ENV"
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Abbild bauen und per Digest veröffentlichen
         id: bau
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: apps/${{ matrix.component }}/Dockerfile
@@ -840,7 +840,7 @@ jobs:
           digest="${{ steps.bau.outputs.digest }}"
           test -n "$digest"
           touch "/tmp/digests/${digest#sha256:}"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: digest-${{ matrix.component }}-${{ matrix.platform == 'linux/arm64' && 'arm64' || 'amd64' }}
           path: /tmp/digests/*
@@ -867,13 +867,13 @@ jobs:
         # hier. Begruendung siehe dort. Heute wirkungslos: "seipekm" bleibt
         # "seipekm".
         run: echo "OWNER_LOWER=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_ENV"
-      - uses: docker/setup-buildx-action@v3
-      - uses: actions/download-artifact@v4
+      - uses: docker/setup-buildx-action@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: digest-${{ matrix.component }}-*
           path: /tmp/digests
           merge-multiple: true
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -910,9 +910,9 @@ jobs:
       contents: read
       pull-requests: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: gitleaks/gitleaks-action@v2
+      - uses: gitleaks/gitleaks-action@v3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
