@@ -19,7 +19,7 @@ Dieses Dokument beschreibt die Installation von VereinOrder für den Festbetrieb
 ### Schritt 1: Repository klonen oder Release herunterladen
 
 ```bash
-git clone https://github.com/seipekm/VereinOrder.git /opt/vereinorder
+git clone https://github.com/MKU-Solution/VereinOrder.git /opt/vereinorder
 cd /opt/vereinorder
 ```
 
@@ -210,7 +210,7 @@ geprüften Fassung die sicherere Wahl.
 
 > **Einmalig nach dem allerersten Veröffentlichungslauf:** GitHub legt neue Pakete
 > zunächst **privat** an. Die drei Pakete unter
-> `https://github.com/seipekm?tab=packages` müssen einmal auf **Public** gestellt
+> `https://github.com/orgs/MKU-Solution/packages` müssen einmal auf **Public** gestellt
 > werden, sonst scheitert `docker compose pull` auf dem Pi mit `denied`. Danach ist
 > nichts mehr zu tun.
 

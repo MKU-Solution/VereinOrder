@@ -136,14 +136,14 @@ COMPOSE_CONFIG_JSON=$(docker compose config --format json) || {
 }
 
 # Die konfigurierte Kennung eines Dienstes, samt Marke:
-#   "ghcr.io/seipekm/vereinorder-backend:latest"
+#   "ghcr.io/mku-solution/vereinorder-backend:latest"
 vereinorder_configured_image() {
   printf '%s' "$COMPOSE_CONFIG_JSON" |
     jq -er --arg dienst "$1" '.services[$dienst].image'
 }
 
 # Dieselbe Kennung ohne Marke, als Ablageort fuer ":previous":
-#   "ghcr.io/seipekm/vereinorder-backend"
+#   "ghcr.io/mku-solution/vereinorder-backend"
 # Der Ausdruck schneidet nur eine Marke ab, keinen Port im Registrynamen -
 # nach dem letzten ":" darf kein "/" mehr folgen.
 vereinorder_image_repository() {
