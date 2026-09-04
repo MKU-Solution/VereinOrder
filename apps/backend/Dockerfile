@@ -14,7 +14,29 @@ COPY packages/shared/package.json ./packages/shared/
 COPY apps/backend/package.json ./apps/backend/
 
 # Install dependencies
-RUN pnpm install --frozen-lockfile
+#
+# @prisma/client richtet ueber sein eigenes Postinstall ein "prisma generate"
+# aus - an dieser Stelle liegt das Schema aber noch nicht im Bau (es kommt
+# erst mit der naechsten COPY-Zeile), das Postinstall meldet deshalb
+# "prisma:warn We could not find your Prisma schema in the default
+# locations" und erzeugt deshalb keinen Client. PRISMA_SKIP_POSTINSTALL_GENERATE
+# unterdrueckt genau dieses Postinstall (node_modules/@prisma/client/scripts/
+# postinstall.js: "if (!process.env.PRISMA_SKIP_POSTINSTALL_GENERATE)
+# { main() ... }").
+#
+# Uebersprungen wird damit ZUSAETZLICH das "createDefaultGeneratedThrowFiles()"
+# am Anfang von main(): Ohne Postinstall fehlt "node_modules/.prisma/client"
+# ganz, statt die Stubs zu enthalten, die eine Verwendung vor dem Erzeugen mit
+# einer verstaendlichen Meldung abfangen. Das ist hier unschaedlich, aber nur
+# aus einem Grund: Der naechste Schritt, der den Client braucht, erzeugt ihn
+# vorher selbst. Das ist NICHT am Skriptnamen abzulesen - "run build" von
+# @vereinorder/database ist zwar nur "tsc", zieht aber ueber den npm-Hook
+# "prebuild" ein "prisma generate" vor (packages/database/package.json). Wer
+# diese Reihenfolge aendert, muss die Zeile hier mit aendern.
+#
+# Nur fuer diese eine Zeile gesetzt, nicht als ENV der Schicht, damit spaetere
+# Schritte, die das Generat wirklich brauchen, unberuehrt bleiben.
+RUN PRISMA_SKIP_POSTINSTALL_GENERATE=1 pnpm install --frozen-lockfile
 
 # Copy schema and generate Prisma Client
 COPY packages/database ./packages/database
@@ -52,7 +74,14 @@ COPY packages/database/package.json ./packages/database/
 COPY packages/shared/package.json ./packages/shared/
 COPY apps/backend/package.json ./apps/backend/
 
-RUN pnpm install --prod --frozen-lockfile
+# Wie im Builder: Das Schema liegt in dieser Schicht erst nach der naechsten
+# COPY-Zeile vor, das Postinstall von @prisma/client warnte deshalb hier
+# ebenso "prisma:warn We could not find your Prisma schema in the default
+# locations". PRISMA_SKIP_POSTINSTALL_GENERATE unterdrueckt das Postinstall
+# selbst (siehe Begruendung und Fundstelle beim Builder oben); die
+# tatsaechliche, plattformspezifische Erzeugung erfolgt weiter unten
+# ausdruecklich und wird dort auch geprueft.
+RUN PRISMA_SKIP_POSTINSTALL_GENERATE=1 pnpm install --prod --frozen-lockfile
 
 COPY --from=builder /app/packages/database ./packages/database
 
