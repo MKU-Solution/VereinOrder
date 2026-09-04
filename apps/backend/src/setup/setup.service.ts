@@ -23,30 +23,58 @@ export const SETUP_ALREADY_DONE_MESSAGE =
  * Der Verlierer eines Wettlaufs erreicht uns nicht als saubere Fachausnahme,
  * sondern als Datenbankfehler. Zwei Formen sind moeglich:
  *
- * - `P2034` - Prismas Abbildung von SQLSTATE 40001
- *   (`could not serialize access due to read/write dependencies`) und 40P01
- *   (`deadlock detected`). Genau das wirft PostgreSQL, wenn die
+ * - `P2034` - Prismas Abbildung von SQLSTATE 40001 (Serialisierungskonflikt)
+ *   und 40P01 (Deadlock). Genau das wirft PostgreSQL, wenn die
  *   SERIALIZABLE-Pruefung den Zyklus aus "beide haben leer gelesen, beide
  *   haben geschrieben" aufloest.
  * - `P2002` - beide wollten denselben Benutzernamen; dann greift schon der
  *   eindeutige Index auf `User.username`.
  *
- * Der Meldungsabgleich ist die Rueckfallebene: welchen Prisma-Code eine
- * kuenftige Fassung fuer 40001 vergibt, ist nicht unser Vertrag. Ein
- * unbehandelter 40001 wuerde als 500 nach draussen gehen und damit den
- * Wettlauf verraten, statt ihn zu verschweigen.
+ * Beide Codes sind der belastbare Weg und sprachunabhaengig.
+ *
+ * ## Warum der Rueckfall den SQLSTATE prueft, nicht den Klartext
+ *
+ * welchen Prisma-Code eine kuenftige Fassung fuer 40001 vergibt, ist nicht
+ * unser Vertrag. Ein unbehandelter 40001 wuerde als 500 nach draussen gehen
+ * und damit den Wettlauf verraten, statt ihn zu verschweigen - der Rueckfall
+ * soll das auffangen. Er prueft aber NICHT mehr den englischen Klartext
+ * ("could not serialize", "deadlock detected"), denn der war dafuer
+ * untauglich, gemessen auf diesem Server (Issue #227,
+ * `lc_messages = German_Germany.1252`, PostgreSQL 18):
+ *
+ * - Einen echten 40001 liefert Prisma 5.22 als `P2034` mit LEEREM `meta` und
+ *   einer von Prisma selbst verfassten, englischen Meldung ("Transaction
+ *   failed due to a write conflict or a deadlock. Please retry your
+ *   transaction"). Der PostgreSQL-Klartext taucht darin ueberhaupt nicht auf;
+ *   der englische Abgleich haette selbst auf einem englischen Server nichts
+ *   gefunden - er war eine Illusion von Sicherheit, kein zweites Netz.
+ * - Reicht Prisma einen rohen Datenbankfehler durch (`P2010`), steht der
+ *   PostgreSQL-Klartext in der Landessprache dort (gemessen fuer eine fehlende
+ *   Relation: "Relation »...« existiert nicht"). Der 40001-Klartext lautet auf
+ *   diesem Server "konnte Zugriff nicht serialisieren wegen
+ *   Lese-/Schreib-Abhaengigkeiten zwischen Transaktionen". Sprachunabhaengig
+ *   ist an dieser Form nur der SQLSTATE: als `meta.code` ("40001") und als
+ *   Ziffernfolge in der Meldung ("Code: `40001`").
+ *
+ * Der Rueckfall prueft deshalb den SQLSTATE: `meta.code` fuer den P2010-Weg
+ * und die Ziffern `40001`/`40P01` in der Meldung als letztes Netz (etwa fuer
+ * einen `PrismaClientUnknownRequestError`, der den SQLSTATE in Klammern
+ * mitfuehrt). Eine Liste uebersetzter Klartexte waere keine Loesung - sie
+ * verschoebe die Luecke nur auf die naechste Serversprache.
  */
 export function isFirstAdministratorRaceLost(error: unknown): boolean {
   if (error instanceof Prisma.PrismaClientKnownRequestError) {
     if (error.code === "P2034" || error.code === "P2002") return true;
+    // P2010 (roher Datenbankfehler): der SQLSTATE steht sprachunabhaengig in
+    // `meta.code`, waehrend der Meldungstext in der Serversprache vorliegt.
+    const sqlState = (error.meta as { code?: unknown } | undefined)?.code;
+    if (sqlState === "40001" || sqlState === "40P01") return true;
   }
   if (
     error instanceof Prisma.PrismaClientKnownRequestError ||
     error instanceof Prisma.PrismaClientUnknownRequestError
   ) {
-    return /40001|40P01|could not serialize|deadlock detected/i.test(
-      error.message || "",
-    );
+    return /40001|40P01/.test(error.message || "");
   }
   return false;
 }

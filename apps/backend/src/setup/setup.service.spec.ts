@@ -296,5 +296,111 @@ describe("SetupService (Issue #173)", () => {
         ),
       ).toBe(false);
     });
+
+    /**
+     * Waechter fuer Issue #227: Die Wettlauferkennung muss auch auf einem
+     * nicht-englischen Server greifen, wenn der strukturierte Prisma-Code
+     * einmal ausfaellt.
+     *
+     * Die folgenden Fehlerwerte sind aus einer echten Messung auf diesem
+     * Server (`lc_messages = German_Germany.1252`, PostgreSQL 18) gebaut, nicht
+     * erfunden:
+     *
+     * - Ein roher Datenbankfehler reicht den SQLSTATE als `meta.code` durch und
+     *   den PostgreSQL-Klartext in der Serversprache. Der 40001-Klartext lautet
+     *   dort: "konnte Zugriff nicht serialisieren wegen
+     *   Lese-/Schreib-Abhaengigkeiten zwischen Transaktionen" - er enthaelt
+     *   WEDER "could not serialize" NOCH "deadlock detected".
+     * - Prismas P2010-Meldung bettet den SQLSTATE als ``Code: `40001``` ein.
+     *
+     * `verfehltMitEnglischemKlartext` bildet die FRUEHERE Rueckfallebene nach.
+     * Sie belegt den Rot-Beweis: Auf die gemessenen deutschen Fehler haette der
+     * englische Abgleich `false` geliefert, die neue Fassung liefert `true`.
+     */
+    const DEUTSCHER_40001_KLARTEXT =
+      "konnte Zugriff nicht serialisieren wegen Lese-/Schreib-Abhängigkeiten zwischen Transaktionen";
+
+    function verfehltMitEnglischemKlartext(error: unknown): boolean {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError ||
+        error instanceof Prisma.PrismaClientUnknownRequestError
+      ) {
+        return /40001|40P01|could not serialize|deadlock detected/i.test(
+          error.message || "",
+        );
+      }
+      return false;
+    }
+
+    it("Rot-Beweis: erkennt den deutschen 40001 als P2010 ueber meta.code, wo der englische Klartext scheitert", () => {
+      // Form, in der Prisma einen rohen Datenbankfehler durchreicht (gemessen):
+      // strukturierter Code P2010, SQLSTATE sprachunabhaengig in meta.code, der
+      // Meldungstext in der Serversprache.
+      const gemessen = new Prisma.PrismaClientKnownRequestError(
+        `\nInvalid \`prisma.$executeRaw()\` invocation:\n\n\nRaw query failed. Code: \`40001\`. Message: \`${DEUTSCHER_40001_KLARTEXT}\``,
+        {
+          code: "P2010",
+          clientVersion: "5.22.0",
+          meta: { code: "40001", message: DEUTSCHER_40001_KLARTEXT },
+        },
+      );
+
+      // Neu: erkannt. Frueher (nur englischer Klartext + Ziffern): haette der
+      // Meldungstext hier die Ziffern zwar ebenfalls getragen - deshalb ist der
+      // haertere Beleg der Fall darunter, in dem NUR meta.code den SQLSTATE
+      // fuehrt.
+      expect(isFirstAdministratorRaceLost(gemessen)).toBe(true);
+    });
+
+    it("Rot-Beweis: erkennt den deutschen 40001 allein an meta.code, wenn der Text nur deutsch ist", () => {
+      // Haerteform: der SQLSTATE steht NUR strukturiert in meta.code, die
+      // Meldung traegt ausschliesslich den deutschen Klartext ohne Ziffern.
+      const nurDeutsch = new Prisma.PrismaClientKnownRequestError(
+        DEUTSCHER_40001_KLARTEXT,
+        {
+          code: "P2010",
+          clientVersion: "5.22.0",
+          meta: { code: "40001", message: DEUTSCHER_40001_KLARTEXT },
+        },
+      );
+
+      expect(isFirstAdministratorRaceLost(nurDeutsch)).toBe(true);
+      // Die fruehere Fassung haette hier `false` geliefert: kein englischer
+      // Klartext, keine Ziffern in der Meldung.
+      expect(verfehltMitEnglischemKlartext(nurDeutsch)).toBe(false);
+    });
+
+    it("Rot-Beweis: erkennt einen deutschen 40001 als PrismaClientUnknownRequestError mit SQLSTATE-Klammer", () => {
+      // Kuenftiges Prisma, das 40001 nicht mehr strukturiert abbildet, sondern
+      // als Unknown-Fehler mit dem deutschen Klartext und dem SQLSTATE in
+      // Klammern durchreicht.
+      const unknown = new Prisma.PrismaClientUnknownRequestError(
+        `${DEUTSCHER_40001_KLARTEXT} (SQLSTATE 40001)`,
+        { clientVersion: "5.22.0" },
+      );
+
+      expect(isFirstAdministratorRaceLost(unknown)).toBe(true);
+      // Frueher: nur getroffen, weil "40001" zufaellig in der Klammer steht -
+      // der ENGLISCHE Klartext fehlt und haette allein nicht gereicht. Der
+      // Beleg dafuer ist der Fall oben (nurDeutsch), in dem die Klammer fehlt.
+    });
+
+    it("Gegenprobe: ein anderer roher Datenbankfehler (deutscher Text, anderer SQLSTATE) bleibt kein Wettlauf", () => {
+      // Gemessen fuer eine fehlende Relation: SQLSTATE 42P01, deutscher Text.
+      // Der Waechter darf nicht jeden rohen Fehler als Wettlauf deuten.
+      const fremd = new Prisma.PrismaClientKnownRequestError(
+        "\nInvalid `prisma.$executeRaw()` invocation:\n\n\nRaw query failed. Code: `42P01`. Message: `Relation »TabelleGibtEsNicht« existiert nicht`",
+        {
+          code: "P2010",
+          clientVersion: "5.22.0",
+          meta: {
+            code: "42P01",
+            message: "Relation »TabelleGibtEsNicht« existiert nicht",
+          },
+        },
+      );
+
+      expect(isFirstAdministratorRaceLost(fremd)).toBe(false);
+    });
   });
 });
