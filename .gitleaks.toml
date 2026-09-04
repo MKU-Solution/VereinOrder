@@ -66,11 +66,17 @@ keywords = [
 # Der Administrator-PIN-Hash aus der laengst wieder entfernten Sicherungsdatei
 # (Commit 49fc36f, Datei durch .gitignore ausgeschlossen) bleibt in der
 # Git-Historie bestehen, bis diese bereinigt wird. "condition = AND" verlangt
-# ZUGLEICH den exakten Dateipfad UND die exakte Zeile mit dem bekannten
-# Hashwert - diese Ausnahme greift also nicht bei einem anderen bcrypt-Hash,
-# auch nicht in derselben Datei. Sie entfaellt, sobald die Historie bereinigt
-# ist (siehe #249, Abschnitt "Danach entscheiden, ob die Historie bereinigt
-# wird").
+# ZUGLEICH den exakten Dateipfad UND das Feld "pinHash" in derselben Zeile.
+#
+# Bewusst steht hier NICHT der Hashwert selbst, obwohl das die Ausnahme noch
+# enger machte: Er stuende damit in einer Datei des AKTUELLEN Standes statt
+# nur in einem alten Commit - auf einen Blick auffindbar, und er ueberlebte
+# eine Bereinigung der Historie, die ihn gerade beseitigen soll. Der Pfad
+# benennt genau eine Datei, die es im Arbeitsbaum nicht mehr gibt und die
+# .gitignore ausschliesst; enger als noetig ist das bereits.
+#
+# Die Ausnahme entfaellt, sobald die Historie bereinigt ist (siehe #249,
+# Abschnitt "Danach entscheiden, ob die Historie bereinigt wird").
 [[rules.allowlists]]
 condition = "AND"
 paths = [
@@ -78,5 +84,5 @@ paths = [
 ]
 regexTarget = "line"
 regexes = [
-  '''"pinHash":\s*"\$2a\$10\$YGPvkElsHxjnCiz1R78FguuAT8pyLg\.8WwVmPL09ilW2e6qN39WBW"''',
+  '''"pinHash":\s*"\$2[aby]\$\d{2}\$[A-Za-z0-9./]{53}"''',
 ]
