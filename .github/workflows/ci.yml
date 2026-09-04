@@ -17,7 +17,7 @@ env:
   NODE_VERSION: "20"
   PNPM_VERSION: "9.15.4"
   # Fassung des gitleaks-Programms (nicht der kostenpflichtigen Action) fuer
-  # den Auftrag "Geheimnisprüfung". Fest gepinnt, siehe #249:
+  # den Auftrag "Geheimnisprüfung". Fest gepinnt, siehe #250:
   # https://github.com/gitleaks/gitleaks/releases/tag/v8.30.1
   GITLEAKS_VERSION: "8.30.1"
 
@@ -918,7 +918,7 @@ jobs:
           fetch-depth: 0
       - name: gitleaks herunterladen und Prüfsumme verifizieren
         # "gitleaks/gitleaks-action" verlangt seit dem Umzug nach
-        # MKU-Solution (Organisation) eine kostenpflichtige Lizenz (#249).
+        # MKU-Solution (Organisation) eine kostenpflichtige Lizenz (#250).
         # Das gitleaks-Programm selbst ist quelloffen und frei - nur der
         # Action-Aufsatz ist betroffen. Fassung fest gepinnt (nicht
         # "latest"), ermittelt an der Quelle:

@@ -8,7 +8,7 @@ title = "VereinOrder Gitleaks-Konfiguration"
 # OHNE diesen Abschnitt nicht gefunden (Exit 0), mit den Standardregeln des
 # Programms aber sofort (Exit 1, 1 Fund). Nur der Abschnitt "[allowlist]"
 # war zuvor vorhanden; die eingebauten Regeln fehlten. Siehe PR-Bericht zu
-# #249 fuer den vollstaendigen Nachweis.
+# #250 fuer den vollstaendigen Nachweis.
 [extend]
 useDefault = true
 
@@ -24,7 +24,7 @@ regexes = [
 
 # Durch "useDefault = true" oben greift jetzt zusaetzlich die eingebaute Regel
 # "generic-api-key". Sie meldet in der bestehenden Historie sechs Funde, die
-# beim lokalen Nachweis (siehe Commit-Beschreibung zu #249) alle als
+# beim lokalen Nachweis (siehe Commit-Beschreibung zu #250) alle als
 # unbedenklich bestaetigt wurden:
 # - apps/backend/src/events/events.controller.spec.ts: Testfixture "operation-key-1"
 # - apps/backend/backups/vereinorder_backup_2026-08-20T04-24-10.json (Commit
@@ -34,7 +34,7 @@ regexes = [
 # damit die Ausnahme nicht versehentlich ein echtes Geheimnis an anderer
 # Stelle mit zufaellig gleicher Form verdeckt.
 [[allowlists]]
-description = "Historische Falscherkennungen der Regel generic-api-key (siehe #249)"
+description = "Historische Falscherkennungen der Regel generic-api-key (siehe #250)"
 regexTarget = "line"
 regexes = [
   '''const key = "operation-key-1"''',
