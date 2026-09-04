@@ -47,10 +47,6 @@ export default defineConfig({
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api/, ""),
       },
-      "/auth": {
-        target: apiProxyTarget,
-        changeOrigin: true,
-      },
       // Der Ereignisstrom laeuft ueber EventSource auf /realtime/stream, also
       // nicht ueber die Axios-Instanz mit ihrem /api-Praefix. Ohne diesen
       // Eintrag landet er beim Entwicklungsserver statt beim Backend und
