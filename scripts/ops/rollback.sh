@@ -302,11 +302,21 @@ done
 # zu verlassen: Es legt jeden der drei Container unbedingt neu an, unabhaengig
 # davon, ob Compose eine Aenderung erkennt. Schritt 6 unten prueft zusaetzlich
 # NACH dem Neustart, dass die Abbild-ID des tatsaechlich laufenden Containers
-# mit der soeben aktivierten uebereinstimmt - das faengt auch den Fall ab,
-# dass "${image_name}:previous" aus Schritt 4 aus irgendeinem Grund (z. B.
-# einem fehlerhaft gepflegten Sicherungsschritt) auf das FALSCHE Abbild
-# zeigte; "--force-recreate" allein wuerde diesen Fall NICHT erkennen, es
-# wuerde nur zuverlaessig neu anlegen, nicht pruefen, WAS es neu angelegt hat.
+# mit der soeben aktivierten uebereinstimmt - es verlaesst sich also nicht
+# darauf, dass "--force-recreate" getan hat, was es zusagt, sondern sieht nach.
+#
+# WAS SCHRITT 6 NICHT LEISTET - ausdruecklich, damit sich niemand darauf
+# verlaesst: Er erkennt NICHT, ob "${image_name}:previous" aus Schritt 4
+# ueberhaupt auf das richtige Abbild zeigte. Beide Seiten seines Vergleichs
+# stammen aus derselben Marke - Schritt 4 setzt sie, und "--force-recreate"
+# erzeugt den Container genau daraus -, sie stimmen deshalb zwangslaeufig
+# ueberein, sobald "docker compose up" durchlaeuft. Nachgestellt bei der
+# Umsetzung von #255: Ein absichtlich falsch gesetztes
+# "print-worker:previous" (auf das Frontend-Abbild) lief unentdeckt durch,
+# der Container fuehrte nginx statt des Workers, und dieses Skript meldete
+# Erfolg. Eine Erkennung dieses Falls braucht eine vom Rueckweg UNABHAENGIGE
+# Aufzeichnung dessen, was "upgrade.sh" gesichert hat - die gibt es heute
+# nicht, und sie herzustellen ist ein eigener Vorgang.
 #
 # WARUM DAS "postgres" NICHT MIT ERFASST: "--force-recreate" wirkt nur auf
 # die Dienste, die explizit auf der Befehlszeile stehen - "backend",
