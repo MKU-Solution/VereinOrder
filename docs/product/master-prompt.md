@@ -1832,11 +1832,11 @@ Bevor ein leistungsstärkeres Modell verwendet wird, prüfe, ob:
 
 Vor dem Start von Subagenten erstellt der Projektleiter einen Modelleinsatzplan.
 
-| Aufgabe | Fachbereich | Komplexität | Risiko | Modellfähigkeit | Modellklasse | Begründung |
-|---|---|---:|---:|---|---|---|
-| README | Dokumentation | niedrig | niedrig | Text und Struktur | klein | Keine komplexe Programmierung |
-| Druckwarteschlange | Backend/Datenbank | mittel | hoch | Transaktionen | mittel | Kritischer, begrenzter Bereich |
-| Sicherheitsmodell | Sicherheit | hoch | hoch | übergreifende Entscheidung | Projektleiter | Nicht delegieren |
+| Aufgabe            | Fachbereich       | Komplexität |  Risiko | Modellfähigkeit            | Modellklasse  | Begründung                     |
+| ------------------ | ----------------- | ----------: | ------: | -------------------------- | ------------- | ------------------------------ |
+| README             | Dokumentation     |     niedrig | niedrig | Text und Struktur          | klein         | Keine komplexe Programmierung  |
+| Druckwarteschlange | Backend/Datenbank |      mittel |    hoch | Transaktionen              | mittel        | Kritischer, begrenzter Bereich |
+| Sicherheitsmodell  | Sicherheit        |        hoch |    hoch | übergreifende Entscheidung | Projektleiter | Nicht delegieren               |
 
 ---
 

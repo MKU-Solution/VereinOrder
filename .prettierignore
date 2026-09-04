@@ -9,3 +9,6 @@ apps/backend/backups
 apps/frontend/vite.config.js
 apps/frontend/vite.config.d.ts
 pnpm-lock.yaml
+# Vollstaendige Kopie eines alten Arbeitsbaums; bisher nur lokal ueber
+# .git/info/exclude ausgeschlossen (gilt nicht repoweit, siehe #239).
+.claude/worktrees
