@@ -562,6 +562,21 @@ jobs:
     # - dieselbe Momentaufnahme, aus der auch "prisma migrate status"
     # schöpft). Fehlt die Wegwerfmigration in dieser Liste, stand der Dump
     # nachweislich vor ihrer Anwendung.
+    #
+    # Seit #255 prüft derselbe Lauf zusätzlich den Rückweg
+    # ("scripts/ops/rollback.sh", #201): Kein CI-Auftrag rief ihn zuvor auf.
+    # Dieser Auftrag ist die naheliegende Grundlage dafür, weil er bereits
+    # das befüllte System samt "upgrade.sh"-Lauf mitbringt, das ein
+    # Rückweg-Test voraussetzt - ein zweiter Auftrag mit derselben teuren
+    # Vorbereitung wäre nur Redundanz. Geprüft werden vier Aussagen: (1) der
+    # Rückweg aktiviert nachweislich die VORIGE Fassung, über die
+    # inhaltsadressierte Abbild-ID, nicht über einen Statuscode; (2) dabei
+    # wird nicht neu gebaut; (3) die Datenbank bleibt unangetastet; (4)
+    # beide Verweigerungen (kein gesichertes Abbild vor dem ersten Update;
+    # erkanntes Migrationsrisiko ohne ROLLBACK_ACKNOWLEDGE_SCHEMA_RISK=1
+    # danach) greifen, ohne etwas zu verändern - letzteres zugleich ein
+    # Beleg dafür, dass der Markervergleich aus #201 im echten Ablauf
+    # tatsächlich anschlägt.
     steps:
       - uses: actions/checkout@v7
       - name: Installation von vor #180 nachstellen (root-eigene Volumes)
@@ -698,6 +713,66 @@ jobs:
             exit 1
           fi
           rm -f /tmp/users-response.json
+      - name: Laufende Abbild-IDs vor der Aktualisierung festhalten (Grundlage fuer #255)
+        # "scripts/ops/upgrade.sh" sichert im naechsten Schritt genau diese
+        # Abbild-IDs unter "<Abbildname>:previous" und ueberschreibt danach
+        # den Namen selbst durch den Neubau (siehe dortiger Kopfkommentar,
+        # Abschnitt "Vorige Abbilder sichern"). Eine unabhaengige Kopie an
+        # dieser Stelle ist deshalb noetig: Sonst liesse sich spaeter nur
+        # noch pruefen, was upgrade.sh SELBST als vorige Fassung notiert hat -
+        # nicht, ob das tatsaechlich die Abbild-ID war, die hier lief.
+        run: |
+          set -euo pipefail
+          for svc in backend frontend print-worker; do
+            container_id=$(docker compose ps -q "$svc")
+            image_id=$(docker inspect --format '{{.Image}}' "$container_id")
+            case "$svc" in
+              backend) echo "PRE_UPGRADE_BACKEND_IMAGE_ID=$image_id" >> "$GITHUB_ENV" ;;
+              frontend) echo "PRE_UPGRADE_FRONTEND_IMAGE_ID=$image_id" >> "$GITHUB_ENV" ;;
+              print-worker) echo "PRE_UPGRADE_PRINTWORKER_IMAGE_ID=$image_id" >> "$GITHUB_ENV" ;;
+            esac
+            echo "Vor der Aktualisierung laeuft $svc mit Abbild-ID $image_id"
+          done
+      - name: Verweigerung 1 - Ruecksprung ohne gesichertes Abbild schlaegt fehl (#255)
+        # Vor dem ersten Lauf von "scripts/ops/upgrade.sh" existiert noch kein
+        # "<Abbildname>:previous". "scripts/ops/rollback.sh" muss deshalb in
+        # seinem eigenen Schritt "Gesicherte Abbilder pruefen" abbrechen
+        # (dortiger Exitcode 4) - OHNE irgendetwas anzufassen: kein Dienst
+        # angehalten, kein Abbild umbenannt, keine Daten veraendert. Belegt
+        # wird das ueber die laufenden Abbild-IDs (Vergleich mit dem vorigen
+        # Schritt) und die Benutzerzahl vor/nach dem verweigerten Versuch.
+        run: |
+          set -euo pipefail
+          users_before=$(curl -s http://127.0.0.1:3000/users -H "Authorization: Bearer $ADMIN_TOKEN" \
+            | grep -o '"username"' | wc -l)
+
+          set +e
+          ./scripts/ops/rollback.sh >/tmp/rollback-denial-1.log 2>&1
+          rc=$?
+          set -e
+          echo "=== Ausgabe von rollback.sh (Verweigerung 1) ==="
+          cat /tmp/rollback-denial-1.log
+          echo "=== Exitcode: $rc (erwartet: 4) ==="
+          test "$rc" -eq 4
+          grep -q "Kein Rueckweg moeglich" /tmp/rollback-denial-1.log
+          rm -f /tmp/rollback-denial-1.log
+
+          for svc in backend frontend print-worker; do
+            container_id=$(docker compose ps -q "$svc")
+            image_id=$(docker inspect --format '{{.Image}}' "$container_id")
+            case "$svc" in
+              backend) expected="$PRE_UPGRADE_BACKEND_IMAGE_ID" ;;
+              frontend) expected="$PRE_UPGRADE_FRONTEND_IMAGE_ID" ;;
+              print-worker) expected="$PRE_UPGRADE_PRINTWORKER_IMAGE_ID" ;;
+            esac
+            echo "$svc laeuft nach dem verweigerten Versuch (Verweigerung 1) weiterhin mit $image_id"
+            test "$image_id" = "$expected"
+          done
+
+          users_after=$(curl -s http://127.0.0.1:3000/users -H "Authorization: Bearer $ADMIN_TOKEN" \
+            | grep -o '"username"' | wc -l)
+          echo "Benutzer vor/nach dem verweigerten Versuch: $users_before / $users_after"
+          test "$users_before" = "$users_after"
       - name: Wegwerfmigration erzeugen (etwas, das ausstehen kann)
         run: |
           set -euo pipefail
@@ -763,6 +838,139 @@ jobs:
           test "$users_count" -ge 2
           phase=$(curl -s http://127.0.0.1:3000/maintenance | jq -r '.phase')
           echo "Wartungsphase nach dem Update: $phase"
+          test "$phase" = "OPEN"
+      - name: Verweigerung 2 - Ruecksprung ohne bestaetigtes Migrationsrisiko schlaegt fehl (#255)
+        # Die Wegwerfmigration von oben ist inzwischen angewendet - neuer als
+        # der Migrationsmarker, den "scripts/ops/upgrade.sh" beim Sichern des
+        # vorigen Abbilds geschrieben hat (dortiger Schritt "Migrationsstand
+        # zum Sicherungszeitpunkt festhalten"). "rollback.sh" muss das in
+        # seinem Schritt "Migrationsrisiko pruefen" erkennen und OHNE
+        # "ROLLBACK_ACKNOWLEDGE_SCHEMA_RISK=1" mit Exitcode 5 abbrechen -
+        # bevor irgendein Dienst angehalten oder ein Abbild umbenannt wird.
+        # Das prueft nicht nur die Verweigerung selbst, sondern belegt
+        # zugleich, dass der Markervergleich aus #201 im echten Ablauf
+        # tatsaechlich anschlaegt.
+        run: |
+          set -euo pipefail
+          users_before=$(curl -s http://127.0.0.1:3000/users -H "Authorization: Bearer $ADMIN_TOKEN" \
+            | grep -o '"username"' | wc -l)
+          for svc in backend frontend print-worker; do
+            container_id=$(docker compose ps -q "$svc")
+            image_id=$(docker inspect --format '{{.Image}}' "$container_id")
+            case "$svc" in
+              backend) before_backend="$image_id" ;;
+              frontend) before_frontend="$image_id" ;;
+              print-worker) before_printworker="$image_id" ;;
+            esac
+          done
+
+          set +e
+          ./scripts/ops/rollback.sh >/tmp/rollback-denial-2.log 2>&1
+          rc=$?
+          set -e
+          echo "=== Ausgabe von rollback.sh (Verweigerung 2) ==="
+          cat /tmp/rollback-denial-2.log
+          echo "=== Exitcode: $rc (erwartet: 5) ==="
+          test "$rc" -eq 5
+          grep -q "Seit dem gesicherten Abbild wurde migriert" /tmp/rollback-denial-2.log
+          rm -f /tmp/rollback-denial-2.log
+
+          for svc in backend frontend print-worker; do
+            container_id=$(docker compose ps -q "$svc")
+            image_id=$(docker inspect --format '{{.Image}}' "$container_id")
+            case "$svc" in
+              backend) expected="$before_backend" ;;
+              frontend) expected="$before_frontend" ;;
+              print-worker) expected="$before_printworker" ;;
+            esac
+            echo "$svc laeuft nach dem verweigerten Versuch (Verweigerung 2) weiterhin mit $image_id"
+            test "$image_id" = "$expected"
+          done
+          # Kein Vergleich gegen PRE_UPGRADE_*_IMAGE_ID an dieser Stelle: Ob
+          # ein Dienst durch "scripts/ops/upgrade.sh" ueberhaupt eine neue
+          # Abbild-ID bekommt, haengt vom Docker-Build-Cache ab - betrifft der
+          # Inhalt der Wegwerfmigration nur den Bau-Kontext von "backend",
+          # bleiben "frontend" und "print-worker" bei unveraendertem
+          # Cache-Treffer auf ihrer vorigen ID stehen (am echten Buendel
+          # beobachtet). Ein "!=" gegen PRE_UPGRADE waere fuer diese beiden
+          # Dienste ein falsch-positiver Fehlschlag, kein echter Befund. Die
+          # eigentliche Aussage dieses Schritts - nichts hat sich durch DIESEN
+          # verweigerten Versuch veraendert - liefert bereits der Vergleich
+          # gegen "$before_*" oben.
+
+          users_after=$(curl -s http://127.0.0.1:3000/users -H "Authorization: Bearer $ADMIN_TOKEN" \
+            | grep -o '"username"' | wc -l)
+          echo "Benutzer vor/nach dem verweigerten Versuch: $users_before / $users_after"
+          test "$users_before" = "$users_after"
+      - name: Beleg 1 und 2 - Ruecksprung aktiviert die vorige Fassung, ohne Neubau (#255)
+        # Beleg 1: Nach dem Ruecksprung MIT der ausdruecklichen Bestaetigung
+        # laufen backend, frontend und print-worker wieder unter genau den
+        # Abbild-IDs, die vor "scripts/ops/upgrade.sh" liefen (siehe Schritt
+        # "Laufende Abbild-IDs vor der Aktualisierung festhalten" oben) -
+        # inhaltsadressiert, nicht ueber einen Statuscode.
+        # Beleg 2: Kein Abbild wurde dabei neu gebaut. Ein Neubau wuerde ein
+        # zusaetzliches Abbild in "docker images" hinterlassen (selbst bei
+        # zufaellig identischem Inhalt vergibt ein Neubau eine neue
+        # Erstellungszeit und damit so gut wie immer eine neue ID; "docker
+        # tag" dagegen erzeugt niemals eine neue ID). Deshalb wird der
+        # komplette Abbildbestand VOR und NACH dem Ruecksprung verglichen:
+        # kein einziger neuer Eintrag darf hinzukommen.
+        run: |
+          set -euo pipefail
+          docker images --no-trunc --format '{{.ID}}' | sort -u > /tmp/images-before-rollback.txt
+
+          ROLLBACK_ACKNOWLEDGE_SCHEMA_RISK=1 ./scripts/ops/rollback.sh 2>&1 | tee /tmp/rollback-success.log
+          echo "=== rollback.sh erfolgreich beendet ==="
+
+          docker images --no-trunc --format '{{.ID}}' | sort -u > /tmp/images-after-rollback.txt
+          echo "=== Neu hinzugekommene Abbild-IDs (muss leer sein) ==="
+          neu=$(comm -13 /tmp/images-before-rollback.txt /tmp/images-after-rollback.txt)
+          printf '%s\n' "$neu"
+          test -z "$neu"
+
+          for svc in backend frontend print-worker; do
+            container_id=$(docker compose ps -q "$svc")
+            image_id=$(docker inspect --format '{{.Image}}' "$container_id")
+            case "$svc" in
+              backend) expected="$PRE_UPGRADE_BACKEND_IMAGE_ID" ;;
+              frontend) expected="$PRE_UPGRADE_FRONTEND_IMAGE_ID" ;;
+              print-worker) expected="$PRE_UPGRADE_PRINTWORKER_IMAGE_ID" ;;
+            esac
+            echo "$svc laeuft nach dem Ruecksprung mit $image_id (vorige Fassung: $expected)"
+            test "$image_id" = "$expected"
+          done
+
+          rm -f /tmp/images-before-rollback.txt /tmp/images-after-rollback.txt /tmp/rollback-success.log
+      - name: Auf reaktiviertes Backend nach dem Ruecksprung warten
+        run: |
+          set -euo pipefail
+          status=000
+          for i in $(seq 1 60); do
+            status=$(curl -s -o /dev/null -w '%{http_code}' \
+              http://127.0.0.1:3000/maintenance) || status=000
+            [ "$status" = "200" ] && break
+            sleep 2
+          done
+          if [ "$status" != "200" ]; then
+            echo "Backend antwortet nach dem Ruecksprung nicht wie erwartet (letzter Status: $status)." >&2
+            docker compose logs
+            exit 1
+          fi
+      - name: Beleg 3 - Datenbank blieb nach dem Ruecksprung unangetastet (#255)
+        # "rollback.sh" tauscht ausschliesslich Software - dieser Schritt
+        # belegt das: Die in "Testdaten anlegen" erzeugten Benutzer (Admin
+        # und ci-upgrade-kellner1) sind nach dem Ruecksprung weiterhin da,
+        # und die Wartungsphase steht wieder auf OPEN (rollback.sh setzt
+        # keinen eigenen Wartungsmodus - die alte Fassung kommt im zuletzt
+        # bekannten Zustand wieder hoch).
+        run: |
+          set -euo pipefail
+          users_count=$(curl -s http://127.0.0.1:3000/users -H "Authorization: Bearer $ADMIN_TOKEN" \
+            | grep -o '"username"' | wc -l)
+          echo "Benutzer nach dem Ruecksprung: $users_count"
+          test "$users_count" -ge 2
+          phase=$(curl -s http://127.0.0.1:3000/maintenance | jq -r '.phase')
+          echo "Wartungsphase nach dem Ruecksprung: $phase"
           test "$phase" = "OPEN"
       - name: Bündelprotokolle bei Fehlschlag sichern
         if: failure()
