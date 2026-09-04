@@ -279,21 +279,106 @@ done
 
 # --- 5. Dienste mit dem aktivierten Abbild neu starten, ausdruecklich ohne
 # erneuten Bau ("--no-build" verweigert einen Bau, selbst wenn Compose ihn
-# aus anderem Grund fuer noetig hielte).
-step="Dienste mit dem gesicherten Abbild neu starten (ohne Bau)"
-docker compose up -d --no-build backend frontend print-worker
+# aus anderem Grund fuer noetig hielte) UND ausdruecklich mit erzwungenem
+# Neuanlegen ("--force-recreate").
+#
+# WARUM "--force-recreate": Schritt 4 haengt nur die MARKE um ("docker tag"),
+# nicht den Containerinhalt - der Containername, den Compose beim naechsten
+# "up" anspricht, aendert sich dadurch nicht, und ein Container TRAEGT das
+# Abbild, mit dem er einmal ERZEUGT wurde, unabhaengig davon, wohin seine
+# Marke seither zeigt. Ob ein blosses "docker compose up -d --no-build" einen
+# noch LAUFENDEN Container unter dieser Lage neu anlegt oder ihn unveraendert
+# durchlaufen laesst, entscheidet eine Compose-interne Heuristik (im
+# Wesentlichen ein Konfigurations-Hash aus der aufgeloesten Dienstdefinition),
+# die NICHT zuverlaessig bei jeder Compose-Fassung dieselbe Abbild-ID-basierte
+# Pruefung vornimmt: Ein Lauf dieses Skripts in der CI (#255, PR #258, unter
+# Linux) blieb nach genau dieser Abfolge nachweislich auf dem NEUEN Abbild
+# stehen - "docker compose ps" zeigte "Starting"/"Started", nirgends
+# "Recreate". Ein lokaler Lauf auf Windows mit Docker Desktop (Compose
+# v5.5.0) zeigte im selben Ablauf dagegen ein korrektes "Recreate" fuer
+# "backend" - der Fehler ist also nachweislich umgebungs- bzw.
+# versionsabhaengig, nicht grundsaetzlich falsch auf jeder Installation.
+# "--force-recreate" umgeht diese Heuristik vollstaendig, statt sich auf sie
+# zu verlassen: Es legt jeden der drei Container unbedingt neu an, unabhaengig
+# davon, ob Compose eine Aenderung erkennt. Schritt 6 unten prueft zusaetzlich
+# NACH dem Neustart, dass die Abbild-ID des tatsaechlich laufenden Containers
+# mit der soeben aktivierten uebereinstimmt - das faengt auch den Fall ab,
+# dass "${image_name}:previous" aus Schritt 4 aus irgendeinem Grund (z. B.
+# einem fehlerhaft gepflegten Sicherungsschritt) auf das FALSCHE Abbild
+# zeigte; "--force-recreate" allein wuerde diesen Fall NICHT erkennen, es
+# wuerde nur zuverlaessig neu anlegen, nicht pruefen, WAS es neu angelegt hat.
+#
+# WARUM DAS "postgres" NICHT MIT ERFASST: "--force-recreate" wirkt nur auf
+# die Dienste, die explizit auf der Befehlszeile stehen - "backend",
+# "frontend" und "print-worker", genau wie schon "--no-build". "postgres"
+# steht dort bewusst weiterhin NICHT: Es ist weder Ziel dieses Rueckwegs
+# (nur die drei Anwendungsdienste haben ein gesichertes ":previous"-Abbild,
+# siehe Schritt 1) noch darf eine Datenbank im Festbetrieb durch einen reinen
+# Software-Rueckweg angefasst werden (siehe Kopfkommentar, Abschnitt "WARUM
+# DIE PRE_MIGRATION-WIEDERHERSTELLUNG NIEMALS AUTOMATISCH LAEUFT"). Lokal
+# nachgeprueft (Windows, Docker Desktop): Container-ID und Erzeugungszeitpunkt
+# von "postgres" blieben ueber einen solchen Aufruf hinweg unveraendert - er
+# wird nicht einmal neu gestartet, nur als bereits laufend/gesund erkannt.
+# "depends_on: postgres: condition: service_healthy" (backend) und
+# "depends_on: backend: condition: service_healthy" (print-worker) bleiben
+# davon unberuehrt: Compose wartet weiterhin in dieser Reihenfolge, erzwungen
+# neu angelegt oder nicht - ebenfalls lokal am Protokoll nachgeprueft
+# ("Healthy" vor "print-worker ... Starting").
+step="Dienste mit dem gesicherten Abbild neu starten (ohne Bau, erzwungen neu angelegt)"
+docker compose up -d --no-build --force-recreate backend frontend print-worker
 
-# --- 6. Aktivierten Stand bestaetigen ---------------------------------------
+# --- 6. Aktivierten Stand bestaetigen UND tatsaechlich pruefen -------------
+# Bisher (vor dieser Aenderung) las dieser Schritt nur die Abbild-ID hinter
+# der MARKE aus ("docker image inspect ... $configured_image") und meldete
+# das als Erfolg - unabhaengig davon, welches Abbild der Container aus
+# Schritt 5 TATSAECHLICH fuehrt. Genau das verdeckte den oben beschriebenen
+# Fehler: Die Marke stimmte, der Bediener sah eine plausible Erfolgsmeldung,
+# der Container lief weiter mit der neuen Fassung. Derselbe blinde Fleck fiel
+# bereits bei der Umsetzung von #255 auf, als "backend:previous" versuchsweise
+# auf das Frontend-Abbild gebogen wurde und das Skript trotzdem Erfolg
+# meldete. Ab hier gilt deshalb: Fuer jeden Dienst wird zusaetzlich die
+# Abbild-ID des tatsaechlich laufenden CONTAINERS ermittelt ("docker inspect
+# --format {{.Image}} <Container>", derselbe Weg, den "upgrade.sh" beim
+# Sichern verwendet) und mit der soeben aktivierten Abbild-ID verglichen. Erst
+# wenn ALLE drei uebereinstimmen, gilt der Rueckweg als erfolgreich - eine
+# Abweichung ist ein Fehlschlag mit klarer Meldung, kein stiller Erfolg, und
+# faellt in dieselbe Fehlerbehandlung ("report_failure" ueber "step") wie
+# jeder andere Schritt dieses Skripts.
 step="Aktivierten Stand bestaetigen"
 printf '\n'
-printf 'Rueckweg abgeschlossen. Aktivierte Abbilder (ohne Neubau):\n'
+printf 'Abbilder nach dem Rueckweg pruefen (aktiviert vs. tatsaechlich laufend):\n'
+activation_mismatch=""
 for rollback_service in backend frontend print-worker; do
   configured_image=$(vereinorder_configured_image "$rollback_service")
   active_id=$(docker image inspect --format '{{.Id}}' "$configured_image")
   active_created=$(docker image inspect --format '{{.Created}}' "$configured_image")
   printf ' - %-10s %s  (%s, erstellt %s)\n' "$rollback_service" \
     "$configured_image" "$active_id" "$active_created"
+
+  running_container_id=$(docker compose ps -q "$rollback_service")
+  running_image_id=$(docker inspect --format '{{.Image}}' "$running_container_id")
+  if [ "$running_image_id" != "$active_id" ]; then
+    activation_mismatch="${activation_mismatch}
+ - ${rollback_service}: aktiviert ${active_id}, tatsaechlich laeuft aber ${running_image_id}"
+  fi
 done
+if [ -n "$activation_mismatch" ]; then
+  printf '\n' >&2
+  printf '=== RUECKWEG NICHT WIRKSAM: aktiviertes und laufendes Abbild weichen ab ===\n' >&2
+  printf '%s\n' "$activation_mismatch" >&2
+  printf '\n' >&2
+  printf 'Die Abbildmarke wurde umgehaengt und "docker compose up --force-recreate"\n' >&2
+  printf 'ist gelaufen, aber mindestens ein Container fuehrt nicht das soeben\n' >&2
+  printf 'aktivierte Abbild. Das System steht damit NICHT nachweislich auf der\n' >&2
+  printf 'vorigen Fassung - eine Erfolgsmeldung waere an dieser Stelle falsch. Mit\n' >&2
+  printf '"docker compose ps" und "docker inspect --format {{.Image}} <Container>"\n' >&2
+  printf 'pruefen, welche Fassung je Dienst tatsaechlich laeuft, und die Ursache\n' >&2
+  printf 'klaeren (z. B. ein falsch gesetztes ":previous"-Abbild).\n' >&2
+  exit 6
+fi
+printf '\n'
+printf 'Rueckweg abgeschlossen. Fuer alle drei Dienste stimmt die soeben aktivierte\n'
+printf 'Abbild-ID mit der des tatsaechlich laufenden Containers ueberein (siehe oben).\n'
 printf '\n'
 API_BASE_URL="${API_BASE_URL:-http://127.0.0.1:3000}"
 if maintenance_phase=$(curl --fail --silent --show-error --max-time 5 \
