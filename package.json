@@ -16,7 +16,8 @@
     "test:pg-tools": "node scripts/ci/check-postgres-tool-version.mjs",
     "test:repository": "node scripts/ci/check-repository-hygiene.mjs",
     "test:frontend-cache": "node scripts/ci/check-frontend-cache-rules.mjs",
-    "format:check": "prettier --check apps packages scripts e2e playwright.config.ts .github package.json --ignore-unknown --ignore-path .prettierignore",
+    "format:check": "prettier --check apps packages scripts e2e playwright.config.ts .github package.json docs *.md .claude/agents docker-compose.yml --ignore-unknown --ignore-path .prettierignore",
+    "format": "prettier --write apps packages scripts e2e playwright.config.ts .github package.json docs *.md .claude/agents docker-compose.yml --ignore-unknown --ignore-path .prettierignore",
     "lint": "pnpm -r run lint",
     "typecheck": "pnpm -r run typecheck"
   },
