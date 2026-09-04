@@ -796,6 +796,19 @@ jobs:
         platform: [linux/amd64, linux/arm64]
     steps:
       - uses: actions/checkout@v4
+      - name: Registry-Namensraum klein schreiben (#243)
+        # Der Pfadanteil einer Docker-Abbildkennung muss durchgehend klein
+        # geschrieben sein; "github.repository_owner" reicht Grossbuchstaben
+        # unveraendert durch und wuerde nach einem Umzug in eine Organisation
+        # mit Grossbuchstaben im Namen eine ungueltige Kennung erzeugen. Die
+        # Umwandlung laeuft bewusst hier als eigener Schritt: Die "outputs:"-
+        # Zeile unten ist ein Eingabewert von docker/build-push-action und
+        # KEIN Shell-Kontext - "${VAR,,}" darin wuerde nicht ausgewertet,
+        # sondern woertlich uebernommen. Ueber "$GITHUB_ENV" gesetzt, steht
+        # der kleingeschriebene Wert den folgenden Schritten dagegen ganz
+        # regulaer als "${{ env.OWNER_LOWER }}" zur Verfuegung. Heute aendert
+        # das nichts: "seipekm" ist bereits vollstaendig klein geschrieben.
+        run: echo "OWNER_LOWER=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_ENV"
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
@@ -814,7 +827,7 @@ jobs:
           # EINER Marke zusammen. Der Umweg ist noetig, weil beide Fassungen
           # auf verschiedenen Runnern entstehen: Ein direktes "push" mit Marke
           # wuerde die jeweils andere Plattform ueberschreiben statt ergaenzen.
-          outputs: type=image,name=ghcr.io/${{ github.repository_owner }}/vereinorder-${{ matrix.component }},push-by-digest=true,name-canonical=true,push=true
+          outputs: type=image,name=ghcr.io/${{ env.OWNER_LOWER }}/vereinorder-${{ matrix.component }},push-by-digest=true,name-canonical=true,push=true
           # Nur lesend: Der Auftrag "docker" oben hat denselben Stand mit
           # demselben Bereich bereits gebaut und den Cache geschrieben. Hier
           # faellt deshalb im Regelfall kein zweiter Bau an, sondern nur der
@@ -847,6 +860,13 @@ jobs:
       matrix:
         component: [backend, frontend, print-worker]
     steps:
+      - name: Registry-Namensraum klein schreiben (#243)
+        # Eigener Schritt, unabhaengig von demselben Schritt im Auftrag
+        # "docker-publish": Beide laufen in getrennten Auftraegen und damit
+        # auf getrennten Runnern, ein dort gesetztes "$GITHUB_ENV" gilt nicht
+        # hier. Begruendung siehe dort. Heute wirkungslos: "seipekm" bleibt
+        # "seipekm".
+        run: echo "OWNER_LOWER=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_ENV"
       - uses: docker/setup-buildx-action@v3
       - uses: actions/download-artifact@v4
         with:
@@ -861,7 +881,7 @@ jobs:
       - name: Marken setzen (latest und Commit-SHA)
         run: |
           set -euo pipefail
-          abbild="ghcr.io/${{ github.repository_owner }}/vereinorder-${{ matrix.component }}"
+          abbild="ghcr.io/${{ env.OWNER_LOWER }}/vereinorder-${{ matrix.component }}"
           cd /tmp/digests
           # Zwei Marken mit Absicht: "latest" ist das, worauf
           # docker-compose.yml ohne gesetzte VEREINORDER_VERSION zeigt; die
@@ -874,7 +894,7 @@ jobs:
       - name: Beide Plattformen sind in der Marke enthalten
         run: |
           set -euo pipefail
-          abbild="ghcr.io/${{ github.repository_owner }}/vereinorder-${{ matrix.component }}"
+          abbild="ghcr.io/${{ env.OWNER_LOWER }}/vereinorder-${{ matrix.component }}"
           docker buildx imagetools inspect "${abbild}:latest" | tee /tmp/manifest.txt
           # Der Raspberry Pi ist arm64, die Entwicklungsrechner sind amd64.
           # Fehlt eine der beiden Fassungen, ist die Marke fuer die Haelfte
