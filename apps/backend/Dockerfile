@@ -19,13 +19,23 @@ COPY apps/backend/package.json ./apps/backend/
 # aus - an dieser Stelle liegt das Schema aber noch nicht im Bau (es kommt
 # erst mit der naechsten COPY-Zeile), das Postinstall meldet deshalb
 # "prisma:warn We could not find your Prisma schema in the default
-# locations" und tut sonst nichts. PRISMA_SKIP_POSTINSTALL_GENERATE
+# locations" und erzeugt deshalb keinen Client. PRISMA_SKIP_POSTINSTALL_GENERATE
 # unterdrueckt genau dieses Postinstall (node_modules/@prisma/client/scripts/
-# postinstall.js, Zeile 145: "if (!process.env.PRISMA_SKIP_POSTINSTALL_GENERATE)
-# { main() ... }"); die tatsaechliche Erzeugung des Clients erfolgt weiter
-# unten ausdruecklich (Zeile 21). Nur fuer diese Zeile gesetzt, nicht als ENV
-# der Schicht, damit spaetere Schritte, die das Generat wirklich brauchen,
-# unberuehrt bleiben.
+# postinstall.js: "if (!process.env.PRISMA_SKIP_POSTINSTALL_GENERATE)
+# { main() ... }").
+#
+# Uebersprungen wird damit ZUSAETZLICH das "createDefaultGeneratedThrowFiles()"
+# am Anfang von main(): Ohne Postinstall fehlt "node_modules/.prisma/client"
+# ganz, statt die Stubs zu enthalten, die eine Verwendung vor dem Erzeugen mit
+# einer verstaendlichen Meldung abfangen. Das ist hier unschaedlich, aber nur
+# aus einem Grund: Der naechste Schritt, der den Client braucht, erzeugt ihn
+# vorher selbst. Das ist NICHT am Skriptnamen abzulesen - "run build" von
+# @vereinorder/database ist zwar nur "tsc", zieht aber ueber den npm-Hook
+# "prebuild" ein "prisma generate" vor (packages/database/package.json). Wer
+# diese Reihenfolge aendert, muss die Zeile hier mit aendern.
+#
+# Nur fuer diese eine Zeile gesetzt, nicht als ENV der Schicht, damit spaetere
+# Schritte, die das Generat wirklich brauchen, unberuehrt bleiben.
 RUN PRISMA_SKIP_POSTINSTALL_GENERATE=1 pnpm install --frozen-lockfile
 
 # Copy schema and generate Prisma Client
