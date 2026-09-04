@@ -1,6 +1,18 @@
 title = "VereinOrder Gitleaks-Konfiguration"
 
-[allowlist]
+# Ohne diesen Abschnitt haette die Datei ueberhaupt keine Erkennungsregeln:
+# Eine gitleaks-Konfiguration ohne eigene "[[rules]]" UND ohne "[extend]"
+# mit "useDefault = true" laedt keine eingebauten Regeln nach - sie ist dann
+# leer und findet nichts, unabhaengig vom Aufrufer (Action oder Programm).
+# Belegt lokal: Ein Testgeheimnis (RSA-Testschluessel) wurde mit dieser Datei
+# OHNE diesen Abschnitt nicht gefunden (Exit 0), mit den Standardregeln des
+# Programms aber sofort (Exit 1, 1 Fund). Nur der Abschnitt "[allowlist]"
+# war zuvor vorhanden; die eingebauten Regeln fehlten. Siehe PR-Bericht zu
+# #249 fuer den vollstaendigen Nachweis.
+[extend]
+useDefault = true
+
+[[allowlists]]
 description = "Dokumentierte Beispiele und exakt eingegrenzte CI-Testzugänge"
 paths = [
   '''(^|/)\.env\.example$''',
@@ -8,4 +20,23 @@ paths = [
 regexes = [
   '''postgresql://postgres:postgres@127\.0\.0\.1:5432/vereinorder_(integration|e2e)_test\?schema=public''',
   '''POSTGRES_PASSWORD:\s*postgres''',
+]
+
+# Durch "useDefault = true" oben greift jetzt zusaetzlich die eingebaute Regel
+# "generic-api-key". Sie meldet in der bestehenden Historie sechs Funde, die
+# beim lokalen Nachweis (siehe Commit-Beschreibung zu #249) alle als
+# unbedenklich bestaetigt wurden:
+# - apps/backend/src/events/events.controller.spec.ts: Testfixture "operation-key-1"
+# - apps/backend/backups/vereinorder_backup_2026-08-20T04-24-10.json (Commit
+#   49fc36f, laengst durch .gitignore ausgeschlossen): "idempotencyKey"-Werte
+#   sind zufaellige UUIDs zur Deduplizierung, keine Zugangsdaten.
+# regexTarget = "line" verlangt den jeweiligen Kontext (Feldname/Variable),
+# damit die Ausnahme nicht versehentlich ein echtes Geheimnis an anderer
+# Stelle mit zufaellig gleicher Form verdeckt.
+[[allowlists]]
+description = "Historische Falscherkennungen der Regel generic-api-key (siehe #249)"
+regexTarget = "line"
+regexes = [
+  '''const key = "operation-key-1"''',
+  '''"idempotencyKey":\s*"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"''',
 ]

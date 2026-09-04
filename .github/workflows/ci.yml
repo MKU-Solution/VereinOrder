@@ -16,6 +16,10 @@ concurrency:
 env:
   NODE_VERSION: "20"
   PNPM_VERSION: "9.15.4"
+  # Fassung des gitleaks-Programms (nicht der kostenpflichtigen Action) fuer
+  # den Auftrag "Geheimnisprüfung". Fest gepinnt, siehe #249:
+  # https://github.com/gitleaks/gitleaks/releases/tag/v8.30.1
+  GITLEAKS_VERSION: "8.30.1"
 
 jobs:
   quality:
@@ -908,11 +912,38 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      pull-requests: read
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: gitleaks/gitleaks-action@v3
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: gitleaks herunterladen und Prüfsumme verifizieren
+        # "gitleaks/gitleaks-action" verlangt seit dem Umzug nach
+        # MKU-Solution (Organisation) eine kostenpflichtige Lizenz (#249).
+        # Das gitleaks-Programm selbst ist quelloffen und frei - nur der
+        # Action-Aufsatz ist betroffen. Fassung fest gepinnt (nicht
+        # "latest"), ermittelt an der Quelle:
+        # https://github.com/gitleaks/gitleaks/releases/tag/v8.30.1
+        # Der Download wird gegen die vom Hersteller veroeffentlichte
+        # Pruefsummendatei verifiziert, bevor das Programm ausgefuehrt wird.
+        run: |
+          set -euo pipefail
+          archiv="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          basis="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}"
+          curl -sSLO "${basis}/${archiv}"
+          curl -sSLO "${basis}/gitleaks_${GITLEAKS_VERSION}_checksums.txt"
+          grep "${archiv}\$" "gitleaks_${GITLEAKS_VERSION}_checksums.txt" | sha256sum -c -
+          tar -xzf "${archiv}" gitleaks
+          chmod +x gitleaks
+      - name: Gesamte Historie auf Geheimnisse prüfen
+        # Unterbefehl "git" statt "dir": "git" nutzt intern "git log -p" und
+        # liest damit die gesamte Historie; "dir" prueft nur den
+        # ausgecheckten Arbeitsbaum (gitleaks git --help, Fassung 8.30.1).
+        # ".gitleaks.toml" im Wurzelverzeichnis wird ohne "--config"
+        # automatisch gefunden, weil der Zielpfad "." dem Auftrags-
+        # Arbeitsverzeichnis (Repository-Wurzel nach actions/checkout)
+        # entspricht - belegt mit "--log-level debug":
+        # "using existing gitleaks config .gitleaks.toml from
+        # `(--source)/.gitleaks.toml`". Ohne "-v" bleibt ein echter Fund im
+        # oeffentlichen Protokoll redigiert; die Anzahl geprueften Commits
+        # und "leaks found: N" erscheinen trotzdem in der Ausgabe.
+        run: ./gitleaks git .
