@@ -60,7 +60,7 @@ Schemakompatibilität einer Sicherung ableiten lässt.
 ### B. `pg_dump --format=plain`, komprimiert
 
 Was `infrastructure/scripts/backup.sh:14` bereits tut. **Gelöscht mit Commit f1d2726
-(#67); siehe `../../development/datensicherung.md`, Abschnitt 14, Punkt 5.** Eine
+(#67); siehe `../../development/datensicherung.md`, Abschnitt 17, Punkt 5.** Eine
 Textdatei ist lesbar und notfalls von Hand reparierbar.
 
 Nachteil: Eine reine SQL-Datei lässt sich **nur durch Ausführen** prüfen. Das Issue
