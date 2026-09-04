@@ -40,3 +40,49 @@ regexes = [
   '''const key = "operation-key-1"''',
   '''"idempotencyKey":\s*"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"''',
 ]
+
+# Eigene Regel fuer Passwort-/PIN-Hashes (siehe #249): Der Zufallsfund des
+# Administrator-PIN-Hashes in der Sicherungsdatei aus Commit 49fc36f gelang
+# nur, weil in derselben Datei zufaellig UUIDs standen, die "generic-api-key"
+# trafen. Ein bcrypt-Hash selbst wird von keiner Standardregel erkannt. Diese
+# Regel schliesst die Luecke gezielt fuer die Hashformen, die dieses System
+# erzeugt: bcrypt-Praefixe "$2a$"/"$2b$"/"$2y$", Kostenstufe, dann exakt die
+# 53 Zeichen aus Salz und Hash (bcrypt-Base64-Alphabet: A-Z a-z 0-9 . /).
+# Die feste Laenge von 53 Zeichen ist bewusst gewaehlt: Eine blosse Erwaehnung
+# der Zeichenfolge "$2a$" (z.B. ein Praefix-Stub oder eine startsWith-Pruefung
+# in einem Test) hat diese Laenge nicht und loest die Regel nicht aus - nur
+# ein vollstaendiger, echter Hash tut es.
+[[rules]]
+id = "password-pin-hash-bcrypt"
+description = "Bcrypt-Hash eines Passworts oder einer PIN (Format, wie dieses System es erzeugt)"
+regex = '''\$2[aby]\$\d{2}\$[A-Za-z0-9./]{53}'''
+keywords = [
+  "$2a$",
+  "$2b$",
+  "$2y$",
+]
+
+# Ausnahme eng auf den einen bekannten historischen Fund begrenzt (#249):
+# Der Administrator-PIN-Hash aus der laengst wieder entfernten Sicherungsdatei
+# (Commit 49fc36f, Datei durch .gitignore ausgeschlossen) bleibt in der
+# Git-Historie bestehen, bis diese bereinigt wird. "condition = AND" verlangt
+# ZUGLEICH den exakten Dateipfad UND das Feld "pinHash" in derselben Zeile.
+#
+# Bewusst steht hier NICHT der Hashwert selbst, obwohl das die Ausnahme noch
+# enger machte: Er stuende damit in einer Datei des AKTUELLEN Standes statt
+# nur in einem alten Commit - auf einen Blick auffindbar, und er ueberlebte
+# eine Bereinigung der Historie, die ihn gerade beseitigen soll. Der Pfad
+# benennt genau eine Datei, die es im Arbeitsbaum nicht mehr gibt und die
+# .gitignore ausschliesst; enger als noetig ist das bereits.
+#
+# Die Ausnahme entfaellt, sobald die Historie bereinigt ist (siehe #249,
+# Abschnitt "Danach entscheiden, ob die Historie bereinigt wird").
+[[rules.allowlists]]
+condition = "AND"
+paths = [
+  '''(^|/)apps/backend/backups/vereinorder_backup_2026-08-20T04-24-10\.json$''',
+]
+regexTarget = "line"
+regexes = [
+  '''"pinHash":\s*"\$2[aby]\$\d{2}\$[A-Za-z0-9./]{53}"''',
+]
