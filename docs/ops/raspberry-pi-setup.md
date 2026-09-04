@@ -39,7 +39,7 @@ newgrp docker
 mkdir -p ~/vereinorder && cd ~/vereinorder
 
 # Repository klonen
-git clone https://github.com/seipekm/VereinOrder.git .
+git clone https://github.com/MKU-Solution/VereinOrder.git .
 
 # Umgebungsvariablen anlegen (mindestens ein sicheres POSTGRES_PASSWORD eintragen)
 cp .env.example .env
