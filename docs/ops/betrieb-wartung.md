@@ -52,14 +52,56 @@ Um Datenverlust und Nebenläufigkeitskonflikte während einer Wiederherstellung 
 
 ## 4. Updates & Rollback
 
-```bash
-# 1. Neuesten Quellcode / Release holen
-git pull origin main
+### Aktualisierung
 
-# 2. Container aktualisieren und neu bauen
-docker compose down
-docker compose up -d --build
+Für ein bereits eingerichtetes System läuft eine Aktualisierung **ausschließlich** über
+den abgesicherten Betriebsweg `scripts/ops/upgrade.sh`. Ein eigenes `docker compose up -d`
+oder `docker compose up -d --build` davor oder danach ist ausdrücklich **falsch**: Das
+Skript nimmt die neuen Abbilder selbst in Betrieb (#199) — und zwar erst, nachdem
+Wartungsmodus und Sicherung stehen.
 
-# 3. Datenbank prüfen
-docker compose logs backend
-```
+1. **Repository aktualisieren:**
+   ```bash
+   git pull origin main
+   ```
+   `upgrade.sh` zieht nur die fertigen Anwendungsabbilder aus der Registry (bzw. baut sie
+   örtlich bei `VEREINORDER_BUILD=1`) — `docker-compose.yml` selbst und die Skripte unter
+   `scripts/ops/` kommen weiterhin aus dem Repository und müssen deshalb vorher aktuell
+   sein.
+2. **`ADMIN_TOKEN` holen — gegen das noch laufende, alte System**, bevor irgendetwas
+   angefasst wird: Das Skript braucht das Token bereits für seinen ersten Schritt, um den
+   Wartungsmodus zu setzen.
+   ```bash
+   export ADMIN_TOKEN='<aktuelles Administrator-JWT>'
+   ```
+3. **Skript ausführen:**
+   ```bash
+   ./scripts/ops/upgrade.sh
+   ```
+   Ohne erreichbare Registry oder für einen Stand, der nie nach `main` gelangt ist:
+   `VEREINORDER_BUILD=1 ./scripts/ops/upgrade.sh` erzwingt den örtlichen Bau.
+
+Das Skript läuft dabei immer in derselben Reihenfolge:
+
+- Wartungsmodus setzen und auf die bestätigte Sperre (`LOCKED`) warten.
+- Eine geprüfte `PRE_MIGRATION`-Sicherung erzeugen — garantiert vor jeder Schemaänderung.
+- Erst danach die neuen Abbilder in Betrieb nehmen; die automatische Migration im
+  Backend-Entrypoint (`apps/backend/docker-entrypoint.sh`, #172) läuft dadurch genau in
+  diesem geschützten Fenster zwischen Sperre/Sicherung und Wiederöffnung.
+- Den Wartungsmodus erst nach bestätigtem Erfolg wieder beenden. Schlägt ein Schritt
+  unterwegs fehl, bleibt das System absichtlich gesperrt; das Skript gibt aus, welcher
+  Schritt betroffen war und wie man nach Klärung der Ursache wieder herauskommt.
+
+**Warnung:** Seit dem Entrypoint aus #172 migriert bereits ein bloßes `docker compose
+up -d` (mit oder ohne `--build`) die Datenbank mit — aber ohne Wartungsmodus und ohne die
+`PRE_MIGRATION`-Sicherung, die `upgrade.sh` davor anlegt. Wer so aktualisiert, hat im
+Fehlerfall keinen abgesicherten Stand, auf den er zurückkann.
+
+### Rollback
+
+Vor jedem Neubau sichert `upgrade.sh` die dann noch laufenden Abbilder von `backend`,
+`frontend` und `print-worker` unter `<Abbildname>:previous` (#201). Zeigt sich ein Fehler
+erst im echten Betrieb, schaltet `scripts/ops/rollback.sh` ohne erneuten Bau auf genau
+diese gesicherten Abbilder zurück. Voraussetzungen, Ablauf und die Prüfung auf ein
+zwischenzeitliches Migrationsrisiko stehen in [`backup-recovery.md`](backup-recovery.md),
+Abschnitt 6.
