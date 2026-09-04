@@ -60,6 +60,10 @@ steht seit der Ersteinrichtung selbst auch dauerhaft im Assistenten.
 
 ### Aktualisierung eines laufenden Systems
 
+Die maßgebliche Beschreibung des Aktualisierungswegs steht in
+[`betrieb-wartung.md`](./betrieb-wartung.md), Kapitel 4 ("Updates & Rollback"). Hier nur
+das, was für den Raspberry Pi als Zielgerät besonders gilt.
+
 Für ein bereits eingerichtetes System — nicht für den ersten Start — läuft eine
 Aktualisierung ausschließlich über den abgesicherten Betriebsweg. Das Skript nimmt die
 neuen Abbilder dabei selbst in Betrieb (#199); auf dem Server wird **kein** eigenes

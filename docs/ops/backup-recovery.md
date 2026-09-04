@@ -96,21 +96,20 @@ vor der fachlichen Abnahme manuell löschen.
 
 ## 5. Update mit Sicherheitssicherung
 
-Updates laufen ausschließlich über:
+Der maßgebliche Ablauf für Aktualisierungen eines laufenden Systems steht in
+[`betrieb-wartung.md`](betrieb-wartung.md), Kapitel 4 ("Updates & Rollback"). Hier nur,
+was in ein Dokument über Sicherung und Wiederherstellung gehört:
 
-```bash
-export ADMIN_TOKEN='<aktuelles Administrator-JWT>'
-./scripts/ops/upgrade.sh
-```
-
-Das Skript setzt `LOCKED`, erzeugt und prüft `PRE_MIGRATION`, führt `prisma migrate
-deploy` und `prisma migrate status` im Backend-Abbild aus und beendet die Wartung erst
-nach Erfolg. Bei einem Fehler bleibt das System gesperrt und die Sicherheitssicherung
-erhalten.
+`scripts/ops/upgrade.sh` erzeugt vor jeder Schemaänderung eine geprüfte
+`PRE_MIGRATION`-Sicherung - garantiert, bevor die neuen Abbilder samt der automatischen
+Migration im Backend-Entrypoint (`apps/backend/docker-entrypoint.sh`, #172) in Betrieb
+gehen. Ohne diese Reihenfolge gäbe es im Fehlerfall keinen Datenstand mehr, auf den eine
+Wiederherstellung (Abschnitt 3/4) zurückgreifen könnte. Bei einem Fehler bleibt das
+System gesperrt und die Sicherheitssicherung erhalten.
 
 Vor dem Neubau sichert das Skript zusätzlich die gerade laufenden Abbilder von
 `backend`, `frontend` und `print-worker` unter `<Abbildname>:previous` (#201) - das ist
-die Grundlage für den Rückweg im folgenden Abschnitt.
+die Grundlage für den Software-Rückweg im folgenden Abschnitt.
 
 ## 6. Rückweg auf die vorige Softwarefassung ohne Neubau (#201)
 
