@@ -1,8 +1,10 @@
 import {
-  CODEPAGE_COMMAND,
+  CODEPAGE_COMMANDS,
   decodeFromCodepage,
   encodeForCodepage,
+  isCodepageProfile,
   resolveCodepage,
+  resolveCodepageProfile,
 } from "./charset";
 
 describe("Codepage-Abbildung für Bondrucker", () => {
@@ -27,7 +29,29 @@ describe("Codepage-Abbildung für Bondrucker", () => {
   it("kennt das Eurozeichen nur in CP858 und ersetzt es sonst lesbar", () => {
     expect(Array.from(encodeForCodepage("€", "CP858"))).toEqual([0xd5]);
     expect(encodeForCodepage("€", "CP437").toString("ascii")).toBe("EUR");
-    expect(CODEPAGE_COMMAND.CP858).toBe(19);
+    expect(CODEPAGE_COMMANDS.EPSON_STANDARD.CP858).toBe(19);
+  });
+
+  it("bildet CP858 je Geräteprofil auf die belegte Befehlsnummer ab (Issue #260)", () => {
+    // Epson und daran ausgerichtete Geräte: unverändert 19.
+    expect(CODEPAGE_COMMANDS.EPSON_STANDARD.CP437).toBe(0);
+    expect(CODEPAGE_COMMANDS.EPSON_STANDARD.CP850).toBe(2);
+    expect(CODEPAGE_COMMANDS.EPSON_STANDARD.CP858).toBe(19);
+
+    // MUNBYN-Netzwerkdrucker aus Issue #260: CP437/CP850 identisch zu Epson,
+    // CP858 aber auf der am Gerät belegten 14 statt Epsons 19 - genau der
+    // Wert, der an echter Hardware stillschweigend verworfen wurde.
+    expect(CODEPAGE_COMMANDS.MUNBYN_CLONE.CP437).toBe(0);
+    expect(CODEPAGE_COMMANDS.MUNBYN_CLONE.CP850).toBe(2);
+    expect(CODEPAGE_COMMANDS.MUNBYN_CLONE.CP858).toBe(14);
+  });
+
+  it("fällt bei unbekanntem Geräteprofil auf EPSON_STANDARD zurück", () => {
+    expect(isCodepageProfile("MUNBYN_CLONE")).toBe(true);
+    expect(isCodepageProfile("UNBEKANNT")).toBe(false);
+    expect(resolveCodepageProfile("MUNBYN_CLONE")).toBe("MUNBYN_CLONE");
+    expect(resolveCodepageProfile("UNBEKANNT")).toBe("EPSON_STANDARD");
+    expect(resolveCodepageProfile(undefined)).toBe("EPSON_STANDARD");
   });
 
   it("ersetzt typografische Sonderzeichen statt sie zu verschlucken", () => {

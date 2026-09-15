@@ -170,6 +170,7 @@ const TABLE_FIELDS = {
     "isActive",
     "paperWidth",
     "codepage",
+    "codepageProfile",
     "cutMode",
     "copies",
     "timeoutMs",

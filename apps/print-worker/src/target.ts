@@ -1,4 +1,9 @@
-import { Codepage, resolveCodepage } from "./printing/charset";
+import {
+  Codepage,
+  CodepageProfile,
+  resolveCodepage,
+  resolveCodepageProfile,
+} from "./printing/charset";
 import { CutMode, resolveCutMode } from "./printing/escpos";
 import { PaperProfile, resolvePaperProfile } from "./printing/profiles";
 
@@ -19,6 +24,8 @@ export interface PrintTarget {
   timeoutMs: number;
   profile: PaperProfile;
   codepage: Codepage;
+  /** Geraeteprofil fuer die Befehlsnummer von "ESC t n" (Issue #260). */
+  codepageProfile: CodepageProfile;
   cutMode: CutMode;
   copies: number;
   /** Nur `cups-ipp`: Name der CUPS-Warteschlange (muss eine Raw-Queue sein). */
@@ -33,6 +40,7 @@ export interface PrinterRow {
   port?: number | null;
   paperWidth?: number | null;
   codepage?: string | null;
+  codepageProfile?: string | null;
   cutMode?: string | null;
   copies?: number | null;
   timeoutMs?: number | null;
@@ -146,6 +154,7 @@ export function resolveTarget(
     ),
     profile: resolvePaperProfile(printer.paperWidth),
     codepage: resolveCodepage(printer.codepage),
+    codepageProfile: resolveCodepageProfile(printer.codepageProfile),
     cutMode: resolveCutMode(printer.cutMode),
     copies: clamp(printer.copies, 1, 1, 9),
   };

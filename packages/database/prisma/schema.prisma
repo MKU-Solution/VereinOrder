@@ -820,23 +820,31 @@ enum PrintJobType {
 }
 
 model Printer {
-  id         String  @id @default(uuid())
-  name       String
+  id              String  @id @default(uuid())
+  name            String
   // 'CONSOLE' (Simulator), 'ESC_POS_NETWORK' (LAN/WLAN) oder 'CUPS_IPP'
   // (CUPS-Warteschlange ueber IPP; ipAddress traegt den abweichenden CUPS-Host,
   // port die Vorgabe 631, queueName den Warteschlangennamen).
-  type       String
-  ipAddress  String?
-  port       Int?
-  isActive   Boolean @default(true)
-  paperWidth Int     @default(80) // 58 oder 80 Millimeter
-  codepage   String  @default("CP858") // Zeichensatz fuer Umlaute und Euro
-  cutMode    String  @default("PARTIAL") // NONE, PARTIAL oder FULL
-  copies     Int     @default(1)
-  timeoutMs  Int     @default(5000) // Zeitlimit des Netzwerktransports
+  type            String
+  ipAddress       String?
+  port            Int?
+  isActive        Boolean @default(true)
+  paperWidth      Int     @default(80) // 58 oder 80 Millimeter
+  codepage        String  @default("CP858") // Zeichensatz fuer Umlaute und Euro
+  // Waehlt die Codepage-Befehlsnummerierung fuer "ESC t n" (Issue #260):
+  // an echter Hardware fuehrt ein MUNBYN-Netzwerkdrucker CP858 auf n=14,
+  // waehrend Epson-Geraete dafuer n=19 erwarten. Ein an diesem Geraet nicht
+  // belegter Wert wird stillschweigend verworfen - keine Fehlermeldung,
+  // der Drucker bleibt auf seiner zuletzt aktiven (moeglicherweise
+  // griechischen Vorgabe-)Seite stehen. "EPSON_STANDARD" (Vorgabe) oder
+  // "MUNBYN_CLONE"; siehe apps/print-worker/src/printing/charset.ts.
+  codepageProfile String  @default("EPSON_STANDARD")
+  cutMode         String  @default("PARTIAL") // NONE, PARTIAL oder FULL
+  copies          Int     @default(1)
+  timeoutMs       Int     @default(5000) // Zeitlimit des Netzwerktransports
   // CUPS-Warteschlangenname; Pflicht bei 'CUPS_IPP', sonst null. Die Queue muss
   // eine Raw-Queue sein, weil der Worker fertige ESC/POS-Bytes liefert.
-  queueName  String?
+  queueName       String?
 
   // Ersatzdrucker fuer das einmalige Failover. Bewusst global und nicht
   // veranstaltungsbezogen (Entscheidung der Projektleitung zu Risiko R7).

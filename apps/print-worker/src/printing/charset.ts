@@ -11,12 +11,57 @@ export const SUPPORTED_CODEPAGES: Codepage[] = ["CP437", "CP850", "CP858"];
 
 export const DEFAULT_CODEPAGE: Codepage = "CP858";
 
-/** Parameter des ESC/POS-Befehls "ESC t n" zur Codepage-Auswahl. */
-export const CODEPAGE_COMMAND: Record<Codepage, number> = {
-  CP437: 0,
-  CP850: 2,
-  CP858: 19,
+/**
+ * Geraeteprofil fuer den ESC/POS-Befehl "ESC t n" (Codepage-Auswahl).
+ *
+ * Issue #260, belegt an echter Hardware: ein MUNBYN-Netzwerkdrucker fuehrt
+ * CP858 auf n=14, nicht auf Epsons n=19. Ein am Geraet nicht belegter Wert
+ * wird stillschweigend verworfen - keine Fehlermeldung, der Drucker bleibt
+ * auf seiner zuletzt aktiven Seite stehen. Deshalb ist die Zuordnung
+ * herstellerabhaengig und darf nicht global fest verdrahtet sein.
+ *
+ * "EPSON_STANDARD" ist und bleibt der Vorgabewert: Geraete, die sich an
+ * Epsons Nummerierung halten, duerfen durch diese Einstellung nicht
+ * brechen. "MUNBYN_CLONE" deckt den belegten MUNBYN-Befund ab; weitere
+ * Profile kommen erst hinzu, wenn ein weiteres Geraet mit abweichender
+ * Nummerierung belegt ist (siehe docs/development/printing.md).
+ */
+export type CodepageProfile = "EPSON_STANDARD" | "MUNBYN_CLONE";
+
+export const SUPPORTED_CODEPAGE_PROFILES: CodepageProfile[] = [
+  "EPSON_STANDARD",
+  "MUNBYN_CLONE",
+];
+
+export const DEFAULT_CODEPAGE_PROFILE: CodepageProfile = "EPSON_STANDARD";
+
+/** Je Geraeteprofil die Parameter des Befehls "ESC t n" für jede Codepage. */
+export const CODEPAGE_COMMANDS: Record<
+  CodepageProfile,
+  Record<Codepage, number>
+> = {
+  EPSON_STANDARD: {
+    CP437: 0,
+    CP850: 2,
+    CP858: 19,
+  },
+  // Belegt am MUNBYN-Netzwerkdrucker aus Issue #260 (dessen Selbsttestseite
+  // fuehrt CP858 zusaetzlich auf 31; 14 ist die per Bestaetigungsdruck
+  // nachgewiesene erste Fundstelle und bleibt hier die gesendete Nummer).
+  MUNBYN_CLONE: {
+    CP437: 0,
+    CP850: 2,
+    CP858: 14,
+  },
 };
+
+export function isCodepageProfile(value: unknown): value is CodepageProfile {
+  return SUPPORTED_CODEPAGE_PROFILES.includes(value as CodepageProfile);
+}
+
+export function resolveCodepageProfile(value: unknown): CodepageProfile {
+  return isCodepageProfile(value) ? value : DEFAULT_CODEPAGE_PROFILE;
+}
 
 /** In CP437, CP850 und CP858 identisch belegte Zeichen. */
 const SHARED: Record<string, number> = {

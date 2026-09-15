@@ -158,10 +158,34 @@ Austausch im laufenden Betrieb.
 4. **Papierbreite**: 58 mm oder 80 mm, passend zur eingelegten Bonrolle.
 5. **Zeichensatz**: `CP858` (Umlaute und Euro) als Vorgabe; `CP850` oder `CP437` nur bei
    Geräten, die `CP858` nicht unterstützen.
-6. IP-Adresse/Port nur ausfüllen, wenn dieser Drucker über eine andere CUPS-Instanz läuft
+6. **Geräteprofil für den Zeichensatz-Befehl**: `Standard (Epson und kompatible Geräte)`
+   als Vorgabe unverändert lassen. Nur umstellen, wenn der Testbon in Schritt 8 eine
+   falsche Schrift zeigt (siehe unten) — bekannt ist bisher `MUNBYN und baugleiche
+Nachbauten`.
+7. IP-Adresse/Port nur ausfüllen, wenn dieser Drucker über eine andere CUPS-Instanz läuft
    als in `CUPS_BASE_URL` hinterlegt. Im Regelfall (eine CUPS-Instanz auf dem Pi für alle
    Drucker) leer lassen.
-7. Speichern, danach über _Testbon drucken_ auslösen.
+8. Speichern, danach über _Testbon drucken_ auslösen.
+
+**Woran erkennt man eine falsche Codepage?** Es gibt in ESC/POS keinen Weg, den Drucker
+softwareseitig zu fragen, welcher Zeichensatz gerade aktiv ist — das lässt sich nicht am
+Bildschirm der Verwaltung ablesen. Das einzige Werkzeug ist die **Umlautprobe** auf dem
+Testbon (`Umlautprobe: ÄÖÜ äöü ß 1,50 €`), gelesen von einem Menschen:
+
+- Steht dort eine fremde Schrift (z. B. griechisch) statt Umlauten, wird der gesendete
+  Befehl vom Gerät nicht angenommen — an einem solchen Gerät wurde ein deutscher Bon genau
+  deshalb griechisch ausgedruckt (Issue #260). In der Druckerverwaltung unter Schritt 6
+  das andere Geräteprofil wählen und den Testbon erneut drucken.
+- Stehen Umlaute richtig, aber kein Eurozeichen, trifft der Befehl zwar eine gültige
+  Seite, aber die falsche — z. B. `CP437` statt `CP858`. In diesem Fall zuerst `codepage`
+  in Schritt 5 prüfen, danach bei Bedarf auch das Geräteprofil.
+- Stehen Umlaute und Eurozeichen richtig, passt die Kombination aus Zeichensatz und
+  Geräteprofil für dieses Gerät.
+
+Eine falsche Codepage druckt kommentarlos weiter, nur in der falschen Schrift — sie fällt
+nicht durch einen Fehler auf, sondern nur durch das Lesen des Testbons. Deshalb genügt es
+nicht, den Testbon nur auf „kam er an" zu prüfen; die Umlautprobe muss tatsächlich gelesen
+werden.
 
 Die Verwaltung meldet nach dem Testdruck entweder „Testbon wurde gedruckt.“ oder eine
 Fehlermeldung. **Wichtig bei CUPS-Warteschlangen:** Die Abfrage in der Verwaltung wartet nur

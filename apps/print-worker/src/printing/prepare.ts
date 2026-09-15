@@ -22,6 +22,7 @@ export function prepareDocument(
   const lines = renderDocument(document, target.profile);
   const bytes = encodeEscPos(lines, {
     codepage: target.codepage,
+    codepageProfile: target.codepageProfile,
     cutMode: target.cutMode,
     copies: target.copies,
   });

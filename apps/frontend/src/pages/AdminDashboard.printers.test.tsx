@@ -23,6 +23,7 @@ const printer = {
   port: 9100,
   paperWidth: 58,
   codepage: "CP858",
+  codepageProfile: "MUNBYN_CLONE",
   cutMode: "PARTIAL",
   copies: 1,
   timeoutMs: 5000,
@@ -98,11 +99,13 @@ function loginAs(role: "ADMINISTRATOR" | "EVENT_MANAGER" | "WAITER") {
 }
 
 describe("Druckerverwaltung", () => {
-  it("zeigt das Ausgabeprofil jedes Druckers", async () => {
+  it("zeigt das Ausgabeprofil jedes Druckers, einschließlich des Codepage-Geräteprofils (Issue #260)", async () => {
     await openPrinterTab();
 
     expect(
-      screen.getByText(/58 mm · CP858 · Schnitt: PARTIAL/),
+      screen.getByText(
+        /58 mm · CP858 \(MUNBYN \/ Nachbau\) · Schnitt: PARTIAL/,
+      ),
     ).toBeInTheDocument();
   });
 
@@ -173,6 +176,30 @@ describe("Druckerverwaltung", () => {
     const values = Array.from(typeSelect.options).map((option) => option.value);
 
     expect(values).toEqual(["CONSOLE", "ESC_POS_NETWORK", "CUPS_IPP"]);
+  });
+
+  it("zeigt das Codepage-Geräteprofil des Druckers und lässt es umstellen (Issue #260)", async () => {
+    await openPrinterTab();
+    fireEvent.click(screen.getByTitle("Bearbeiten"));
+
+    const profileSelect = screen.getByLabelText(
+      /Geräteprofil für den Zeichensatz-Befehl/,
+    ) as HTMLSelectElement;
+    const values = Array.from(profileSelect.options).map(
+      (option) => option.value,
+    );
+    expect(values).toEqual(["EPSON_STANDARD", "MUNBYN_CLONE"]);
+    // Der Testfixture-Drucker steht auf MUNBYN_CLONE.
+    expect(profileSelect.value).toBe("MUNBYN_CLONE");
+
+    fireEvent.change(profileSelect, { target: { value: "EPSON_STANDARD" } });
+    fireEvent.click(screen.getByRole("button", { name: "Speichern" }));
+
+    expect(await screen.findByText(/58 mm/)).toBeInTheDocument();
+    expect(mockedApi.patch).toHaveBeenCalledWith(
+      "/print-jobs/printers/printer-1",
+      expect.objectContaining({ codepageProfile: "EPSON_STANDARD" }),
+    );
   });
 
   it("verlangt bei CUPS_IPP einen Warteschlangennamen", async () => {

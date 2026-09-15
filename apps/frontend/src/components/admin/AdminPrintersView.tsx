@@ -11,6 +11,7 @@ import {
 import { AdminEmptyState } from "./AdminEmptyState";
 import { AdminToolbar } from "./AdminToolbar";
 import {
+  describeCodepageProfile,
   describeJobType,
   describeUnresolvedReason,
   formatClockTime,
@@ -318,8 +319,9 @@ export const AdminPrintersView = ({
                   <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3 font-mono text-xs text-slate-400">
                     <p className="text-slate-300">
                       {printer.paperWidth || 80} mm ·{" "}
-                      {printer.codepage || "CP858"} · Schnitt:{" "}
-                      {printer.cutMode || "PARTIAL"}
+                      {printer.codepage || "CP858"} (
+                      {describeCodepageProfile(printer.codepageProfile)}) ·
+                      Schnitt: {printer.cutMode || "PARTIAL"}
                     </p>
                     <div className="grid grid-cols-2 gap-1.5 mt-2 pt-2 border-t border-slate-800/80 text-slate-400">
                       <span>Kopien: {printer.copies || 1}x</span>
