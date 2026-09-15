@@ -199,6 +199,7 @@ const testPrint: PrintJobLike = {
     printerType: "ESC_POS_NETWORK",
     paperWidth: 80,
     codepage: "CP858",
+    codepageProfile: "MUNBYN_CLONE",
     timestamp: createdAt,
   },
 };
@@ -466,6 +467,7 @@ describe("Bonaufbau je Auftragsart", () => {
     expect(text).toContain("TEST-DRUCK");
     expect(text).toContain("Küchendrucker");
     expect(text).toContain("ÄÖÜ äöü ß");
+    expect(text).toContain("MUNBYN / Nachbau");
   });
 
   it.each(WIDTHS)(

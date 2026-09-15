@@ -19,6 +19,15 @@ export const SUPPORTED_PRINTER_TYPES = [
 ] as const;
 export const SUPPORTED_PAPER_WIDTHS = [58, 80];
 export const SUPPORTED_CODEPAGES = ["CP437", "CP850", "CP858"];
+/**
+ * Geräteprofil für die Befehlsnummer von "ESC t n" (Issue #260): an echter
+ * Hardware belegt ein MUNBYN-Netzwerkdrucker CP858 auf 14 statt Epsons 19,
+ * und ein am Gerät nicht belegter Wert wird stillschweigend verworfen -
+ * keine Fehlermeldung. Die Zuordnung ist damit herstellerabhängig und wird
+ * je Drucker gewählt statt global fest verdrahtet, siehe
+ * apps/print-worker/src/printing/charset.ts.
+ */
+export const SUPPORTED_CODEPAGE_PROFILES = ["EPSON_STANDARD", "MUNBYN_CLONE"];
 export const SUPPORTED_CUT_MODES = ["NONE", "PARTIAL", "FULL"];
 
 const HOST_PATTERN = /^[A-Za-z0-9._-]+$/;
@@ -66,6 +75,7 @@ export interface PrinterInput {
   isActive?: boolean;
   paperWidth?: number;
   codepage?: string;
+  codepageProfile?: string;
   cutMode?: string;
   copies?: number;
   timeoutMs?: number;
@@ -761,6 +771,7 @@ export class PrintJobsService {
         isActive: values.isActive,
         paperWidth: values.paperWidth,
         codepage: values.codepage,
+        codepageProfile: values.codepageProfile,
         cutMode: values.cutMode,
         copies: values.copies,
         timeoutMs: values.timeoutMs,
@@ -810,6 +821,7 @@ export class PrintJobsService {
         isActive: values.isActive,
         paperWidth: values.paperWidth,
         codepage: values.codepage,
+        codepageProfile: values.codepageProfile,
         cutMode: values.cutMode,
         copies: values.copies,
         timeoutMs: values.timeoutMs,
@@ -857,6 +869,7 @@ export class PrintJobsService {
           printerType: printer.type,
           paperWidth: printer.paperWidth,
           codepage: printer.codepage,
+          codepageProfile: printer.codepageProfile,
           timestamp: new Date().toISOString(),
           message: "Druckerschnittstelle erfolgreich verbunden!",
         },
@@ -1057,6 +1070,18 @@ export class PrintJobsService {
         );
       }
       values.codepage = codepage;
+    }
+    if (has("codepageProfile")) {
+      if (typeof data.codepageProfile !== "string") {
+        throw new BadRequestException("Das Geräteprofil muss Text sein.");
+      }
+      const codepageProfile = data.codepageProfile.toUpperCase();
+      if (!SUPPORTED_CODEPAGE_PROFILES.includes(codepageProfile)) {
+        throw new BadRequestException(
+          `Geräteprofil muss eines von ${SUPPORTED_CODEPAGE_PROFILES.join(", ")} sein.`,
+        );
+      }
+      values.codepageProfile = codepageProfile;
     }
     if (has("cutMode")) {
       if (typeof data.cutMode !== "string") {

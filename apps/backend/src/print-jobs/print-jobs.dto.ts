@@ -15,6 +15,7 @@ import {
   PrinterInput,
   ReportOutcomeInput,
   ResolveJobInput,
+  SUPPORTED_CODEPAGE_PROFILES,
   SUPPORTED_CODEPAGES,
   SUPPORTED_CUT_MODES,
   SUPPORTED_PAPER_WIDTHS,
@@ -118,6 +119,10 @@ class PrinterOptionalFieldsDto implements PrinterInput {
   @IsOptional()
   @IsIn(SUPPORTED_CODEPAGES)
   codepage?: string;
+
+  @IsOptional()
+  @IsIn(SUPPORTED_CODEPAGE_PROFILES)
+  codepageProfile?: string;
 
   @IsOptional()
   @IsIn(SUPPORTED_CUT_MODES)

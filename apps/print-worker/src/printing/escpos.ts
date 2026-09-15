@@ -1,8 +1,10 @@
 import {
   Codepage,
-  CODEPAGE_COMMAND,
+  CODEPAGE_COMMANDS,
+  CodepageProfile,
   DEFAULT_CODEPAGE,
   encodeForCodepage,
+  resolveCodepageProfile,
 } from "./charset";
 import { RenderedLine } from "./document";
 
@@ -24,6 +26,8 @@ export function resolveCutMode(value: unknown): CutMode {
 
 export interface EncodeOptions {
   codepage?: Codepage;
+  /** Geraeteprofil fuer die Befehlsnummer von "ESC t n" (Issue #260). */
+  codepageProfile?: CodepageProfile;
   cutMode?: CutMode;
   /** Anzahl identischer Ausfertigungen, jede mit eigenem Schnitt. */
   copies?: number;
@@ -127,6 +131,7 @@ export function encodeEscPos(
   options: EncodeOptions = {},
 ): Buffer {
   const codepage = options.codepage ?? DEFAULT_CODEPAGE;
+  const codepageProfile = resolveCodepageProfile(options.codepageProfile);
   const cutMode = resolveCutMode(options.cutMode);
   const copies = Math.max(1, Math.min(9, Math.trunc(options.copies ?? 1) || 1));
   const feedBeforeCut = options.feedBeforeCut ?? 4;
@@ -134,7 +139,9 @@ export function encodeEscPos(
   const chunks: Buffer[] = [];
   for (let copy = 0; copy < copies; copy += 1) {
     chunks.push(Buffer.from([ESC, 0x40])); // ESC @: Drucker zurücksetzen
-    chunks.push(Buffer.from([ESC, 0x74, CODEPAGE_COMMAND[codepage]]));
+    chunks.push(
+      Buffer.from([ESC, 0x74, CODEPAGE_COMMANDS[codepageProfile][codepage]]),
+    );
     chunks.push(Buffer.from([ESC, 0x52, 0x00])); // Internationaler Zeichensatz USA
     chunks.push(...encodeLines(lines, codepage));
     chunks.push(Buffer.from([ESC, 0x61, 0x00])); // Ausrichtung zurücksetzen

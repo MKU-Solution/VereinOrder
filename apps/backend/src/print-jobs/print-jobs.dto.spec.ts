@@ -37,6 +37,12 @@ describe("Druck-DTOs (Issue #69)", () => {
     ],
     [CreatePrinterDto, { name: "   ", type: "CONSOLE" }],
     [CreatePrinterDto, { name: "Bon", type: "CONSOLE", isActive: "false" }],
+    // Issue #260: eine unbekannte Codepage-Geräteprofilbezeichnung darf
+    // nicht klammheimlich als EPSON_STANDARD durchgehen.
+    [
+      CreatePrinterDto,
+      { name: "Bon", type: "CONSOLE", codepageProfile: "GRIECHISCH" },
+    ],
   ])("weist ungültige Worker-/Druckereingaben ab", async (Dto, input) => {
     expect(await validationErrors(Dto, input)).not.toHaveLength(0);
   });
@@ -48,6 +54,19 @@ describe("Druck-DTOs (Issue #69)", () => {
           name: "  Bon Hauptkasse  ",
           type: "CONSOLE",
           isActive: false,
+        }),
+      ),
+    ).toHaveLength(0);
+  });
+
+  it("akzeptiert das MUNBYN-Geräteprofil (Issue #260) - das Feld muss dem DTO bekannt sein, sonst weist die globale Validierung (forbidNonWhitelisted) es mit 400 ab", async () => {
+    expect(
+      await validate(
+        plainToInstance(CreatePrinterDto, {
+          name: "Küche MUNBYN",
+          type: "ESC_POS_NETWORK",
+          ipAddress: "192.168.10.217",
+          codepageProfile: "MUNBYN_CLONE",
         }),
       ),
     ).toHaveLength(0);

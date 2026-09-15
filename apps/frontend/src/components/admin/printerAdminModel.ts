@@ -20,6 +20,21 @@ const PRINTER_ERROR_LABELS: Record<string, string> = {
 const describePrinterError = (code?: string | null): string =>
   code ? (PRINTER_ERROR_LABELS[code] ?? code) : "unbekannter Fehler";
 
+// Anzeigename des Geräteprofils (Issue #260): wählt, welche Befehlsnummer
+// "ESC t n" für die gewählte Codepage erhält. Herstellerabhängig - an
+// echter Hardware fährt ein MUNBYN-Netzwerkdrucker CP858 auf 14, Epson und
+// daran ausgerichtete Geräte auf 19. Ein falsches Profil scheitert lautlos
+// (kein Fehler, keine Rückmeldung), deshalb ist der Name hier bewusst
+// verständlich statt einer rohen Zahl.
+export const CODEPAGE_PROFILE_LABELS: Record<string, string> = {
+  EPSON_STANDARD: "Epson-Standard",
+  MUNBYN_CLONE: "MUNBYN / Nachbau",
+};
+
+export const describeCodepageProfile = (value?: string | null): string =>
+  CODEPAGE_PROFILE_LABELS[value ?? ""] ??
+  CODEPAGE_PROFILE_LABELS.EPSON_STANDARD;
+
 const formatMinutesAgoShort = (
   value?: string | number | Date | null,
 ): string => {

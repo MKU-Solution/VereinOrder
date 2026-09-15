@@ -1,0 +1,26 @@
+-- Codepage-Befehlsnummerierung je Drucker (Issue #260).
+--
+-- Am 15.09.2026 wurde erstmals gegen echte Hardware gedruckt: ein
+-- MUNBYN-Netzwerkdrucker druckte deutsche Umlaute griechisch. Ursache war
+-- NICHT eine falsche Codepage-Wahl (Printer.codepage stand bereits korrekt
+-- auf CP858), sondern der ESC/POS-Befehl "ESC t n", der die Codepage
+-- aktiviert: das Projekt sendet n=19 (Epsons Nummer fuer CP858), dieses
+-- Geraet fuehrt CP858 aber auf n=14. Ein am Geraet nicht belegter Wert wird
+-- stillschweigend verworfen - kein Fehler, keine Rueckmeldung - und der
+-- Drucker bleibt auf seiner zuletzt aktiven Seite stehen. Nach "ESC @"
+-- (Reset) ist das bei diesem Geraet die griechische Vorgabeseite.
+--
+-- Die Befehlsnummerierung ist damit herstellerabhaengig, waehrend
+-- apps/print-worker/src/printing/charset.ts sie bisher fest verdrahtet
+-- hatte (CODEPAGE_COMMAND, Epsons Zuordnung). Diese Spalte macht sie je
+-- Drucker waehlbar, ohne den Vorgabewert fuer Epson-konforme Geraete zu
+-- aendern: "EPSON_STANDARD" bleibt Default und liefert exakt die bisherige
+-- Zuordnung (CP437=0, CP850=2, CP858=19); "MUNBYN_CLONE" deckt den
+-- belegten MUNBYN-Befund ab (CP858=14).
+--
+-- Bewusst ein benanntes Geraeteprofil statt einer rohen ESC/POS-Zahl als
+-- Einstellung: ein Vereinsmitglied ohne Entwicklerkenntnisse muss einen
+-- falsch druckenden Drucker selbst umstellen koennen. Ein Profilname ("mein
+-- Drucker ist ein MUNBYN oder Nachbau") ist dafuer verstaendlicher als eine
+-- zu erklaerende Befehlsnummer.
+ALTER TABLE "Printer" ADD COLUMN "codepageProfile" TEXT NOT NULL DEFAULT 'EPSON_STANDARD';

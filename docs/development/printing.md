@@ -81,18 +81,19 @@ kein gesendetes Byte.
 
 Die Administration pflegt je Drucker:
 
-| Feld                | Bedeutung                                                                    | Standard       |
-| ------------------- | ---------------------------------------------------------------------------- | -------------- |
-| `type`              | `CONSOLE`, `ESC_POS_NETWORK` (LAN/WLAN) oder `CUPS_IPP`                      | –              |
-| `ipAddress`         | Pflicht bei `ESC_POS_NETWORK`; bei `CUPS_IPP` nur ein abweichender CUPS-Host | –              |
-| `queueName`         | Name der CUPS-Warteschlange, Pflicht bei `CUPS_IPP`                          | –              |
-| `port`              | Rohdaten-Port des Druckers, bei `CUPS_IPP` der IPP-Port                      | `9100` / `631` |
-| `fallbackPrinterId` | Ersatzdrucker; keine Ketten, keine Zyklen                                    | –              |
-| `paperWidth`        | `58` (32 Zeichen) oder `80` (48 Zeichen)                                     | `80`           |
-| `codepage`          | `CP858`, `CP850` oder `CP437`                                                | `CP858`        |
-| `cutMode`           | `PARTIAL`, `FULL` oder `NONE`                                                | `PARTIAL`      |
-| `copies`            | Ausfertigungen je Auftrag, 1 bis 9                                           | `1`            |
-| `timeoutMs`         | Zeitlimit für Verbindung und Übertragung                                     | `5000`         |
+| Feld                | Bedeutung                                                                    | Standard         |
+| ------------------- | ---------------------------------------------------------------------------- | ---------------- |
+| `type`              | `CONSOLE`, `ESC_POS_NETWORK` (LAN/WLAN) oder `CUPS_IPP`                      | –                |
+| `ipAddress`         | Pflicht bei `ESC_POS_NETWORK`; bei `CUPS_IPP` nur ein abweichender CUPS-Host | –                |
+| `queueName`         | Name der CUPS-Warteschlange, Pflicht bei `CUPS_IPP`                          | –                |
+| `port`              | Rohdaten-Port des Druckers, bei `CUPS_IPP` der IPP-Port                      | `9100` / `631`   |
+| `fallbackPrinterId` | Ersatzdrucker; keine Ketten, keine Zyklen                                    | –                |
+| `paperWidth`        | `58` (32 Zeichen) oder `80` (48 Zeichen)                                     | `80`             |
+| `codepage`          | `CP858`, `CP850` oder `CP437`                                                | `CP858`          |
+| `codepageProfile`   | `EPSON_STANDARD` oder `MUNBYN_CLONE` — siehe unten                           | `EPSON_STANDARD` |
+| `cutMode`           | `PARTIAL`, `FULL` oder `NONE`                                                | `PARTIAL`        |
+| `copies`            | Ausfertigungen je Auftrag, 1 bis 9                                           | `1`              |
+| `timeoutMs`         | Zeitlimit für Verbindung und Übertragung                                     | `5000`           |
 
 USB-Drucker hängen am CUPS-Dienst des Hosts, nicht am Worker. Der Worker spricht CUPS
 über IPP an und braucht dafür keine Gerätefreigabe. Einrichtung und Fehlersuche am Gerät
@@ -103,6 +104,72 @@ Backend weist solche Typen ab.
 Fehlt ein Zeichen in der gewählten Codepage, wird es nachvollziehbar ersetzt: `€` wird zu
 `EUR`, typografische Anführungszeichen werden zu geraden, Akzente fallen auf den
 Grundbuchstaben zurück.
+
+### `codepageProfile`: die Codepage-Befehlsnummer ist herstellerabhängig
+
+`codepage` legt fest, **welche** Codepage gedruckt werden soll (die Bytezuordnung in
+`src/printing/charset.ts`, `CODEPAGE_TABLES`). Damit der Drucker tatsächlich auf diese
+Codepage umschaltet, sendet der Worker vor dem Bon den ESC/POS-Befehl `ESC t n` — und
+**welche Zahl `n` welche Codepage bedeutet, legt der Druckerhersteller fest**, nicht der
+ESC/POS-Standard.
+
+Issue #260, belegt am 15.09.2026 gegen echte Hardware (ein MUNBYN-Netzwerkdrucker):
+Epson-Geräte erwarten für `CP858` die Zahl `19`, dieses Gerät aber `14`. Gravierender als
+die abweichende Zahl selbst ist, **wie** das Gerät auf eine bei ihm nicht belegte Zahl
+reagiert: Es verwirft sie **stillschweigend** — kein Fehler, keine Rückmeldung, der Bon
+druckt normal weiter, nur auf der zuletzt aktiven Seite. Beim betroffenen Gerät ist das
+nach `ESC @` (Reset) ausgerechnet eine griechische Vorgabeseite, weshalb deutsche Bons
+griechisch herauskamen, obwohl `codepage` korrekt auf `CP858` stand.
+
+`CODEPAGE_COMMANDS` in `src/printing/charset.ts` bildet deshalb je Geräteprofil
+(`codepageProfile`) eine eigene Zuordnungstabelle ab:
+
+```ts
+export const CODEPAGE_COMMANDS: Record<
+  CodepageProfile,
+  Record<Codepage, number>
+> = {
+  EPSON_STANDARD: { CP437: 0, CP850: 2, CP858: 19 },
+  MUNBYN_CLONE: { CP437: 0, CP850: 2, CP858: 14 },
+};
+```
+
+`EPSON_STANDARD` bleibt der Vorgabewert und darf es auch bleiben: Geräte, die sich an
+Epsons Nummerierung halten, dürfen durch diese Einstellung nicht brechen. `MUNBYN_CLONE`
+ist der aktuell einzige belegte Abweichler; ein weiteres Profil kommt erst hinzu, wenn ein
+weiteres Gerät mit abweichender Nummerierung ebenso belegt ist — nicht auf Verdacht.
+
+Ein benanntes Geräteprofil statt einer rohen ESC/POS-Zahl als Einstellung ist eine bewusste
+Entscheidung: Ein Vereinsmitglied ohne Entwicklerkenntnisse muss einen falsch druckenden
+Drucker selbst umstellen können. "Mein Drucker ist ein MUNBYN oder ein baugleicher Nachbau"
+ist dafür verständlicher als eine zu erklärende Zahl aus einer Hersteller-Selbsttestseite.
+
+### Woran erkennt man eine falsche Codepage?
+
+**Es gibt in ESC/POS keinen Befehl, mit dem der Worker den Drucker fragen könnte, welche
+Codepage gerade aktiv ist.** Eine softwareseitige Rückprüfung ist nicht möglich und wird
+hier auch nicht versucht — jeder scheinbare Erfolg einer solchen Prüfung wäre erfunden.
+
+Das einzige Werkzeug ist die **Umlautprobe** auf dem Testbon
+(`src/printing/documents.ts`, Zeile `Umlautprobe: ÄÖÜ äöü ß 1,50 €`) — ein Mensch muss sie
+lesen. Sie ist kein Nebeneffekt des Testdrucks, sondern der eigentliche Zweck der Zeile:
+Sie deckte den MUNBYN-Befund aus Issue #260 beim allerersten Druck gegen echte Hardware
+auf, weil Umlaute und Papierbreite auf dem Bon sofort erkennbar falsch waren.
+
+- **Fremde Schrift (z. B. griechisch, kyrillisch) statt Umlauten:** Der gesendete
+  `ESC t n`-Wert ist am Gerät nicht belegt und wurde verworfen; der Drucker steht auf
+  seiner (oft fremdsprachigen) Vorgabeseite. `codepageProfile` in der Verwaltung
+  umstellen und den Testbon erneut drucken.
+- **Umlaute richtig, aber kein Eurozeichen (z. B. `?` oder ein anderes Zeichen statt `€`):**
+  Der Befehl wirkt, trifft aber eine Codepage ohne Eurozeichen (z. B. `CP437` oder eine
+  andere Fremdcodepage desselben `codepageProfile`). Das war der entscheidende
+  Unterscheidungsbefund in Issue #260: Umlaute richtig **und** Euro falsch beweist, dass
+  die Seite tatsächlich gewechselt wurde, nur eben auf die falsche.
+- **Alles korrekt:** `codepage` und `codepageProfile` passen zusammen für dieses Gerät.
+
+Ob nach der Einrichtung eines Druckers eine ausdrückliche Bestätigung verlangt werden
+sollte, dass die Umlautprobe korrekt aussah, ist eine Produktentscheidung und bisher nicht
+umgesetzt.
 
 ## Simulator
 

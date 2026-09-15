@@ -638,6 +638,55 @@ describe("PrintJobsService – Druckerkonfiguration und Testdruck", () => {
     ).rejects.toThrow(/Zeichensatz/);
   });
 
+  it("weist ein unbekanntes Codepage-Geräteprofil ab (Issue #260)", async () => {
+    await expect(
+      service.createPrinter({
+        name: "Küche",
+        type: "CONSOLE",
+        codepageProfile: "GRIECHISCH",
+      }),
+    ).rejects.toThrow(/Geräteprofil/);
+  });
+
+  it("legt einen Drucker mit dem MUNBYN-Geräteprofil an, ohne die Zeichensatzwahl zu berühren (Issue #260)", async () => {
+    await service.createPrinter({
+      name: "Küche MUNBYN",
+      type: "ESC_POS_NETWORK",
+      ipAddress: "192.168.10.217",
+      codepage: "cp858",
+      codepageProfile: "munbyn_clone",
+    });
+
+    expect(prisma.printer.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        codepage: "CP858",
+        codepageProfile: "MUNBYN_CLONE",
+      }),
+    });
+  });
+
+  it("lässt bestehende Drucker ohne explizite Angabe beim Vorgabeprofil EPSON_STANDARD (Issue #260)", async () => {
+    prisma.printer.findUnique.mockResolvedValue({
+      id: "printer-1",
+      type: "ESC_POS_NETWORK",
+      ipAddress: "192.168.1.50",
+      codepageProfile: "EPSON_STANDARD",
+    });
+
+    await service.updatePrinter("printer-1", { copies: 2 });
+
+    expect(prisma.printer.update).toHaveBeenCalledWith({
+      where: { id: "printer-1" },
+      data: expect.objectContaining({ copies: 2 }),
+    });
+    // codepageProfile wurde nicht mitgeschickt - values.codepageProfile ist
+    // undefined; Prisma lässt ein undefined-Feld beim update unverändert,
+    // der Bestandswert des Druckers wird also nicht überschrieben.
+    expect(
+      prisma.printer.update.mock.calls[0][0].data.codepageProfile,
+    ).toBeUndefined();
+  });
+
   it("erlaubt Teiländerungen an bestehenden Druckern", async () => {
     prisma.printer.findUnique.mockResolvedValue({
       id: "printer-1",
@@ -668,6 +717,7 @@ describe("PrintJobsService – Druckerkonfiguration und Testdruck", () => {
       type: "ESC_POS_NETWORK",
       paperWidth: 58,
       codepage: "CP858",
+      codepageProfile: "MUNBYN_CLONE",
     });
 
     await service.createTestJob("printer-1");
@@ -679,6 +729,10 @@ describe("PrintJobsService – Druckerkonfiguration und Testdruck", () => {
       printerType: "ESC_POS_NETWORK",
       paperWidth: 58,
       codepage: "CP858",
+      // Issue #260: der Testbon muss das tatsächlich gewählte
+      // Geräteprofil ausweisen, sonst lässt sich die Umlautprobe nicht dem
+      // richtigen Profil zuordnen.
+      codepageProfile: "MUNBYN_CLONE",
     });
   });
 

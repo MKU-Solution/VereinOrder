@@ -214,6 +214,19 @@ const PRODUCT_CATEGORY_ACTIVE_SEED = {
   productId: "k0000000-0000-4000-8000-000000000003",
 };
 
+// Gueltiger Altstand fuer die Migration
+// "20260915100000_add_printer_codepage_profile" (Issue #260): ein
+// Bestandsdrucker, wie er vor der Migration ohne "codepageProfile"-Spalte
+// aussieht. Wie bei "20260902100000_add_product_category_is_active" gibt es
+// hier keinen Verletzungsfall, weil DEFAULT 'EPSON_STANDARD' jede
+// Bestandszeile fuellt - die Pruefung stellt stattdessen sicher, dass der
+// Vorgabewert tatsaechlich die bisherige Epson-Zuordnung ist (Aenderungen an
+// bestehenden Epson-konformen Druckern waeren sonst ein stiller Bruch) und
+// dass die Spalte echt beschreibbar ist.
+const PRINTER_CODEPAGE_PROFILE_SEED = {
+  printerId: "l0000000-0000-4000-8000-000000000001",
+};
+
 function fail(message) {
   throw new Error(message);
 }
@@ -1661,6 +1674,69 @@ END $$;
 `;
 }
 
+// Fuegt einen Bestandsdrucker ein, wie er vor "codepageProfile" aussieht.
+// Muss vor "migrate deploy" der zugehoerigen Migration laufen. Nur die
+// Spalten ohne Datenbank-Default werden explizit gesetzt (id, name, type,
+// updatedAt); alle anderen - einschliesslich "codepage" = 'CP858' - bleiben
+// bei ihrem jeweiligen DEFAULT, damit der Altstand realistisch bleibt.
+function seedLegacyPrinterSql(ids) {
+  return `
+INSERT INTO "Printer" (id, name, type, "updatedAt")
+VALUES ('${ids.printerId}', 'CI Migrationstest Drucker', 'CONSOLE', now());
+`;
+}
+
+// Prueft nach "migrate deploy", dass der Bestandsdrucker unveraendert
+// vorhanden ist, per DEFAULT auf "EPSON_STANDARD" steht - der Vorgabewert
+// darf Epson-konforme Bestandsdrucker nicht auf eine andere Befehlsnummer
+// umstellen -, dass die Spalte tatsaechlich beschreibbar ist (Wechsel auf
+// "MUNBYN_CLONE" und zurueck) und dass NOT NULL wirklich greift.
+function verifyPrinterCodepageProfileMigrationSql(ids) {
+  return `
+-- 1. Der Bestandsdrucker ist unveraendert vorhanden und steht per DEFAULT
+--    auf "EPSON_STANDARD" - der bisherigen, fest verdrahteten Zuordnung.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM "Printer"
+    WHERE id = '${ids.printerId}' AND "codepageProfile" = 'EPSON_STANDARD'
+  ) THEN
+    RAISE EXCEPTION 'Der Bestandsdrucker steht nach der Migration nicht auf EPSON_STANDARD oder fehlt.';
+  END IF;
+END $$;
+
+-- 2. Die neue Spalte ist echt beschreibbar und laesst sich auf das zweite
+--    unterstuetzte Profil und wieder zurueck umstellen.
+DO $$
+BEGIN
+  UPDATE "Printer" SET "codepageProfile" = 'MUNBYN_CLONE' WHERE id = '${ids.printerId}';
+  IF (SELECT "codepageProfile" FROM "Printer" WHERE id = '${ids.printerId}') <> 'MUNBYN_CLONE' THEN
+    RAISE EXCEPTION 'Der Drucker liess sich nach der Migration nicht auf MUNBYN_CLONE umstellen.';
+  END IF;
+
+  UPDATE "Printer" SET "codepageProfile" = 'EPSON_STANDARD' WHERE id = '${ids.printerId}';
+  IF (SELECT "codepageProfile" FROM "Printer" WHERE id = '${ids.printerId}') <> 'EPSON_STANDARD' THEN
+    RAISE EXCEPTION 'Der Drucker liess sich nach der Migration nicht auf EPSON_STANDARD zurueckstellen.';
+  END IF;
+END $$;
+
+-- 3. NOT NULL gilt tatsaechlich.
+DO $$
+DECLARE
+  null_rejected boolean := false;
+BEGIN
+  BEGIN
+    UPDATE "Printer" SET "codepageProfile" = NULL WHERE id = '${ids.printerId}';
+  EXCEPTION WHEN not_null_violation THEN
+    null_rejected := true;
+  END;
+  IF NOT null_rejected THEN
+    RAISE EXCEPTION 'Die Spalte "codepageProfile" akzeptierte NULL, obwohl sie NOT NULL sein muss.';
+  END IF;
+END $$;
+`;
+}
+
 function dropDatabase(target, database) {
   const literal = database.replaceAll("'", "''");
   psql(
@@ -1762,6 +1838,16 @@ const DATA_MIGRATION_CHECKS = [
       "Warengruppe bleibt per Default aktiv und die Spalte ist echt beschreibbar",
     verify: () =>
       verifyProductCategoryIsActiveMigrationSql(PRODUCT_CATEGORY_ACTIVE_SEED),
+  },
+  {
+    migration: "20260915100000_add_printer_codepage_profile",
+    seedLabel:
+      "gültigen Altstand für das Codepage-Geräteprofil einspielen (Bestandsdrucker ohne codepageProfile-Spalte)",
+    seed: () => seedLegacyPrinterSql(PRINTER_CODEPAGE_PROFILE_SEED),
+    verifyLabel:
+      "Drucker bleibt per Default auf EPSON_STANDARD und die Spalte ist echt beschreibbar",
+    verify: () =>
+      verifyPrinterCodepageProfileMigrationSql(PRINTER_CODEPAGE_PROFILE_SEED),
   },
 ];
 

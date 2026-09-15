@@ -36,6 +36,17 @@ function paymentLabel(method: unknown): string {
   return PAYMENT_LABELS[key] ?? firstText(method, "Zahlung");
 }
 
+/** Anzeigename des Geräteprofils auf dem Testbon (Issue #260). */
+const CODEPAGE_PROFILE_LABELS: Record<string, string> = {
+  EPSON_STANDARD: "Epson-Standard",
+  MUNBYN_CLONE: "MUNBYN / Nachbau",
+};
+
+function codepageProfileLabel(profile: unknown): string {
+  const key = String(profile ?? "").toUpperCase();
+  return CODEPAGE_PROFILE_LABELS[key] ?? firstText(profile, "Epson-Standard");
+}
+
 function heading(text: string): DocumentBlock[] {
   return [
     { kind: "text", text, align: "center", bold: true, doubleHeight: true },
@@ -518,6 +529,7 @@ function testPrint(job: PrintJobLike): PrintDocument {
       labelled("Typ", firstText(content.printerType, "-")),
       labelled("Papier", `${firstText(content.paperWidth, "80")} mm`),
       labelled("Zeichensatz", firstText(content.codepage, "CP858")),
+      labelled("Geräteprofil", codepageProfileLabel(content.codepageProfile)),
       labelled(
         "Zeitpunkt",
         formatDateTime(firstText(content.timestamp, job.createdAt)),
@@ -532,7 +544,12 @@ function testPrint(job: PrintJobLike): PrintDocument {
         align: "center",
       },
       { kind: "rule" },
-      // Umlautprobe: zeigt sofort, ob Codepage und Papierbreite passen.
+      // Umlautprobe: das einzige verfügbare Werkzeug, um eine falsche
+      // Codepage zu erkennen (ESC/POS bietet keine Rückfrage an den
+      // Drucker, welche Seite gerade aktiv ist). Ein Mensch muss diese
+      // Zeile lesen - siehe "Woran erkennt man eine falsche Codepage?" in
+      // docs/development/printing.md. Sie deckte den MUNBYN-Befund aus
+      // Issue #260 beim allerersten Druck gegen echte Hardware auf.
       {
         kind: "text",
         text: "Umlautprobe: ÄÖÜ äöü ß 1,50 €",

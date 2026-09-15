@@ -189,6 +189,7 @@ export const AdminDashboardController = ({
     port: 9100,
     paperWidth: 80,
     codepage: "CP858",
+    codepageProfile: "EPSON_STANDARD",
     cutMode: "PARTIAL",
     copies: 1,
     timeoutMs: 5000,
@@ -324,6 +325,7 @@ export const AdminDashboardController = ({
           port: item.port || 9100,
           paperWidth: item.paperWidth || 80,
           codepage: item.codepage || "CP858",
+          codepageProfile: item.codepageProfile || "EPSON_STANDARD",
           cutMode: item.cutMode || "PARTIAL",
           copies: item.copies || 1,
           timeoutMs: item.timeoutMs || 5000,
@@ -339,6 +341,7 @@ export const AdminDashboardController = ({
           port: 9100,
           paperWidth: 80,
           codepage: "CP858",
+          codepageProfile: "EPSON_STANDARD",
           cutMode: "PARTIAL",
           copies: 1,
           timeoutMs: 5000,
@@ -1795,6 +1798,40 @@ export const AdminDashboardController = ({
                     <option value="CP850">CP850 (Umlaute)</option>
                     <option value="CP437">CP437 (ältere Geräte)</option>
                   </select>
+                </div>
+                <div className="col-span-2">
+                  <label
+                    className="text-xs font-bold text-slate-400 block mb-1"
+                    htmlFor="printer-codepage-profile"
+                  >
+                    Geräteprofil für den Zeichensatz-Befehl
+                  </label>
+                  <select
+                    id="printer-codepage-profile"
+                    value={printerFormData.codepageProfile}
+                    onChange={(e) =>
+                      setPrinterFormData({
+                        ...printerFormData,
+                        codepageProfile: e.target.value,
+                      })
+                    }
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 text-white"
+                  >
+                    <option value="EPSON_STANDARD">
+                      Standard (Epson und kompatible Geräte)
+                    </option>
+                    <option value="MUNBYN_CLONE">
+                      MUNBYN und baugleiche Nachbauten
+                    </option>
+                  </select>
+                  <p className="text-xs text-slate-500 mt-1">
+                    Kommt der Bon nach dem Speichern in einer fremden Schrift
+                    (z. B. griechisch) statt mit Umlauten und Euro-Zeichen
+                    heraus: hier das andere Profil wählen und über „Testbon
+                    drucken" erneut prüfen. Nur die Umlautprobe auf dem Papier
+                    zeigt verlässlich, ob die Wahl stimmt — das lässt sich nicht
+                    am Bildschirm feststellen.
+                  </p>
                 </div>
                 <div>
                   <label

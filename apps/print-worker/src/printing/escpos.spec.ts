@@ -38,6 +38,32 @@ describe("ESC/POS-Kodierung", () => {
     const bytes = encodeEscPos(lines, { codepage: "CP858" });
 
     expect(bytes.subarray(0, 2)).toEqual(Buffer.from([ESC, 0x40]));
+    // Ohne explizites Geräteprofil gilt EPSON_STANDARD - der Vorgabewert
+    // darf sich für bestehende, Epson-konforme Drucker nicht ändern.
+    expect(bytes.subarray(2, 5)).toEqual(Buffer.from([ESC, 0x74, 19]));
+  });
+
+  it("sendet die Geräteprofil-abhängige Befehlsnummer statt der festen Epson-Tabelle (Issue #260)", () => {
+    const epson = encodeEscPos(lines, {
+      codepage: "CP858",
+      codepageProfile: "EPSON_STANDARD",
+    });
+    const munbyn = encodeEscPos(lines, {
+      codepage: "CP858",
+      codepageProfile: "MUNBYN_CLONE",
+    });
+
+    expect(epson.subarray(2, 5)).toEqual(Buffer.from([ESC, 0x74, 19]));
+    // Der am MUNBYN-Netzwerkdrucker belegte Wert für CP858.
+    expect(munbyn.subarray(2, 5)).toEqual(Buffer.from([ESC, 0x74, 14]));
+  });
+
+  it("fällt bei unbekanntem Geräteprofil auf EPSON_STANDARD zurück", () => {
+    const bytes = encodeEscPos(lines, {
+      codepage: "CP858",
+      codepageProfile: "UNBEKANNT" as any,
+    });
+
     expect(bytes.subarray(2, 5)).toEqual(Buffer.from([ESC, 0x74, 19]));
   });
 

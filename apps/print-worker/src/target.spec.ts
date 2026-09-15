@@ -15,6 +15,7 @@ describe("Druckerkonfiguration", () => {
       port: 9100,
       timeoutMs: 5000,
       codepage: "CP858",
+      codepageProfile: "EPSON_STANDARD",
       cutMode: "PARTIAL",
       copies: 1,
     });
@@ -30,6 +31,7 @@ describe("Druckerkonfiguration", () => {
       port: 9101,
       paperWidth: 58,
       codepage: "CP437",
+      codepageProfile: "MUNBYN_CLONE",
       cutMode: "FULL",
       copies: 2,
       timeoutMs: 1500,
@@ -38,6 +40,7 @@ describe("Druckerkonfiguration", () => {
     expect(target.profile.columns).toBe(32);
     expect(target.port).toBe(9101);
     expect(target.codepage).toBe("CP437");
+    expect(target.codepageProfile).toBe("MUNBYN_CLONE");
     expect(target.cutMode).toBe("FULL");
     expect(target.copies).toBe(2);
     expect(target.timeoutMs).toBe(1500);
@@ -52,6 +55,7 @@ describe("Druckerkonfiguration", () => {
       port: 0,
       paperWidth: 72,
       codepage: "UTF-8",
+      codepageProfile: "GRIECHISCH",
       cutMode: "SCHERE",
       copies: 99,
       timeoutMs: -5,
@@ -60,6 +64,7 @@ describe("Druckerkonfiguration", () => {
     expect(target.port).toBe(9100);
     expect(target.profile.width).toBe(80);
     expect(target.codepage).toBe("CP858");
+    expect(target.codepageProfile).toBe("EPSON_STANDARD");
     expect(target.cutMode).toBe("PARTIAL");
     expect(target.copies).toBe(9);
     expect(target.timeoutMs).toBe(5000);
