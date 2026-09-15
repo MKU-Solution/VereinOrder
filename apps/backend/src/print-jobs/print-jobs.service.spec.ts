@@ -162,8 +162,10 @@ describe("PrintJobsService – Ergebnismeldung, Failover genau einmal (Abschnitt
     service = new PrintJobsService(prisma, audit as any);
   });
 
-  it("schließt einen Auftrag bei outcome = PRINTED ab", async () => {
-    prisma.$queryRaw.mockResolvedValue([{ id: "job-1" }]);
+  it("schließt einen Auftrag bei outcome = PRINTED ab und schreibt lastOkAt an den ausliefernden Drucker (Issue #261)", async () => {
+    prisma.$queryRaw.mockResolvedValue([
+      { id: "job-1", attemptPrinterId: "printer-1" },
+    ]);
     prisma.printJob.findUniqueOrThrow.mockResolvedValue({
       id: "job-1",
       status: "PRINTED",
@@ -174,9 +176,13 @@ describe("PrintJobsService – Ergebnismeldung, Failover genau einmal (Abschnitt
       outcome: "PRINTED",
     });
     expect(result).toMatchObject({ status: "PRINTED" });
+    expect(prisma.printer.update).toHaveBeenCalledWith({
+      where: { id: "printer-1" },
+      data: { lastOkAt: expect.any(Date) },
+    });
   });
 
-  it("meldet eine erneute PRINTED-Meldung mit demselben Token idempotent zurück", async () => {
+  it("meldet eine erneute PRINTED-Meldung mit demselben Token idempotent zurück, ohne die Betriebssicht erneut zu schreiben", async () => {
     prisma.$queryRaw.mockResolvedValue([]); // Fencing-Update trifft 0 Zeilen (bereits abgeschlossen)
     prisma.printJob.findUnique.mockResolvedValue({
       id: "job-1",
@@ -189,6 +195,10 @@ describe("PrintJobsService – Ergebnismeldung, Failover genau einmal (Abschnitt
       outcome: "PRINTED",
     });
     expect(result).toMatchObject({ status: "PRINTED" });
+    // Der ursprüngliche Erfolg hat die Betriebssicht bereits geschrieben;
+    // eine zweite, idempotente Meldung mit demselben Token darf sie nicht
+    // ein zweites Mal anfassen.
+    expect(prisma.printer.update).not.toHaveBeenCalled();
   });
 
   it("weist eine PRINTED-Meldung mit fremdem Token zurück (409)", async () => {
@@ -254,6 +264,20 @@ describe("PrintJobsService – Ergebnismeldung, Failover genau einmal (Abschnitt
       expect.objectContaining({ action: "PRINT_JOB_FAILOVER" }),
       prisma,
     );
+    // Issue #261, Falle 1: der Fehler gehört an den Drucker, der den
+    // Versuch tatsächlich unternommen hat (printer-1) - NICHT an den
+    // Ersatzdrucker (printer-2), der in diesem Moment noch gar nichts
+    // getan hat.
+    expect(prisma.printer.update).toHaveBeenCalledWith({
+      where: { id: "printer-1" },
+      data: {
+        lastErrorAt: expect.any(Date),
+        lastErrorCode: "CONNECTION_REFUSED",
+      },
+    });
+    expect(prisma.printer.update).not.toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: "printer-2" } }),
+    );
   });
 
   it("löst KEIN zweites Failover aus, wenn failoverCount bereits 1 ist - Ergebnis FAILED", async () => {
@@ -273,7 +297,9 @@ describe("PrintJobsService – Ergebnismeldung, Failover genau einmal (Abschnitt
         fallbackPrinterId: null,
       },
     });
-    prisma.$queryRaw.mockResolvedValue([{ id: "job-1" }]);
+    prisma.$queryRaw.mockResolvedValue([
+      { id: "job-1", attemptPrinterId: "printer-2" },
+    ]);
     prisma.printJob.findUniqueOrThrow.mockResolvedValue({
       id: "job-1",
       status: "FAILED",
@@ -289,9 +315,16 @@ describe("PrintJobsService – Ergebnismeldung, Failover genau einmal (Abschnitt
     // Der Ersatzdrucker wurde nicht einmal nachgeschlagen - failoverCount
     // war bereits 1, kein zweiter Wechselversuch.
     expect(prisma.printer.findUnique).not.toHaveBeenCalled();
+    // Issue #261: die Betriebssicht geht auf den Drucker, der TATSÄCHLICH
+    // versucht hat (activePrinterId "printer-2" nach dem ersten Failover),
+    // nicht auf die ursprüngliche printerId "printer-1".
+    expect(prisma.printer.update).toHaveBeenCalledWith({
+      where: { id: "printer-2" },
+      data: { lastErrorAt: expect.any(Date), lastErrorCode: "CONNECTION_LOST" },
+    });
   });
 
-  it("löst kein Failover bei PrinterConfigurationError-artigen Fehlercodes aus", async () => {
+  it("löst kein Failover bei PrinterConfigurationError-artigen Fehlercodes aus und schreibt die Betriebssicht an printer-1", async () => {
     prisma.printJob.findUnique.mockResolvedValueOnce({
       id: "job-1",
       failoverCount: 0,
@@ -304,7 +337,9 @@ describe("PrintJobsService – Ergebnismeldung, Failover genau einmal (Abschnitt
       },
       activePrinter: null,
     });
-    prisma.$queryRaw.mockResolvedValue([{ id: "job-1" }]);
+    prisma.$queryRaw.mockResolvedValue([
+      { id: "job-1", attemptPrinterId: "printer-1" },
+    ]);
     prisma.printJob.findUniqueOrThrow.mockResolvedValue({
       id: "job-1",
       status: "FAILED",
@@ -317,6 +352,13 @@ describe("PrintJobsService – Ergebnismeldung, Failover genau einmal (Abschnitt
     });
 
     expect(prisma.printer.findUnique).not.toHaveBeenCalled();
+    expect(prisma.printer.update).toHaveBeenCalledWith({
+      where: { id: "printer-1" },
+      data: {
+        lastErrorAt: expect.any(Date),
+        lastErrorCode: "PRINTER_CONFIG_ERROR",
+      },
+    });
   });
 
   it("löst kein Failover für einen Simulator (CONSOLE) aus, auch mit konfiguriertem Ersatzdrucker (R6)", async () => {
@@ -332,7 +374,9 @@ describe("PrintJobsService – Ergebnismeldung, Failover genau einmal (Abschnitt
       },
       activePrinter: null,
     });
-    prisma.$queryRaw.mockResolvedValue([{ id: "job-1" }]);
+    prisma.$queryRaw.mockResolvedValue([
+      { id: "job-1", attemptPrinterId: "printer-1" },
+    ]);
     prisma.printJob.findUniqueOrThrow.mockResolvedValue({
       id: "job-1",
       status: "FAILED",
@@ -382,9 +426,13 @@ describe("PrintJobsService – Ergebnismeldung, Failover genau einmal (Abschnitt
 
     expect(result).toMatchObject({ status: "FAILED" });
     expect(audit.log).not.toHaveBeenCalled();
+    // Der verlorene Wettlauf schreibt weder in tryFailover (0 Zeilen) noch
+    // über finalizeAsFailed (dieser Pfad wird bei einem verlorenen Wettlauf
+    // gar nicht erst aufgerufen) eine Betriebssicht.
+    expect(prisma.printer.update).not.toHaveBeenCalled();
   });
 
-  it("schließt einen Auftrag bei outcome = UNCLEAR NIEMALS mit Failover ab, sondern nach UNRESOLVED", async () => {
+  it("schließt einen Auftrag bei outcome = UNCLEAR NIEMALS mit Failover ab, sondern nach UNRESOLVED, und lässt die Betriebssicht des Druckers unangetastet (Issue #261)", async () => {
     prisma.$queryRaw.mockResolvedValue([{ id: "job-1" }]);
     prisma.printJob.findUniqueOrThrow.mockResolvedValue({
       id: "job-1",
@@ -405,6 +453,9 @@ describe("PrintJobsService – Ergebnismeldung, Failover genau einmal (Abschnitt
       expect.objectContaining({ action: "PRINT_JOB_UNRESOLVED" }),
       prisma,
     );
+    // Kernentscheidung Issue #261: UNCLEAR ist weder Erfolg noch Fehler und
+    // darf weder lastOkAt noch lastErrorAt/lastErrorCode verändern.
+    expect(prisma.printer.update).not.toHaveBeenCalled();
   });
 });
 

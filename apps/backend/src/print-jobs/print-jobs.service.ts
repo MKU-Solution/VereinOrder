@@ -286,7 +286,9 @@ export class PrintJobsService {
     evidence: OutcomeEvidence,
   ): Promise<PrintJob> {
     return this.prisma.$transaction(async (tx) => {
-      const rows = await tx.$queryRaw<{ id: string }[]>(Prisma.sql`
+      const rows = await tx.$queryRaw<
+        { id: string; attemptPrinterId: string }[]
+      >(Prisma.sql`
         UPDATE "PrintJob"
         SET "status" = 'PRINTED',
             "attemptPhase" = NULL,
@@ -298,16 +300,75 @@ export class PrintJobsService {
             "deliveredAt" = NOW(),
             "updatedAt" = NOW()
         WHERE "id" = ${id} AND "status" = 'PROCESSING' AND "leaseId" = ${leaseId}
-        RETURNING "id"
+        RETURNING "id", COALESCE("activePrinterId", "printerId") AS "attemptPrinterId"
       `);
       if (rows.length === 0) {
         return this.resolveIdempotentOrConflict(tx, id, leaseId, ["PRINTED"]);
       }
+      await this.recordPrinterOutcome(tx, rows[0].attemptPrinterId, "PRINTED");
       return tx.printJob.findUniqueOrThrow({ where: { id } });
     });
   }
 
-  /** Übergang 7: Meldung UNCLEAR -> UNRESOLVED. Niemals automatischer Zweitdruck. */
+  /**
+   * Schreibt die Betriebssicht des Druckers fest (Issue #261:
+   * `Printer.lastOkAt` / `lastErrorAt` / `lastErrorCode` wurden bis dahin nie
+   * beschrieben, wodurch `DiagnosticsService.isBypassed` nie ansprang).
+   *
+   * WELCHER DRUCKER: immer der, der den Zustellversuch TATSÄCHLICH
+   * unternommen hat - COALESCE(activePrinterId, printerId) zum Zeitpunkt der
+   * Meldung, übergeben vom Aufrufer. Das ist nach einem Failover ein anderer
+   * Drucker als der ursprünglich zugewiesene (printerId). Würde man
+   * stattdessen printerId schreiben, bekäme entweder ein gesunder
+   * Ersatzdrucker den Fehler des ausgefallenen angerechnet, oder umgekehrt
+   * der ausgefallene Drucker durch den Erfolg des Ersatzes fälschlich als
+   * gesund.
+   *
+   * TRANSAKTION: läuft immer im selben `tx` wie der Auftragszustand (Vorgabe
+   * des Issues) - sonst entstünde ein Fenster, in dem der Auftrag bereits als
+   * gedruckt gilt, der Drucker aber noch als zuletzt fehlerhaft (oder
+   * umgekehrt).
+   *
+   * UNCLEAR: bewusst KEIN Aufruf dieser Methode (siehe finalizeAsUnresolved
+   * und PrintJobsReaperService.unresolveActiveExpired). Der Schemakommentar
+   * an PrintOutcomeClass sagt: nur NOT_PRINTED gilt, wenn nachweisbar kein
+   * Byte den Druckerport erreicht hat - alles ohne positives
+   * Abschlusszeugnis ist UNCLEAR. Es als Erfolg zu verbuchen wäre falsch. Es
+   * als Fehler zu verbuchen ließe `isBypassed` bei jeder
+   * Lease-Zeitüberschreitung ansprechen, auch wenn der Drucker in Ordnung
+   * ist (z. B. ein Backend-Neustart mitten im Versuch, oder eine kurze
+   * WLAN-Aussetzung, die beim nächsten Bon längst vorbei ist) - das würde die
+   * Diagnose bei jedem `UNCLEAR`-Fall unbrauchbar laut machen. UNCLEAR-Fälle
+   * sind über die UNRESOLVED-Warteschlange (`findUnresolvedJobs`,
+   * Admin-Entscheidung) und den eigenen Diagnose-Hinweis "Druckaufträge mit
+   * unklarem Ausgang" bereits sichtbar - das ist der richtige Ort für dieses
+   * Signal, nicht die Betriebssicht des Druckers.
+   */
+  private async recordPrinterOutcome(
+    tx: Prisma.TransactionClient,
+    printerId: string,
+    outcome: "PRINTED" | "NOT_PRINTED",
+    errorCode?: string | null,
+  ): Promise<void> {
+    if (outcome === "PRINTED") {
+      await tx.printer.update({
+        where: { id: printerId },
+        data: { lastOkAt: new Date() },
+      });
+    } else {
+      await tx.printer.update({
+        where: { id: printerId },
+        data: { lastErrorAt: new Date(), lastErrorCode: errorCode ?? null },
+      });
+    }
+  }
+
+  /**
+   * Übergang 7: Meldung UNCLEAR -> UNRESOLVED. Niemals automatischer
+   * Zweitdruck. Schreibt ABSICHTLICH NICHTS an den Drucker (weder
+   * lastOkAt noch lastErrorAt/lastErrorCode) - Begründung in
+   * {@link recordPrinterOutcome}.
+   */
   private async finalizeAsUnresolved(
     id: string,
     leaseId: string,
@@ -424,6 +485,12 @@ export class PrintJobsService {
    * wenn Lease, Status UND failoverCount = 0 gleichzeitig zutreffen. Damit
    * hält "genau einmal wechseln" bei parallelen Workern und über Neustarts
    * hinweg, ohne zusätzliche Sperren.
+   *
+   * Issue #261: die Betriebssicht (lastErrorAt/lastErrorCode) geht dabei auf
+   * `currentPrinterId` - den Drucker, der den Versuch tatsächlich unternommen
+   * und dabei versagt hat -, NICHT auf `fallbackPrinterId`. Der Ersatzdrucker
+   * hat in diesem Moment noch gar nichts getan; ihm den Fehler anzurechnen
+   * würde ihn fälschlich als defekt zeigen, sobald der Job an ihn geht.
    */
   private async tryFailover(
     id: string,
@@ -457,6 +524,12 @@ export class PrintJobsService {
       `);
       if (rows.length === 0) return null;
 
+      await this.recordPrinterOutcome(
+        tx,
+        currentPrinterId,
+        "NOT_PRINTED",
+        evidence.errorCode,
+      );
       const job = await tx.printJob.findUniqueOrThrow({ where: { id } });
       await this.auditService.log(
         {
@@ -485,7 +558,9 @@ export class PrintJobsService {
     evidence: OutcomeEvidence,
   ): Promise<PrintJob> {
     return this.prisma.$transaction(async (tx) => {
-      const rows = await tx.$queryRaw<{ id: string }[]>(Prisma.sql`
+      const rows = await tx.$queryRaw<
+        { id: string; attemptPrinterId: string }[]
+      >(Prisma.sql`
         UPDATE "PrintJob"
         SET "status" = 'FAILED',
             "attemptPhase" = NULL,
@@ -495,11 +570,17 @@ export class PrintJobsService {
             "bytesWritten" = ${evidence.bytesWritten},
             "updatedAt" = NOW()
         WHERE "id" = ${id} AND "status" = 'PROCESSING' AND "leaseId" = ${leaseId}
-        RETURNING "id"
+        RETURNING "id", COALESCE("activePrinterId", "printerId") AS "attemptPrinterId"
       `);
       if (rows.length === 0) {
         return this.resolveIdempotentOrConflict(tx, id, leaseId, ["FAILED"]);
       }
+      await this.recordPrinterOutcome(
+        tx,
+        rows[0].attemptPrinterId,
+        "NOT_PRINTED",
+        evidence.errorCode,
+      );
       const job = await tx.printJob.findUniqueOrThrow({ where: { id } });
       await this.auditService.log(
         {
