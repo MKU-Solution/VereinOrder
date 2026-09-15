@@ -4,6 +4,7 @@ import { assertTestDatabaseUrl } from "./test-database";
 import { AuditService } from "../src/audit/audit.service";
 import { PrintJobsService } from "../src/print-jobs/print-jobs.service";
 import { PrintJobsReaperService } from "../src/print-jobs/print-jobs.reaper";
+import { DiagnosticsService } from "../src/diagnostics/diagnostics.service";
 
 /**
  * Wächtertests gegen Issue #64 gegen eine echte PostgreSQL-Instanz.
@@ -31,6 +32,17 @@ describe("PrintJobs – Datenbank-Invarianten gegen echtes PostgreSQL (Issue #64
   const reaper = new PrintJobsReaperService(prisma, audit, {
     read: () => ({ phase: "OPEN" }),
   } as any);
+
+  // Issue #261: DiagnosticsService.getStatus() ist der öffentliche Weg, über
+  // den die Betriebssicht (bypassed/lastErrorAt/lastOkAt) tatsächlich
+  // ausgeliefert wird - eine Backup-Service-Attrappe genügt, das Backup ist
+  // hier nicht Gegenstand.
+  const backupServiceStub = {
+    listBackups: async () => [],
+    getToolStatus: () => ({ enabled: true, message: "" }),
+    getStorageStatus: async () => ({ creationAllowed: true }),
+  };
+  const diagnostics = new DiagnosticsService(prisma, backupServiceStub as any);
 
   const printerIds: string[] = [];
   const jobIds: string[] = [];
@@ -252,5 +264,229 @@ describe("PrintJobs – Datenbank-Invarianten gegen echtes PostgreSQL (Issue #64
     // terminal in FAILED statt in einem Ping-Pong zwischen zwei Druckern.
     expect(afterSecondFailure.failoverCount).toBe(1);
     expect(afterSecondFailure.status).toBe("FAILED");
+  });
+
+  // -------------------------------------------------------------------
+  // Issue #261: Betriebssicht des Druckers (lastOkAt/lastErrorAt/
+  // lastErrorCode) wird bei jedem abgeschlossenen Zustellversuch
+  // fortgeschrieben - vorher wurden diese Felder nie beschrieben, wodurch
+  // DiagnosticsService.isBypassed() nie ansprang (bestätigt an echter
+  // Hardware, siehe Issue).
+  //
+  // Rot-Beweis: gegen den unveränderten Stand 17471f6 (vor dieser
+  // Umsetzung) schlägt "isBypassed springt nach einem Fehlschlag an..."
+  // fehl, weil lastErrorAt/lastOkAt dort dauerhaft NULL bleiben - siehe
+  // Abschlussbericht.
+  // -------------------------------------------------------------------
+  it("isBypassed springt nach einem Fehlschlag an und fällt nach einem erneuten Erfolg wieder ab (Issue #261, Kernaussage)", async () => {
+    const printer = await makePrinter(); // kein Ersatzdrucker - reiner Erfolg/Fehlschlag-Kreislauf
+
+    const findPrinterEntry = async () => {
+      const status = await diagnostics.getStatus();
+      const entry = status.printers.list.find((p: any) => p.id === printer.id);
+      if (!entry) throw new Error("Drucker nicht in der Diagnose gefunden.");
+      return entry;
+    };
+
+    // Ausgangslage: frisch angelegter Drucker, nichts belegt.
+    const before = await findPrinterEntry();
+    expect(before.bypassed).toBe(false);
+    expect(before.lastErrorAt).toBeNull();
+    expect(before.lastOkAt).toBeNull();
+
+    // Erster Versuch schlägt fehl (kein Ersatzdrucker -> FAILED, terminal).
+    const failingJob = await makeJob(printer.id);
+    const failingClaim = (await service.claimNextJob())!;
+    expect(failingClaim).not.toBeNull();
+    const afterFailure = await service.reportOutcome(failingJob.id, {
+      leaseId: failingClaim.leaseId!,
+      outcome: "NOT_PRINTED",
+      errorCode: "CONNECTION_REFUSED",
+    });
+    expect(afterFailure.status).toBe("FAILED");
+
+    const storedAfterFailure = await prisma.printer.findUniqueOrThrow({
+      where: { id: printer.id },
+    });
+    expect(storedAfterFailure.lastErrorAt).not.toBeNull();
+    expect(storedAfterFailure.lastErrorCode).toBe("CONNECTION_REFUSED");
+    expect(storedAfterFailure.lastOkAt).toBeNull();
+
+    const bypassedAfterFailure = await findPrinterEntry();
+    expect(bypassedAfterFailure.bypassed).toBe(true);
+
+    // Zweiter Versuch gelingt - isBypassed muss wieder abfallen.
+    const okJob = await makeJob(printer.id);
+    const okClaim = (await service.claimNextJob())!;
+    expect(okClaim).not.toBeNull();
+    const afterOk = await service.reportOutcome(okJob.id, {
+      leaseId: okClaim.leaseId!,
+      outcome: "PRINTED",
+      bytesWritten: 673,
+    });
+    expect(afterOk.status).toBe("PRINTED");
+
+    const storedAfterOk = await prisma.printer.findUniqueOrThrow({
+      where: { id: printer.id },
+    });
+    expect(storedAfterOk.lastOkAt).not.toBeNull();
+    expect(storedAfterOk.lastOkAt!.getTime()).toBeGreaterThan(
+      storedAfterOk.lastErrorAt!.getTime(),
+    );
+
+    const bypassedAfterOk = await findPrinterEntry();
+    expect(bypassedAfterOk.bypassed).toBe(false);
+  });
+
+  // -------------------------------------------------------------------
+  // Issue #261, Falle 1: die Betriebssicht gehört an den Drucker, der den
+  // Versuch TATSÄCHLICH unternommen hat - nicht an printerId, wenn nach
+  // einem Failover ein anderer Drucker aktiv ist. Sonst erbt der gesunde
+  // Ersatzdrucker den Fehler des ausgefallenen, oder der ausgefallene sieht
+  // durch den Erfolg des Ersatzes fälschlich gesund aus.
+  // -------------------------------------------------------------------
+  it("schreibt Fehler und Erfolg beim Failover an den jeweils tatsächlich attemptierenden Drucker, nicht an den anderen (Issue #261, Falle 1)", async () => {
+    const fallback = await makePrinter();
+    const primary = await makePrinter({ fallbackPrinterId: fallback.id });
+    const job = await makeJob(primary.id);
+
+    const firstClaim = (await service.claimNextJob())!;
+    expect(firstClaim.printer.id).toBe(primary.id);
+    const afterFailure = await service.reportOutcome(job.id, {
+      leaseId: firstClaim.leaseId!,
+      outcome: "NOT_PRINTED",
+      errorCode: "CONNECTION_REFUSED",
+    });
+    expect(afterFailure.status).toBe("PENDING");
+    expect(afterFailure.activePrinterId).toBe(fallback.id);
+
+    // Der AUSGEFALLENE Drucker (primary) trägt jetzt den Fehler ...
+    const primaryAfterFailure = await prisma.printer.findUniqueOrThrow({
+      where: { id: primary.id },
+    });
+    expect(primaryAfterFailure.lastErrorAt).not.toBeNull();
+    expect(primaryAfterFailure.lastErrorCode).toBe("CONNECTION_REFUSED");
+
+    // ... der ERSATZDRUCKER ist in diesem Moment noch vollkommen unberührt -
+    // er hat ja noch gar nichts versucht.
+    const fallbackAfterFailure = await prisma.printer.findUniqueOrThrow({
+      where: { id: fallback.id },
+    });
+    expect(fallbackAfterFailure.lastErrorAt).toBeNull();
+    expect(fallbackAfterFailure.lastOkAt).toBeNull();
+
+    // Der Ersatzdrucker übernimmt den Auftrag und liefert erfolgreich aus.
+    const secondClaim = (await service.claimNextJob())!;
+    expect(secondClaim.printer.id).toBe(fallback.id);
+    const afterOk = await service.reportOutcome(job.id, {
+      leaseId: secondClaim.leaseId!,
+      outcome: "PRINTED",
+      bytesWritten: 512,
+    });
+    expect(afterOk.status).toBe("PRINTED");
+
+    // Der Ersatzdrucker ist jetzt als erfolgreich vermerkt ...
+    const fallbackAfterOk = await prisma.printer.findUniqueOrThrow({
+      where: { id: fallback.id },
+    });
+    expect(fallbackAfterOk.lastOkAt).not.toBeNull();
+
+    // ... der ausgefallene Drucker bleibt unverändert auf seinem Fehler
+    // stehen - der Erfolg des Ersatzes darf ihn NICHT gesund erscheinen
+    // lassen.
+    const primaryAfterOk = await prisma.printer.findUniqueOrThrow({
+      where: { id: primary.id },
+    });
+    expect(primaryAfterOk.lastOkAt).toBeNull();
+    expect(primaryAfterOk.lastErrorAt).toEqual(primaryAfterFailure.lastErrorAt);
+
+    const status = await diagnostics.getStatus();
+    const primaryEntry = status.printers.list.find(
+      (p: any) => p.id === primary.id,
+    );
+    const fallbackEntry = status.printers.list.find(
+      (p: any) => p.id === fallback.id,
+    );
+    expect(primaryEntry.bypassed).toBe(true);
+    expect(fallbackEntry.bypassed).toBe(false);
+  });
+
+  // -------------------------------------------------------------------
+  // Issue #261, Falle 2: UNCLEAR ist weder Erfolg noch Fehler und darf
+  // weder lastOkAt noch lastErrorAt/lastErrorCode verändern - weder bei
+  // einer Worker-Meldung noch beim Lease-Timeout im Reaper.
+  // -------------------------------------------------------------------
+  it("lässt die Betriebssicht des Druckers bei UNCLEAR unangetastet - weder als Meldung noch per Reaper-Timeout (Issue #261, Falle 2)", async () => {
+    const printer = await makePrinter();
+
+    const reportedJob = await makeJob(printer.id);
+    const reportedClaim = (await service.claimNextJob())!;
+    const afterUnclear = await service.reportOutcome(reportedJob.id, {
+      leaseId: reportedClaim.leaseId!,
+      outcome: "UNCLEAR",
+      bytesWritten: 120,
+    });
+    expect(afterUnclear.status).toBe("UNRESOLVED");
+
+    const afterReportedUnclear = await prisma.printer.findUniqueOrThrow({
+      where: { id: printer.id },
+    });
+    expect(afterReportedUnclear.lastOkAt).toBeNull();
+    expect(afterReportedUnclear.lastErrorAt).toBeNull();
+    expect(afterReportedUnclear.lastErrorCode).toBeNull();
+
+    // Zweiter Fall: der Reaper räumt eine abgelaufene DELIVERING-Lease
+    // ebenfalls nach UNRESOLVED/UNCLEAR - auch das darf die Betriebssicht
+    // nicht anfassen.
+    const timedOutJob = await makeJob(printer.id, {
+      status: "PROCESSING",
+      attemptPhase: "DELIVERING",
+      leaseId: randomUUID(),
+      leaseExpiresAt: new Date(Date.now() - 60_000),
+    });
+    await reaper.sweepExpiredLeases();
+
+    const timedOutAfter = await prisma.printJob.findUniqueOrThrow({
+      where: { id: timedOutJob.id },
+    });
+    expect(timedOutAfter.status).toBe("UNRESOLVED");
+
+    const afterTimeoutUnclear = await prisma.printer.findUniqueOrThrow({
+      where: { id: printer.id },
+    });
+    expect(afterTimeoutUnclear.lastOkAt).toBeNull();
+    expect(afterTimeoutUnclear.lastErrorAt).toBeNull();
+    expect(afterTimeoutUnclear.lastErrorCode).toBeNull();
+
+    const status = await diagnostics.getStatus();
+    const entry = status.printers.list.find((p: any) => p.id === printer.id);
+    expect(entry.bypassed).toBe(false);
+  });
+
+  // -------------------------------------------------------------------
+  // Issue #261, Falle 3: die Schreibvorgänge dürfen nicht auseinanderlaufen
+  // - der Auftragszustand und die Betriebssicht des Druckers werden in
+  // DERSELBEN Transaktion gültig. Ein Rollback des Auftrags darf niemals
+  // eine bereits vermerkte Betriebssicht hinterlassen.
+  // -------------------------------------------------------------------
+  it("schreibt bei einem verworfenen Fencing-Versuch weder den Auftrag noch die Betriebssicht fort (Transaktionsgleichheit)", async () => {
+    const printer = await makePrinter();
+    const job = await makeJob(printer.id);
+    await service.claimNextJob(); // reserviert den Auftrag mit einem echten Lease-Token
+
+    // Eine Meldung mit einem FALSCHEN Token darf nichts verändern - weder
+    // am Auftrag noch am Drucker.
+    await expect(
+      service.reportOutcome(job.id, {
+        leaseId: "fremdes-token",
+        outcome: "PRINTED",
+      }),
+    ).rejects.toThrow();
+
+    const printerAfter = await prisma.printer.findUniqueOrThrow({
+      where: { id: printer.id },
+    });
+    expect(printerAfter.lastOkAt).toBeNull();
+    expect(printerAfter.lastErrorAt).toBeNull();
   });
 });

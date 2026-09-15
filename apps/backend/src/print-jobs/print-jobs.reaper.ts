@@ -102,7 +102,19 @@ export class PrintJobsReaperService {
     }
   }
 
-  /** Übergang 9: DELIVERING/SPOOLED + Lease abgelaufen -> UNRESOLVED. */
+  /**
+   * Übergang 9: DELIVERING/SPOOLED + Lease abgelaufen -> UNRESOLVED.
+   *
+   * Issue #261: schreibt ABSICHTLICH NICHTS an `Printer.lastErrorAt` /
+   * `lastErrorCode`. Eine Lease-Zeitüberschreitung ist kein belegter
+   * Druckerfehler - sie kann ebenso gut ein Backend-Neustart oder ein
+   * abgestürzter Worker-Prozess mitten im Versuch sein, ohne dass der
+   * Drucker selbst betroffen war. Würde man hier lastErrorAt setzen, ließe
+   * das `DiagnosticsService.isBypassed` bei jedem Timeout ansprechen, auch
+   * wenn der Drucker in Ordnung ist. Sichtbar ist dieser Fall bereits über
+   * die UNRESOLVED-Warteschlange und den Diagnose-Hinweis "Druckaufträge mit
+   * unklarem Ausgang" (siehe PrintJobsService.recordPrinterOutcome).
+   */
   private async unresolveActiveExpired(): Promise<void> {
     const candidates = await this.prisma.printJob.findMany({
       where: {
