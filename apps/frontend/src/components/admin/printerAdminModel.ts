@@ -16,8 +16,9 @@ import {
 // geschrieben und stehen deshalb nicht in dieser Liste; die Texte fuer
 // unklare Auftraege liefert describeUnresolvedReason.
 //
-// PRINTER_CONFIGURATION meldet der Worker, PRINTER_CONFIG_ERROR kennt das
-// Backend fuer seine Failover-Ausnahme; die Anzeige uebersetzt beide gleich.
+// PRINTER_CONFIGURATION meldet der Worker (gemeinsame Liste in
+// @vereinorder/shared, Issue #268). PRINTER_CONFIG_ERROR wurde nie
+// erzeugt; der Eintrag bleibt nur als harmlose Rueckfallebene uebersetzt.
 const PRINTER_ERROR_LABELS: Record<string, string> = {
   CONNECTION_REFUSED: "Drucker nimmt keine Verbindung an",
   UNREACHABLE: "Drucker ist im Netzwerk nicht erreichbar",
