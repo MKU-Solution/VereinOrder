@@ -672,6 +672,65 @@ describe("PrintJobsService – Druckerkonfiguration und Testdruck", () => {
     ).rejects.toThrow(/gültige/);
   });
 
+  // Issue #263: Ein Konsolendrucker (CONSOLE, Simulator) hat im Formular
+  // kein Adressfeld. Das Formular schickt für "kein Wert" trotzdem einen
+  // leeren String ("") statt null - genau das, was beim seed-erzeugten
+  // "Hauptkasse Drucker" beobachtet wurde. Vorher scheiterte das schon an
+  // der DTO-Prüfung (siehe print-jobs.dto.spec.ts); dieser Test belegt, dass
+  // danach auch der Service den leeren String annimmt und - wie bei jedem
+  // Konsolendrucker - als null in der Datenbank ablegt.
+  it("speichert einen Konsolendrucker, dessen Formular eine leere Adresse statt null schickt (Issue #263)", async () => {
+    await service.createPrinter({
+      name: "Hauptkasse Drucker",
+      type: "CONSOLE",
+      ipAddress: "",
+    });
+
+    expect(prisma.printer.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        type: "CONSOLE",
+        ipAddress: null,
+      }),
+    });
+  });
+
+  it("speichert das Bearbeiten eines bestehenden Konsolendruckers mit leerer Adresse (Issue #263)", async () => {
+    prisma.printer.findUnique.mockResolvedValue({
+      id: "printer-1",
+      type: "CONSOLE",
+      ipAddress: null,
+    });
+
+    await service.updatePrinter("printer-1", {
+      name: "Hauptkasse Drucker",
+      type: "CONSOLE",
+      ipAddress: "",
+    });
+
+    expect(prisma.printer.update).toHaveBeenCalledWith({
+      where: { id: "printer-1" },
+      data: expect.objectContaining({ ipAddress: null }),
+    });
+  });
+
+  // Gegenprobe zu den beiden Tests oben: Ein Netzwerkdrucker OHNE Adresse
+  // darf weiterhin nicht gespeichert werden - auch dann nicht, wenn das
+  // Formular (wie bei CONSOLE) einen leeren String statt gar kein Feld
+  // schickt. Sonst würde die Behebung von #263 aus einem vergessenen
+  // Pflichtfeld einen stillschweigend adresslosen Netzwerkdrucker machen,
+  // der erst beim tatsächlichen Druckversuch auffällt - schlimmer als der
+  // heutige Fehler beim Speichern.
+  it("lehnt einen Netzwerkdrucker mit leerer Adresse weiterhin verständlich ab (Issue #263, Gegenprobe)", async () => {
+    await expect(
+      service.createPrinter({
+        name: "Küche",
+        type: "ESC_POS_NETWORK",
+        ipAddress: "",
+      }),
+    ).rejects.toThrow(/IP-Adresse/);
+    expect(prisma.printer.create).not.toHaveBeenCalled();
+  });
+
   it("begrenzt Papierbreite, Kopienzahl und Zeitlimit", async () => {
     const base = { name: "Küche", type: "CONSOLE" };
 

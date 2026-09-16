@@ -4,6 +4,7 @@ import {
   CreatePrinterDto,
   ReportPrintOutcomeDto,
   TransitionPrintPhaseDto,
+  UpdatePrinterDto,
 } from "./print-jobs.dto";
 
 describe("Druck-DTOs (Issue #69)", () => {
@@ -70,5 +71,53 @@ describe("Druck-DTOs (Issue #69)", () => {
         }),
       ),
     ).toHaveLength(0);
+  });
+
+  // Issue #263: Ein Konsolendrucker (CONSOLE) hat kein Adressfeld im
+  // Formular. Das Formular schickt für "kein Wert" trotzdem einen leeren
+  // String, nicht undefined/null - @IsOptional() überspringt aber nur
+  // undefined/null, nicht "". Vor der Behebung verlangte @Matches wegen des
+  // "+" mindestens ein Zeichen, wodurch "" durchfiel (400, Regel "matches").
+  // Das ist der Rot-Beweis: dieser Test schlägt am unveränderten Stand
+  // (ae82fa0) fehl, weil validationErrors dort nicht leer ist.
+  it("akzeptiert einen leeren String für ipAddress (Issue #263) - das Formular schickt für Drucker ohne Adressfeld '', nicht null", async () => {
+    expect(
+      await validationErrors(CreatePrinterDto, {
+        name: "Hauptkasse Drucker",
+        type: "CONSOLE",
+        ipAddress: "",
+      }),
+    ).toHaveLength(0);
+
+    expect(
+      await validationErrors(UpdatePrinterDto, {
+        ipAddress: "",
+      }),
+    ).toHaveLength(0);
+  });
+
+  // Dieselbe Klasse wie oben, an queueName: @IsOptional() plus @Matches mit
+  // "+" (siehe print-jobs.dto.ts). queueName wird heute vom Frontend zwar
+  // schon als null statt "" geschickt, wenn kein CUPS_IPP-Drucker vorliegt -
+  // ein anderer Aufrufer auf dieselbe Schnittstelle könnte aber ebenso einen
+  // leeren String schicken; das DTO darf daran nicht scheitern.
+  it("akzeptiert einen leeren String für queueName (dieselbe Klasse wie ipAddress, Issue #263)", async () => {
+    expect(
+      await validationErrors(CreatePrinterDto, {
+        name: "Bon Hauptkasse",
+        type: "CONSOLE",
+        queueName: "",
+      }),
+    ).toHaveLength(0);
+  });
+
+  it("weist eine nicht-leere, aber ungültige ipAddress weiterhin ab (Issue #263 ändert nichts an echten Adressen)", async () => {
+    expect(
+      await validationErrors(CreatePrinterDto, {
+        name: "Küche",
+        type: "ESC_POS_NETWORK",
+        ipAddress: "http://192.168.1.50/",
+      }),
+    ).not.toHaveLength(0);
   });
 });
