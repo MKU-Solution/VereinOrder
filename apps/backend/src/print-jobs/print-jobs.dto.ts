@@ -95,11 +95,22 @@ export class ResolvePrintJobDto implements ResolveJobInput {
 }
 
 class PrinterOptionalFieldsDto implements PrinterInput {
+  // @IsOptional() überspringt hier nur undefined/null, nicht "" - ein leerer
+  // String ist aber genau das, was ein Formular fuer "kein Wert" schickt
+  // (Drucker vom Typ CONSOLE haben gar kein Adressfeld, CUPS_IPP-Drucker
+  // haben ein optionales). Der Ausdruck erlaubt deshalb bewusst auch die
+  // leere Zeichenkette ("*" statt "+") - PrintJobsService.sanitizePrinter
+  // prueft anschliessend je Druckertyp, ob eine Adresse noetig ist, und
+  // liefert dafuer eine Meldung, die das tatsaechlich angezeigte Feld
+  // benennt (siehe dort: "Netzwerkdrucker brauchen eine IP-Adresse ...").
+  // Eine echte, nicht-leere Adresse muss weiterhin dem Muster entsprechen;
+  // die Formpruefung hier ist nur die erste, die fachliche Pruefung bleibt
+  // im Service.
   @IsOptional()
   @Transform(({ value }) => (typeof value === "string" ? value.trim() : value))
   @IsString()
   @MaxLength(255)
-  @Matches(/^[A-Za-z0-9._-]+$/)
+  @Matches(/^[A-Za-z0-9._-]*$/)
   ipAddress?: string | null;
 
   @IsOptional()
@@ -140,11 +151,15 @@ class PrinterOptionalFieldsDto implements PrinterInput {
   @Max(120_000)
   timeoutMs?: number;
 
+  // Dieselbe Klasse wie bei ipAddress oben: "*" statt "+", damit ein
+  // Formular, das ausserhalb von CUPS_IPP bewusst "" statt null schickt,
+  // nicht an der Formpruefung scheitert. sanitizePrinter prueft die
+  // fachliche Pflicht (CUPS_IPP braucht einen Namen) danach im Service.
   @IsOptional()
   @Transform(({ value }) => (typeof value === "string" ? value.trim() : value))
   @IsString()
   @MaxLength(200)
-  @Matches(/^[A-Za-z0-9_-]+$/)
+  @Matches(/^[A-Za-z0-9_-]*$/)
   queueName?: string | null;
 
   @IsOptional()
