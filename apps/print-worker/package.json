@@ -10,9 +10,11 @@
     "format:check": "prettier --check . --ignore-unknown --ignore-path ../../.prettierignore",
     "lint": "eslint \"src/**/*.ts\" --max-warnings 0",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "pretest": "pnpm --filter @vereinorder/shared run build",
     "test": "jest"
   },
   "dependencies": {
+    "@vereinorder/shared": "workspace:*",
     "axios": "^1.6.8"
   },
   "devDependencies": {

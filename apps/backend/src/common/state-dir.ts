@@ -29,10 +29,11 @@ import * as path from "path";
  * festgenagelt (siehe `state-dir.spec.ts` hier und dort).
  *
  * Bewusst KEIN gemeinsames Paket für diese zehn Zeilen: Der Print-Worker
- * hängt heute von nichts aus `packages/` ab. Eine Abhängigkeit auf
- * `@vereinorder/shared` zöge eine Änderung an seinem Dockerfile und an
- * `pnpm-lock.yaml` nach sich — beides Fläche, die in einer Sicherheitsbehebung
- * nichts zu suchen hat. Der Grund für den ursprünglichen Fehler war nicht die
+ * hing damals von nichts aus `packages/` ab. Eine Abhängigkeit auf
+ * `@vereinorder/shared` hätte eine Änderung an seinem Dockerfile und an
+ * `pnpm-lock.yaml` nach sich gezogen — beides Fläche, die in einer
+ * Sicherheitsbehebung nichts zu suchen hat. (Seit Issue #268 nutzt der Worker
+ * `@vereinorder/shared` für seine Fehlerkennungen.) Der Grund für den ursprünglichen Fehler war nicht die
  * Doppelung, sondern die Abhängigkeit vom Arbeitsverzeichnis: Eine Regel, die
  * denselben festen Punkt sucht, kann nicht zwei Ergebnisse liefern.
  *

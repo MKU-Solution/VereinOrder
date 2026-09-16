@@ -6,9 +6,15 @@ WORKDIR /app
 RUN corepack enable && corepack prepare pnpm@9.15.4 --activate
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY packages/shared/package.json ./packages/shared/
 COPY apps/print-worker/package.json ./apps/print-worker/
 
 RUN pnpm install --frozen-lockfile
+
+# Issue #268: gemeinsame Fehlerkennungen mit dem Backend. Das Paket hat keine
+# Laufzeitabhaengigkeiten und wird wie im Backend-Abbild vor dem Worker gebaut.
+COPY packages/shared ./packages/shared
+RUN pnpm --filter @vereinorder/shared run build
 
 COPY apps/print-worker ./apps/print-worker
 RUN pnpm --filter @vereinorder/print-worker run build
@@ -22,10 +28,12 @@ ENV NODE_ENV=production
 RUN corepack enable && corepack prepare pnpm@9.15.4 --activate
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY packages/shared/package.json ./packages/shared/
 COPY apps/print-worker/package.json ./apps/print-worker/
 
 RUN pnpm install --prod --frozen-lockfile
 
+COPY --from=builder /app/packages/shared/dist ./packages/shared/dist
 COPY --from=builder /app/apps/print-worker/dist ./apps/print-worker/dist
 
 # #180: Der Worker laeuft nicht mehr als root. node:20-alpine bringt den

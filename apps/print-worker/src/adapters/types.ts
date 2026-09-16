@@ -1,27 +1,18 @@
+import type { PrintWorkerErrorCode } from "@vereinorder/shared";
+
 import { PreparedDocument } from "../printing/prepare";
 import { PrinterKind, PrintTarget } from "../target";
 
-export type PrintErrorCode =
-  // --- TCP-Transport ---
-  | "DNS_ERROR"
-  | "CONNECTION_REFUSED"
-  | "UNREACHABLE"
-  | "TIMEOUT"
-  | "WRITE_FAILED"
-  | "CONNECTION_LOST"
-  // --- Simulator ---
-  | "OUTPUT_FAILED"
-  // --- CUPS/IPP-Transport ---
-  | "CUPS_UNREACHABLE"
-  | "CUPS_QUEUE_NOT_FOUND"
-  | "CUPS_QUEUE_NOT_ACCEPTING"
-  | "CUPS_RESPONSE_LOST"
-  | "CUPS_JOB_CANCELED_PENDING"
-  | "CUPS_JOB_CANCELED_PROCESSING"
-  | "CUPS_JOB_ABORTED"
-  | "CUPS_DEVICE_DISCONNECTED"
-  | "CUPS_CANCEL_FAILED"
-  | "CUPS_STATUS_UNKNOWN";
+/**
+ * Kennungen, die ein Transport-Adapter werfen darf. Die Werte selbst stehen
+ * in `@vereinorder/shared` (Issue #268), damit das Backend dieselben
+ * Zeichenketten prüft, die der Worker meldet. Die beiden Kennungen des
+ * Workers außerhalb eines Transports sind hier ausgenommen.
+ */
+export type PrintErrorCode = Exclude<
+  PrintWorkerErrorCode,
+  "PRINTER_CONFIGURATION" | "UNEXPECTED"
+>;
 
 /**
  * Fehlerklasse eines abgeschlossenen Zustellversuchs, wie sie an das Backend
