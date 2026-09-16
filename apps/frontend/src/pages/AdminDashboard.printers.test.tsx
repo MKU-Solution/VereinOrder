@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -57,15 +57,18 @@ const mockedApi = api as unknown as {
 
 let statusResponses: Array<Record<string, unknown>> = [];
 let unresolvedJobsResponse: Array<Record<string, unknown>> = [];
+let printersResponse: Array<Record<string, unknown>> = [printer];
 
 beforeEach(() => {
   statusResponses = [];
   unresolvedJobsResponse = [];
+  printersResponse = [printer];
+  mockedApi.get.mockReset();
   mockedApi.get.mockImplementation((url: string) => {
     if (url === "/events")
       return Promise.resolve({ data: [{ id: "event-1" }] });
     if (url === "/print-jobs/printers")
-      return Promise.resolve({ data: [printer] });
+      return Promise.resolve({ data: printersResponse });
     if (url === "/print-jobs/unresolved")
       return Promise.resolve({ data: unresolvedJobsResponse });
     if (url.startsWith("/print-jobs/") && url.endsWith("/status")) {
@@ -88,7 +91,7 @@ async function openPrinterTab() {
       <AdminDashboard />
     </MemoryRouter>,
   );
-  await screen.findByText("Küchendrucker");
+  await screen.findByRole("heading", { name: "Küchendrucker" });
 }
 
 function loginAs(role: "ADMINISTRATOR" | "EVENT_MANAGER" | "WAITER") {
@@ -145,6 +148,61 @@ describe("Druckerverwaltung", () => {
     expect(
       await screen.findByText(/wurde abgelehnt/, undefined, { timeout: 6000 }),
     ).toBeInTheDocument();
+  }, 10000);
+
+  it("lädt die Druckerliste nach einem erfolgreichen Testbon sofort neu und nimmt „Druckt nicht“ weg (Issue #265)", async () => {
+    printersResponse = [
+      {
+        ...printer,
+        lastOkAt: new Date(Date.now() - 60 * 60000).toISOString(),
+        lastErrorAt: new Date(Date.now() - 5 * 60000).toISOString(),
+        lastErrorCode: "CONNECTION_REFUSED",
+      },
+    ];
+    statusResponses = [{ status: "PRINTED" }];
+    await openPrinterTab();
+    expect(screen.getByText("Druckt nicht")).toBeInTheDocument();
+
+    // Der Worker hat gedruckt: ab jetzt liefert das Backend den Erfolg.
+    mockedApi.post.mockImplementation(() => {
+      printersResponse = [
+        {
+          ...printer,
+          lastOkAt: new Date().toISOString(),
+          lastErrorAt: new Date(Date.now() - 5 * 60000).toISOString(),
+          lastErrorCode: "CONNECTION_REFUSED",
+        },
+      ];
+      return Promise.resolve({ data: { id: "job-1" } });
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /Testbon drucken/ }));
+
+    expect(
+      await screen.findByText("Testbon wurde gedruckt.", undefined, {
+        timeout: 4000,
+      }),
+    ).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.queryByText("Druckt nicht")).not.toBeInTheDocument(),
+    );
+    expect(screen.getByText("Bereit")).toBeInTheDocument();
+  }, 10000);
+
+  it("lädt die Druckerliste auch nach einem gescheiterten Testbon sofort neu (Issue #265)", async () => {
+    statusResponses = [{ status: "FAILED", errorMessage: "abgelehnt" }];
+    await openPrinterTab();
+    const printerCalls = () =>
+      mockedApi.get.mock.calls.filter(([url]) => url === "/print-jobs/printers")
+        .length;
+    const callsBefore = printerCalls();
+
+    fireEvent.click(screen.getByRole("button", { name: /Testbon drucken/ }));
+
+    expect(
+      await screen.findByText("abgelehnt", undefined, { timeout: 4000 }),
+    ).toBeInTheDocument();
+    await waitFor(() => expect(printerCalls()).toBe(callsBefore + 1));
   }, 10000);
 
   it("zeigt die Begründung des Backends bei ungültigen Druckerdaten", async () => {

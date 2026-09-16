@@ -88,6 +88,7 @@ export const AdminDashboardController = ({
     restoreOperationConfirmation,
     setRestoreOperationConfirmation,
     fetchData,
+    refreshPrintersSilently,
   } = useAdminAreaData(activeTab);
   const [isBackingUp, setIsBackingUp] = useState(false);
   const [overviewRefreshToken, setOverviewRefreshToken] = useState(0);
@@ -836,6 +837,10 @@ export const AdminDashboardController = ({
       );
       const result = await waitForPrintJob(job.id);
       setPrinterTests((prev) => ({ ...prev, [printerId]: result }));
+      // Issue #265: Der Testbon hat lastOkAt bzw. lastErrorAt fortgeschrieben.
+      // Sofort nachladen, damit „Druckt nicht“ nach einem Erfolg verschwindet
+      // und nicht erst mit der nächsten stillen Abfrage.
+      void refreshPrintersSilently();
     } catch (err) {
       console.error("Failed to test print", err);
       setPrinterTests((prev) => ({

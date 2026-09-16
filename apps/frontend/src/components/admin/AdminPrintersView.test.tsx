@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { AdminPrintersView } from "./AdminPrintersView";
@@ -125,5 +125,147 @@ describe("AdminPrintersView", () => {
     fireEvent.click(testButtons[0]);
 
     expect(onTestPrint).toHaveBeenCalledWith("p-1");
+  });
+});
+
+describe("AdminPrintersView – Druckerzustand (Issue #265)", () => {
+  const minutesAgo = (minutes: number) =>
+    new Date(Date.now() - minutes * 60000).toISOString();
+
+  const failingA = {
+    id: "p-a",
+    name: "Küche",
+    type: "ESC_POS_NETWORK",
+    isActive: true,
+    lastOkAt: minutesAgo(90),
+    lastErrorAt: minutesAgo(5),
+    lastErrorCode: "CONNECTION_REFUSED",
+  };
+  const recoveredB = {
+    id: "p-b",
+    name: "Schank",
+    type: "ESC_POS_NETWORK",
+    isActive: true,
+    lastOkAt: minutesAgo(2),
+    lastErrorAt: minutesAgo(30),
+    lastErrorCode: "TIMEOUT",
+  };
+  const offWithErrorC = {
+    id: "p-c",
+    name: "Bar",
+    type: "ESC_POS_NETWORK",
+    isActive: false,
+    lastOkAt: null,
+    lastErrorAt: minutesAgo(10),
+    lastErrorCode: "UNREACHABLE",
+  };
+  const neverPrintedD = {
+    id: "p-d",
+    name: "Terrasse",
+    type: "ESC_POS_NETWORK",
+    isActive: true,
+    lastOkAt: null,
+    lastErrorAt: null,
+    lastErrorCode: null,
+  };
+
+  const renderView = (printers: any[]) =>
+    render(
+      <AdminPrintersView
+        printers={printers}
+        unresolvedJobs={[]}
+        printerTests={{}}
+        onRefresh={vi.fn()}
+        onOpenCreate={vi.fn()}
+        onEdit={vi.fn()}
+        onTestPrint={vi.fn()}
+        onOpenResolveDialog={vi.fn()}
+      />,
+    );
+
+  const card = (name: string) => {
+    const article = screen.getByRole("heading", { name }).closest("article");
+    if (!article) throw new Error(`Keine Karte für ${name}`);
+    return within(article);
+  };
+
+  it("zeigt einen Drucker mit jüngerem Fehler anders als einen wieder gesunden", () => {
+    renderView([failingA, recoveredB]);
+
+    const a = card("Küche");
+    expect(a.getByText("Druckt nicht")).toBeInTheDocument();
+    expect(
+      a.getByText(
+        "Letzter Druckversuch fehlgeschlagen: Drucker nimmt keine Verbindung an",
+      ),
+    ).toBeInTheDocument();
+    expect(a.queryByText("Bereit")).not.toBeInTheDocument();
+
+    const b = card("Schank");
+    expect(b.getByText("Bereit")).toBeInTheDocument();
+    expect(b.queryByText("Druckt nicht")).not.toBeInTheDocument();
+  });
+
+  it("zeigt einen ausgeschalteten Drucker mit Fehler als ausgeschaltet und nennt ihn nicht im Sammelhinweis", () => {
+    renderView([failingA, offWithErrorC]);
+
+    const c = card("Bar");
+    expect(c.getByText("Ausgeschaltet")).toBeInTheDocument();
+    expect(
+      c.getByText(
+        /^Letzter Druckversuch fehlgeschlagen \(.+\): Drucker ist im Netzwerk nicht erreichbar$/,
+      ),
+    ).toBeInTheDocument();
+    expect(c.queryByText("Druckt nicht")).not.toBeInTheDocument();
+
+    const summary = screen.getByRole("region", {
+      name: "Drucker, die nicht drucken",
+    });
+    expect(summary).toHaveTextContent('Drucker „Küche" druckt nicht');
+    expect(summary).not.toHaveTextContent("Bar");
+  });
+
+  it("behält den Sammelhinweis, wenn der Suchfilter die fehlerhafte Karte ausblendet", () => {
+    renderView([failingA, recoveredB]);
+
+    fireEvent.change(
+      screen.getByPlaceholderText("Druckername oder IP suchen …"),
+      { target: { value: "Schank" } },
+    );
+
+    expect(
+      screen.queryByRole("heading", { name: "Küche" }),
+    ).not.toBeInTheDocument();
+    const summary = screen.getByRole("region", {
+      name: "Drucker, die nicht drucken",
+    });
+    expect(summary).toHaveTextContent('Drucker „Küche" druckt nicht');
+    expect(
+      within(summary).getByRole("link", { name: "Küche" }),
+    ).toHaveAttribute("href", "#printer-p-a");
+  });
+
+  it("nennt mehrere fehlerhafte Drucker im Sammelhinweis", () => {
+    renderView([failingA, { ...recoveredB, lastOkAt: null }, neverPrintedD]);
+
+    expect(
+      screen.getByRole("region", { name: "Drucker, die nicht drucken" }),
+    ).toHaveTextContent("2 Drucker drucken nicht: Küche, Schank");
+  });
+
+  it("zeigt keinen Sammelhinweis, solange kein eingeschalteter Drucker scheitert", () => {
+    renderView([recoveredB, offWithErrorC, neverPrintedD]);
+
+    expect(
+      screen.queryByRole("region", { name: "Drucker, die nicht drucken" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("zeigt einen nie benutzten Drucker als „Noch nicht getestet“", () => {
+    renderView([neverPrintedD]);
+
+    const d = card("Terrasse");
+    expect(d.getByText("Noch nicht getestet")).toBeInTheDocument();
+    expect(d.queryByText("Bereit")).not.toBeInTheDocument();
   });
 });

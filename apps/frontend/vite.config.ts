@@ -39,6 +39,21 @@ export default defineConfig({
       "@": path.resolve(__dirname, "./src"),
     },
   },
+  // Issue #265: Das Frontend nutzt @vereinorder/shared erstmals zur Laufzeit
+  // (vorher nur Typen). Das Paket wird als CommonJS gebaut und liegt als
+  // Workspace-Verknuepfung ausserhalb von node_modules. Vite behandelt es
+  // deshalb als Quellcode und uebersetzt es weder im Entwicklungsserver noch
+  // im Build nach ESM - der Build scheitert mit "... is not exported by
+  // packages/shared/dist/index.js". Beide Eintraege sind der von Vite
+  // dokumentierte Weg fuer verknuepfte CommonJS-Pakete.
+  optimizeDeps: {
+    include: ["@vereinorder/shared"],
+  },
+  build: {
+    commonjsOptions: {
+      include: [/packages[\\/]shared[\\/]dist[\\/]/, /node_modules/],
+    },
+  },
   server: {
     port: 5173,
     proxy: {
