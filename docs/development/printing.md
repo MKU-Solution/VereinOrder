@@ -215,12 +215,19 @@ Testdruck und bei unklaren Aufträgen direkt.
 | `CUPS_JOB_ABORTED`             | CUPS hat den Auftrag verworfen             | `UNCLEAR`              |
 | `CUPS_DEVICE_DISCONNECTED`     | Gerät während des Drucks getrennt          | `UNCLEAR`              |
 | `CUPS_RESPONSE_LOST`           | Antwort von CUPS ging verloren             | `UNCLEAR`              |
+| `PRINTER_CONFIGURATION`        | Druckerzeile ist unvollständig oder falsch | `NOT_PRINTED`          |
+| `UNEXPECTED`                   | Fehler ohne Transportkennung               | `UNCLEAR`              |
 
 Papier aus löst ausdrücklich **kein** Failover aus: Der Auftrag bleibt im Spooler und
 druckt nach dem Nachlegen weiter. Ein Wechsel wäre dort ein garantierter Doppeldruck.
 
 Ein Auftrag, dessen Drucker falsch konfiguriert ist, scheitert sofort mit einer
 Konfigurationsmeldung statt still auf der Konsole zu landen.
+
+`PRINTER_CONFIGURATION`, `CUPS_QUEUE_NOT_FOUND` und `OUTPUT_FAILED` lösen ebenfalls **kein**
+Failover aus: Ein Ersatzdrucker behebt keinen Einrichtungsfehler, er würde ihn nur bis in den
+Festbetrieb verdecken. Alle Kennungen und diese Ausnahmeliste stehen gemeinsam für Worker und
+Backend in `packages/shared/index.ts` (Issue #268).
 
 ## Protokolle
 

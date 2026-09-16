@@ -1,3 +1,7 @@
+import {
+  PRINT_WORKER_ERROR_CODES,
+  type PrintWorkerErrorCode,
+} from "@vereinorder/shared";
 import axios, { AxiosError } from "axios";
 
 import {
@@ -30,7 +34,7 @@ interface PrintJob extends PrintJobLike {
 interface OutcomeReport {
   leaseId: string;
   outcome: PrintOutcomeClass;
-  errorCode?: string;
+  errorCode?: PrintWorkerErrorCode;
   errorMessage?: string;
   bytesWritten?: number;
   cupsJobState?: string;
@@ -255,7 +259,7 @@ export async function processJob(
     await reportOutcomePersistent(job.id, held, {
       leaseId: job.leaseId,
       outcome: "NOT_PRINTED",
-      errorCode: "PRINTER_CONFIGURATION",
+      errorCode: PRINT_WORKER_ERROR_CODES.PRINTER_CONFIGURATION,
       errorMessage: message,
     });
     return;
@@ -328,7 +332,7 @@ export async function processJob(
         jobType: job.jobType,
         printerId: target.id,
         transport: target.kind,
-        code: transportError?.code ?? "UNEXPECTED",
+        code: transportError?.code ?? PRINT_WORKER_ERROR_CODES.UNEXPECTED,
         outcome,
         durationMs: Date.now() - started,
         message,
@@ -337,7 +341,7 @@ export async function processJob(
       await reportOutcomePersistent(job.id, heartbeat.held, {
         leaseId: job.leaseId,
         outcome,
-        errorCode: transportError?.code ?? "UNEXPECTED",
+        errorCode: transportError?.code ?? PRINT_WORKER_ERROR_CODES.UNEXPECTED,
         errorMessage: message,
         bytesWritten: transportError?.bytesWritten,
         cupsJobState: transportError?.cupsJobState,

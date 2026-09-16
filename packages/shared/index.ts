@@ -120,3 +120,60 @@ export const hasUnrecoveredPrinterError = (
   const okAt = toTime(printer.lastOkAt);
   return okAt === null || errorAt > okAt;
 };
+
+// Issue #268: Fehlerkennungen, die der Print-Worker an das Backend meldet
+// (PATCH /print-jobs/:id/status, Feld `errorCode`) und die danach in
+// `PrintJob.errorCode` und `Printer.lastErrorCode` stehen.
+//
+// Liegt hier, weil Print-Worker und Backend sich ueber diese Werte einigen
+// muessen. Vorher fuehrte jede Seite ihre eigene Zeichenkette: Der Worker
+// meldete PRINTER_CONFIGURATION, die Failover-Ausnahme des Backends pruefte
+// auf PRINTER_CONFIG_ERROR, einen Wert, den nie jemand erzeugt hat. Beide
+// Seiten waren fuer sich getestet und passten nicht zusammen; ein falsch
+// eingerichteter Drucker loeste deshalb einen Wechsel auf den Ersatzdrucker
+// aus. Mit einer gemeinsamen Liste weist die Typpruefung jeden Wert ab, den
+// die andere Seite nicht kennt.
+export const PRINT_WORKER_ERROR_CODES = {
+  // --- TCP-Transport ---
+  DNS_ERROR: "DNS_ERROR",
+  CONNECTION_REFUSED: "CONNECTION_REFUSED",
+  UNREACHABLE: "UNREACHABLE",
+  TIMEOUT: "TIMEOUT",
+  WRITE_FAILED: "WRITE_FAILED",
+  CONNECTION_LOST: "CONNECTION_LOST",
+  // --- Simulator ---
+  OUTPUT_FAILED: "OUTPUT_FAILED",
+  // --- CUPS/IPP-Transport ---
+  CUPS_UNREACHABLE: "CUPS_UNREACHABLE",
+  CUPS_QUEUE_NOT_FOUND: "CUPS_QUEUE_NOT_FOUND",
+  CUPS_QUEUE_NOT_ACCEPTING: "CUPS_QUEUE_NOT_ACCEPTING",
+  CUPS_RESPONSE_LOST: "CUPS_RESPONSE_LOST",
+  CUPS_JOB_CANCELED_PENDING: "CUPS_JOB_CANCELED_PENDING",
+  CUPS_JOB_CANCELED_PROCESSING: "CUPS_JOB_CANCELED_PROCESSING",
+  CUPS_JOB_ABORTED: "CUPS_JOB_ABORTED",
+  CUPS_DEVICE_DISCONNECTED: "CUPS_DEVICE_DISCONNECTED",
+  CUPS_CANCEL_FAILED: "CUPS_CANCEL_FAILED",
+  CUPS_STATUS_UNKNOWN: "CUPS_STATUS_UNKNOWN",
+  // --- Worker selbst, ausserhalb eines Transports ---
+  /** Druckerzeile laesst sich nicht in ein Druckziel aufloesen. */
+  PRINTER_CONFIGURATION: "PRINTER_CONFIGURATION",
+  /** Zustellung scheiterte ohne Transportfehler mit stabiler Kennung. */
+  UNEXPECTED: "UNEXPECTED",
+} as const;
+
+export type PrintWorkerErrorCode =
+  (typeof PRINT_WORKER_ERROR_CODES)[keyof typeof PRINT_WORKER_ERROR_CODES];
+
+// Kennungen, bei denen ein Ersatzdrucker die Ursache nicht beheben wuerde:
+// Eine ungueltige Konfiguration darf nicht stillschweigend umgangen werden,
+// eine fehlende CUPS-Warteschlange ebenso wenig, und der Simulator hat nichts
+// zu ersetzen (Architekturvorgabe Abschnitt 2.2). Das Backend wertet diese
+// Liste beim Ausgang NOT_PRINTED aus (PrintJobsService.finalizeNotPrinted);
+// der Print-Worker prueft in seinen Tests, dass seine Konfigurationsmeldung
+// darin enthalten ist.
+export const PRINT_ERROR_CODES_WITHOUT_FAILOVER: readonly PrintWorkerErrorCode[] =
+  [
+    PRINT_WORKER_ERROR_CODES.PRINTER_CONFIGURATION,
+    PRINT_WORKER_ERROR_CODES.CUPS_QUEUE_NOT_FOUND,
+    PRINT_WORKER_ERROR_CODES.OUTPUT_FAILED,
+  ];

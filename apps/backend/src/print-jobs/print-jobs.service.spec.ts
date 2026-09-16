@@ -4,6 +4,10 @@ import {
   ForbiddenException,
   NotFoundException,
 } from "@nestjs/common";
+import {
+  PRINT_ERROR_CODES_WITHOUT_FAILOVER,
+  PRINT_WORKER_ERROR_CODES,
+} from "@vereinorder/shared";
 import { PrintJobsService } from "./print-jobs.service";
 
 function makePrisma() {
@@ -324,42 +328,55 @@ describe("PrintJobsService – Ergebnismeldung, Failover genau einmal (Abschnitt
     });
   });
 
-  it("löst kein Failover bei PrinterConfigurationError-artigen Fehlercodes aus und schreibt die Betriebssicht an printer-1", async () => {
-    prisma.printJob.findUnique.mockResolvedValueOnce({
-      id: "job-1",
-      failoverCount: 0,
-      printerId: "printer-1",
-      activePrinterId: null,
-      printer: {
-        id: "printer-1",
-        type: "ESC_POS_NETWORK",
-        fallbackPrinterId: "printer-2",
-      },
-      activePrinter: null,
-    });
-    prisma.$queryRaw.mockResolvedValue([
-      { id: "job-1", attemptPrinterId: "printer-1" },
-    ]);
-    prisma.printJob.findUniqueOrThrow.mockResolvedValue({
-      id: "job-1",
-      status: "FAILED",
-    });
-
-    await service.reportOutcome("job-1", {
-      leaseId: "lease-1",
-      outcome: "NOT_PRINTED",
-      errorCode: "PRINTER_CONFIG_ERROR",
-    });
-
-    expect(prisma.printer.findUnique).not.toHaveBeenCalled();
-    expect(prisma.printer.update).toHaveBeenCalledWith({
-      where: { id: "printer-1" },
-      data: {
-        lastErrorAt: expect.any(Date),
-        lastErrorCode: "PRINTER_CONFIG_ERROR",
-      },
-    });
+  // Issue #268: Die Kennungen kommen aus derselben Liste, aus der der
+  // Print-Worker meldet. Vorher setzte dieser Test PRINTER_CONFIG_ERROR
+  // selbst - einen Wert, den der Worker nie sendet -, und war deshalb grün,
+  // während die Ausnahme für PRINTER_CONFIGURATION nie griff.
+  it("führt die Konfigurationsmeldung des Print-Workers in der Failover-Ausnahme", () => {
+    expect(PRINT_ERROR_CODES_WITHOUT_FAILOVER).toContain(
+      PRINT_WORKER_ERROR_CODES.PRINTER_CONFIGURATION,
+    );
   });
+
+  it.each(PRINT_ERROR_CODES_WITHOUT_FAILOVER)(
+    "löst kein Failover bei %s aus und schreibt die Betriebssicht an printer-1",
+    async (errorCode) => {
+      prisma.printJob.findUnique.mockResolvedValueOnce({
+        id: "job-1",
+        failoverCount: 0,
+        printerId: "printer-1",
+        activePrinterId: null,
+        printer: {
+          id: "printer-1",
+          type: "ESC_POS_NETWORK",
+          fallbackPrinterId: "printer-2",
+        },
+        activePrinter: null,
+      });
+      prisma.$queryRaw.mockResolvedValue([
+        { id: "job-1", attemptPrinterId: "printer-1" },
+      ]);
+      prisma.printJob.findUniqueOrThrow.mockResolvedValue({
+        id: "job-1",
+        status: "FAILED",
+      });
+
+      await service.reportOutcome("job-1", {
+        leaseId: "lease-1",
+        outcome: "NOT_PRINTED",
+        errorCode,
+      });
+
+      expect(prisma.printer.findUnique).not.toHaveBeenCalled();
+      expect(prisma.printer.update).toHaveBeenCalledWith({
+        where: { id: "printer-1" },
+        data: {
+          lastErrorAt: expect.any(Date),
+          lastErrorCode: errorCode,
+        },
+      });
+    },
+  );
 
   it("löst kein Failover für einen Simulator (CONSOLE) aus, auch mit konfiguriertem Ersatzdrucker (R6)", async () => {
     prisma.printJob.findUnique.mockResolvedValueOnce({

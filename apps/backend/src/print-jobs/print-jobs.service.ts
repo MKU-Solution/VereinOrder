@@ -8,6 +8,7 @@ import {
 } from "@nestjs/common";
 import { randomUUID } from "crypto";
 import { Prisma, PrismaClient, PrintJob, Printer } from "@vereinorder/database";
+import { PRINT_ERROR_CODES_WITHOUT_FAILOVER } from "@vereinorder/shared";
 import { PRISMA_CLIENT } from "../prisma/prisma.module";
 import { AuditService } from "../audit/audit.service";
 
@@ -45,12 +46,15 @@ const LEASE_DURATION_MS = 60_000;
  * würde. Eine ungültige Konfiguration darf nicht stillschweigend umgangen
  * werden (Architekturvorgabe Abschnitt 2.2: PrinterConfigurationError /
  * client-error-not-found / Simulator).
+ *
+ * Issue #268: Die Liste stammt aus `@vereinorder/shared`, derselben Stelle,
+ * aus der der Print-Worker seine Kennungen meldet. Die frühere eigene Liste
+ * führte PRINTER_CONFIG_ERROR, der Worker meldet aber PRINTER_CONFIGURATION -
+ * die Ausnahme griff deshalb nie.
  */
-const NO_FAILOVER_ERROR_CODES = new Set([
-  "PRINTER_CONFIG_ERROR",
-  "CUPS_QUEUE_NOT_FOUND",
-  "OUTPUT_FAILED",
-]);
+const NO_FAILOVER_ERROR_CODES: ReadonlySet<string> = new Set(
+  PRINT_ERROR_CODES_WITHOUT_FAILOVER,
+);
 
 /** Druckertypen, die niemals ein Failover auslösen (R6: Simulator/Konsole). */
 const NO_FAILOVER_PRINTER_TYPES = new Set(["CONSOLE"]);

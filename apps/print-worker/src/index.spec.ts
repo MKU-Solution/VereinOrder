@@ -1,4 +1,5 @@
 /* eslint-disable @typescript-eslint/no-var-requires */
+import { PRINT_ERROR_CODES_WITHOUT_FAILOVER } from "@vereinorder/shared";
 import axios from "axios";
 
 import { DeliveryContext, PrinterAdapter } from "./adapters";
@@ -144,6 +145,31 @@ describe("Lease-Protokoll in processJob", () => {
       }),
       expect.anything(),
     );
+  });
+
+  // Issue #268: Der Worker meldete PRINTER_CONFIGURATION, das Backend nahm
+  // PRINTER_CONFIG_ERROR vom Failover aus. Dieser Test setzt die Kennung
+  // nicht selbst, sondern nimmt, was processJob tatsächlich an das Backend
+  // schickt, und prüft sie gegen die Liste, die das Backend auswertet.
+  it("meldet eine ungültige Druckerkonfiguration mit einer Kennung, die das Backend vom Failover ausnimmt", async () => {
+    const patchSpy = jest.spyOn(axios, "patch").mockResolvedValue({ data: {} });
+    const deliver = jest.fn();
+    const registry = fakeAdapter(deliver);
+
+    await processJob(
+      {
+        ...job,
+        printer: { id: "printer-1", name: "Bar", type: "ESC_POS_NETWORK" },
+      } as any,
+      registry,
+    );
+
+    expect(deliver).not.toHaveBeenCalled();
+    expect(patchSpy).toHaveBeenCalledTimes(1);
+    const [url, report] = patchSpy.mock.calls[0] as [string, any];
+    expect(url).toContain("/status");
+    expect(report).toMatchObject({ outcome: "NOT_PRINTED" });
+    expect(PRINT_ERROR_CODES_WITHOUT_FAILOVER).toContain(report.errorCode);
   });
 
   it("bricht still ab, wenn die Lease erst während der Zustellung verloren geht", async () => {

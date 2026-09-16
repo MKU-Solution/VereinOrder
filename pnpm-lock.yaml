@@ -220,6 +220,9 @@ importers:
 
   apps/print-worker:
     dependencies:
+      '@vereinorder/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
       axios:
         specifier: ^1.6.8
         version: 1.19.0
