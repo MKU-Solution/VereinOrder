@@ -1,5 +1,6 @@
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState, type MouseEvent } from "react";
 import {
+  AlertOctagon,
   AlertTriangle,
   CheckCircle2,
   Edit2,
@@ -16,7 +17,39 @@ import {
   describeUnresolvedReason,
   formatClockTime,
   formatMinutesAgoLong,
+  getFailingActivePrinters,
+  getPrinterDiagState,
+  type PrinterStateTone,
 } from "./printerAdminModel";
+
+/**
+ * Farben je Druckerzustand (Issue #265), zentral an einer Stelle. Nur
+ * Tailwind-Standardpalette; Kontraste im Gestaltungskonzept nachgerechnet.
+ * Jeder Zustand hat zusätzlich eigenes Symbol und eigenen Text, die Farbe
+ * trägt nie allein.
+ */
+const PRINTER_STATE_ROW_CLASSES: Record<PrinterStateTone, string> = {
+  off: "border border-slate-700 bg-slate-800 text-slate-300",
+  failing: "border border-rose-800 bg-rose-800 text-white",
+  unconfirmed: "border border-dashed border-slate-500 text-slate-200",
+  ready: "border border-emerald-500/30 bg-emerald-500/20 text-emerald-400",
+};
+
+const PRINTER_STATE_ICON_CLASSES: Record<PrinterStateTone, string> = {
+  off: "text-slate-300",
+  failing: "text-white",
+  unconfirmed: "text-slate-300",
+  ready: "text-emerald-400",
+};
+
+const PRINTER_CARD_BORDER_CLASSES: Record<PrinterStateTone, string> = {
+  off: "border border-slate-700/80",
+  failing: "border-2 border-rose-500",
+  unconfirmed: "border border-slate-700/80",
+  ready: "border border-slate-700/80",
+};
+
+const printerAnchorId = (printerId: string) => `printer-${printerId}`;
 
 export interface AdminPrintersViewProps {
   printers: any[];
@@ -77,9 +110,37 @@ export const AdminPrintersView = ({
 
   const isFiltered = searchQuery.trim().length > 0 || typeFilter !== "ALL";
 
+  // Ersatzdrucker und Sammelhinweis beziehen sich bewusst auf die
+  // ungefilterte Liste: Ein ausgefilterter Drucker druckt trotzdem nicht.
+  const printersById = useMemo(
+    () => Object.fromEntries(printers.map((p) => [p.id, p])),
+    [printers],
+  );
+  const failingPrinters = useMemo(
+    () => getFailingActivePrinters(printers),
+    [printers],
+  );
+  const now = Date.now();
+
   const handleResetFilters = () => {
     setSearchQuery("");
     setTypeFilter("ALL");
+  };
+
+  // Ein Sprunglink auf eine gerade ausgefilterte Karte liefe ins Leere:
+  // dann erst die Filter zurücksetzen und nach dem Rendern hinspringen.
+  const handleJumpToPrinter = (
+    event: MouseEvent<HTMLAnchorElement>,
+    printerId: string,
+  ) => {
+    if (filteredPrinters.some((p) => p.id === printerId)) return;
+    event.preventDefault();
+    handleResetFilters();
+    window.setTimeout(() => {
+      document
+        .getElementById(printerAnchorId(printerId))
+        ?.scrollIntoView({ block: "start" });
+    }, 0);
   };
 
   const typeFilterSelect = (
@@ -100,8 +161,46 @@ export const AdminPrintersView = ({
     </div>
   );
 
+  const printerJumpLink = (printer: any) => (
+    <a
+      href={`#${printerAnchorId(printer.id)}`}
+      onClick={(event) => handleJumpToPrinter(event, printer.id)}
+      className="rounded-sm underline underline-offset-2 hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-200"
+    >
+      {printer.name}
+    </a>
+  );
+
   return (
     <div className="space-y-6">
+      {/* Sammelhinweis: eingeschaltete Drucker, die nicht drucken (Issue #265) */}
+      {failingPrinters.length > 0 && (
+        <section
+          aria-label="Drucker, die nicht drucken"
+          className="flex items-start gap-3 rounded-2xl border border-rose-500 bg-rose-950/60 px-4 py-3 text-sm font-bold text-rose-100"
+        >
+          <AlertOctagon
+            aria-hidden="true"
+            className="mt-0.5 h-5 w-5 shrink-0"
+          />
+          <p className="min-w-0 break-words">
+            {failingPrinters.length === 1 ? (
+              <>Drucker „{printerJumpLink(failingPrinters[0])}" druckt nicht</>
+            ) : (
+              <>
+                {failingPrinters.length} Drucker drucken nicht:{" "}
+                {failingPrinters.map((printer, index) => (
+                  <Fragment key={printer.id}>
+                    {index > 0 && ", "}
+                    {printerJumpLink(printer)}
+                  </Fragment>
+                ))}
+              </>
+            )}
+          </p>
+        </section>
+      )}
+
       {/* Unklare Druckaufträge Sektion */}
       {unresolvedJobs.length === 0 ? (
         <div
@@ -281,13 +380,34 @@ export const AdminPrintersView = ({
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {filteredPrinters.map((printer: any) => {
             const testState = printerTests[printer.id];
+            const diag = getPrinterDiagState(printer, printersById, now);
+            const DiagIcon = diag.Icon;
 
             return (
               <article
                 key={printer.id}
-                className="flex flex-col justify-between space-y-4 rounded-2xl border border-slate-700/80 bg-slate-900/80 p-5 shadow-lg"
+                id={printerAnchorId(printer.id)}
+                className={`flex scroll-mt-4 flex-col justify-between space-y-4 rounded-2xl bg-slate-900/80 p-5 shadow-lg ${PRINTER_CARD_BORDER_CLASSES[diag.tone]}`}
               >
                 <div className="space-y-3">
+                  {/* Statuszeile (Issue #265): erste Zeile, volle Breite */}
+                  <div
+                    className={`flex flex-wrap items-center justify-between gap-x-3 gap-y-1 rounded-xl px-3 py-2 text-sm font-bold ${PRINTER_STATE_ROW_CLASSES[diag.tone]}`}
+                  >
+                    <span className="flex items-center gap-2 whitespace-nowrap">
+                      <DiagIcon
+                        aria-hidden="true"
+                        className={`h-5 w-5 shrink-0 ${PRINTER_STATE_ICON_CLASSES[diag.tone]}`}
+                      />
+                      {diag.label}
+                    </span>
+                    {diag.timeText && (
+                      <span className="whitespace-nowrap text-xs font-semibold">
+                        {diag.timeText}
+                      </span>
+                    )}
+                  </div>
+
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex items-center gap-3">
                       <div className="rounded-xl border border-indigo-500/30 bg-indigo-500/20 p-2.5 text-indigo-400">
@@ -305,16 +425,38 @@ export const AdminPrintersView = ({
                         </span>
                       </div>
                     </div>
-                    <span
-                      className={`shrink-0 rounded-full border px-2.5 py-1 text-xs font-bold ${
-                        printer.isActive
-                          ? "border-emerald-500/30 bg-emerald-500/20 text-emerald-400"
-                          : "border-slate-700 bg-slate-800 text-slate-400"
-                      }`}
-                    >
-                      {printer.isActive ? "Bereit" : "Inaktiv"}
-                    </span>
                   </div>
+
+                  {diag.kind === "FAILING" ? (
+                    <div className="space-y-1.5 rounded-xl bg-rose-950/60 p-3 text-xs text-rose-100">
+                      <p className="text-sm font-bold text-rose-100">
+                        {diag.details[0]}
+                      </p>
+                      {diag.details.slice(1).map((line) => (
+                        <p key={line}>{line}</p>
+                      ))}
+                      {diag.errorCode && (
+                        <p className="font-mono text-slate-400">
+                          Fehlercode: {diag.errorCode}
+                        </p>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="space-y-1 text-xs text-slate-300">
+                      {diag.details.map((line) => (
+                        <p key={line}>{line}</p>
+                      ))}
+                      {diag.hint && (
+                        <p className="flex items-start gap-1.5">
+                          <AlertTriangle
+                            aria-hidden="true"
+                            className="mt-px h-4 w-4 shrink-0 text-amber-300"
+                          />
+                          <span>{diag.hint}</span>
+                        </p>
+                      )}
+                    </div>
+                  )}
 
                   <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3 font-mono text-xs text-slate-400">
                     <p className="text-slate-300">

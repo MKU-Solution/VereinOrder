@@ -1,6 +1,7 @@
 import { Injectable, Inject } from "@nestjs/common";
 import * as net from "net";
 import { PrismaClient } from "@vereinorder/database";
+import { hasUnrecoveredPrinterError } from "@vereinorder/shared";
 import { PRISMA_CLIENT } from "../prisma/prisma.module";
 import { NativeBackupService } from "../backup/native-backup.service";
 
@@ -344,8 +345,7 @@ export class DiagnosticsService {
     lastErrorAt: Date | null;
     lastOkAt: Date | null;
   }): boolean {
-    if (!printer.isActive || !printer.lastErrorAt) return false;
-    if (!printer.lastOkAt) return true;
-    return printer.lastErrorAt.getTime() > printer.lastOkAt.getTime();
+    // Issue #265: dieselbe Regel nutzt die Druckerverwaltung im Frontend.
+    return printer.isActive && hasUnrecoveredPrinterError(printer);
   }
 }

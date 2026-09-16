@@ -93,8 +93,15 @@ export const useAdminAreaData = (activeArea: AdminAreaId) => {
     };
   }, []);
 
+  /**
+   * Aktueller Bereich für Rückrufe, die länger laufen als ein Rendervorgang
+   * (z. B. die Neuabfrage nach einem Testbon, Issue #265).
+   */
+  const activeAreaRef = useRef(activeArea);
+
   useEffect(() => {
     areaGenerationRef.current += 1;
+    activeAreaRef.current = activeArea;
   }, [activeArea]);
 
   useEffect(() => {
@@ -243,6 +250,38 @@ export const useAdminAreaData = (activeArea: AdminAreaId) => {
     return () => window.clearInterval(interval);
   }, [activeArea, pollDiagnosticsSilently]);
 
+  /**
+   * Issue #265: stille Neuabfrage der Druckerliste. Die Druckerverwaltung
+   * zeigt den Zustand aus `lastOkAt`/`lastErrorAt`; ohne Nachladen stünde ein
+   * inzwischen ausgefallener Drucker bis zum nächsten Klick auf „Bereit“.
+   * Setzt bewusst weder `isLoading` noch `loadError` (sonst flackerte die
+   * Ladeanzeige alle 10 s) und behält bei einem Fehler die letzte Liste.
+   * Prüft wie die Diagnoseabfrage die Bereichsgeneration, nicht die
+   * Anforderungskennung von `fetchData`.
+   */
+  const refreshPrintersSilently = useCallback(async () => {
+    const generation = areaGenerationRef.current;
+    const isCurrentPoll = () =>
+      isMountedRef.current && areaGenerationRef.current === generation;
+    try {
+      const response = await api.get("/print-jobs/printers");
+      if (!isCurrentPoll() || !Array.isArray(response.data)) return;
+      printersListFromAreaRef.current = true;
+      setPrintersList(response.data);
+      if (activeAreaRef.current === "printers") setData(response.data);
+    } catch (error) {
+      console.error("Background printers poll failed", error);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeArea !== "printers") return;
+    const interval = window.setInterval(() => {
+      void refreshPrintersSilently();
+    }, 10_000);
+    return () => window.clearInterval(interval);
+  }, [activeArea, refreshPrintersSilently]);
+
   return {
     data,
     diagnosticsData,
@@ -265,5 +304,6 @@ export const useAdminAreaData = (activeArea: AdminAreaId) => {
     restoreOperationConfirmation,
     setRestoreOperationConfirmation,
     fetchData,
+    refreshPrintersSilently,
   };
 };

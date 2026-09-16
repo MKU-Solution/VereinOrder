@@ -10,6 +10,7 @@
     "format:check": "prettier --check . --ignore-unknown --ignore-path ../../.prettierignore",
     "lint": "eslint \"*.ts\" --max-warnings 0",
     "typecheck": "tsc --noEmit",
+    "pretest": "tsc",
     "test": "node --test"
   },
   "devDependencies": {

@@ -184,3 +184,119 @@ describe("useAdminAreaData bei gleichzeitigen Bereichsabfragen", () => {
     expect(result.current.diagnosticsPollFailed).toBe(false);
   });
 });
+
+describe("useAdminAreaData: stille Druckerabfrage (Issue #265)", () => {
+  const RECOVERED = { ...PRINTER, lastOkAt: "2026-09-16T12:00:00.000Z" };
+
+  const printerCalls = () =>
+    mockedApi.get.mock.calls.filter(([url]) => url === "/print-jobs/printers")
+      .length;
+
+  beforeEach(() => {
+    mockedApi.get.mockClear();
+  });
+
+  it("fragt die Druckerliste im Druckerbereich alle 10 s ab, ohne Ladeanzeige", async () => {
+    vi.useFakeTimers();
+    immediateData.set("/print-jobs/printers", [PRINTER]);
+
+    const { result } = renderAreaData("printers");
+    await settle();
+    const callsAfterMount = printerCalls();
+    expect(result.current.data).toEqual([PRINTER]);
+
+    deferredUrls.add("/print-jobs/printers");
+    act(() => {
+      vi.advanceTimersByTime(10_000);
+    });
+    expect(printerCalls()).toBe(callsAfterMount + 1);
+    expect(result.current.isLoading).toBe(false);
+
+    openRequest("/print-jobs/printers", 0).resolve({ data: [RECOVERED] });
+    await settle();
+
+    expect(result.current.data).toEqual([RECOVERED]);
+    expect(result.current.printersList).toEqual([RECOVERED]);
+    expect(result.current.isLoading).toBe(false);
+
+    act(() => {
+      vi.advanceTimersByTime(10_000);
+    });
+    expect(printerCalls()).toBe(callsAfterMount + 2);
+  });
+
+  it("behält bei einem Fehler der stillen Abfrage die letzte Liste und meldet nichts", async () => {
+    vi.useFakeTimers();
+    immediateData.set("/print-jobs/printers", [PRINTER]);
+
+    const { result } = renderAreaData("printers");
+    await settle();
+
+    deferredUrls.add("/print-jobs/printers");
+    act(() => {
+      vi.advanceTimersByTime(10_000);
+    });
+    openRequest("/print-jobs/printers", 0).reject(new Error("offline"));
+    await settle();
+
+    expect(result.current.data).toEqual([PRINTER]);
+    expect(result.current.loadError).toBeNull();
+    expect(result.current.isLoading).toBe(false);
+  });
+
+  it("stoppt die stille Druckerabfrage nach einem Bereichswechsel", async () => {
+    vi.useFakeTimers();
+    immediateData.set("/print-jobs/printers", [PRINTER]);
+
+    const { rerender } = renderAreaData("printers");
+    await settle();
+
+    rerender({ activeArea: "users" });
+    await settle();
+    const callsAfterSwitch = printerCalls();
+
+    act(() => {
+      vi.advanceTimersByTime(30_000);
+    });
+    await settle();
+
+    expect(printerCalls()).toBe(callsAfterSwitch);
+  });
+
+  it("verwirft die Antwort einer laufenden stillen Druckerabfrage nach einem Bereichswechsel", async () => {
+    vi.useFakeTimers();
+    immediateData.set("/print-jobs/printers", [PRINTER]);
+
+    const { result, rerender } = renderAreaData("printers");
+    await settle();
+
+    deferredUrls.add("/print-jobs/printers");
+    act(() => {
+      vi.advanceTimersByTime(10_000);
+    });
+
+    rerender({ activeArea: "users" });
+    await settle();
+
+    openRequest("/print-jobs/printers", 0).resolve({ data: [RECOVERED] });
+    await settle();
+
+    expect(result.current.printersList).toEqual([PRINTER]);
+  });
+
+  it("bietet eine sofortige stille Neuabfrage der Druckerliste an", async () => {
+    immediateData.set("/print-jobs/printers", [PRINTER]);
+
+    const { result } = renderAreaData("printers");
+    await settle();
+
+    immediateData.set("/print-jobs/printers", [RECOVERED]);
+    await act(async () => {
+      await result.current.refreshPrintersSilently();
+    });
+
+    expect(result.current.data).toEqual([RECOVERED]);
+    expect(result.current.printersList).toEqual([RECOVERED]);
+    expect(result.current.isLoading).toBe(false);
+  });
+});

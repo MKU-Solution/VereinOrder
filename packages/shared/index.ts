@@ -87,3 +87,36 @@ export const ORDER_REJECTION_MESSAGES = {
   PICKUP_NUMBER_EXHAUSTED:
     "Der Abholnummernbereich dieser Veranstaltung ist erschöpft. Bitte bei der Administration melden; der Verkauf wurde nicht gebucht.",
 } as const;
+
+// Issue #265: gemeinsame Ableitung "Drucker hat einen ungeloesten Fehler".
+// Seit Issue #261 schreibt das Backend bei jedem Zustellversuch entweder
+// `lastOkAt` (PRINTED) oder `lastErrorAt` (NOT_PRINTED) fort. Ein Fehler
+// gilt als ungeloest, solange kein Erfolg juenger ist als er. Bewusst ohne
+// Zeitfenster: ein selten benutzter defekter Drucker darf nicht als gesund
+// erscheinen, nur weil sein Fehler alt ist. Gleichstand gilt als behoben.
+//
+// Liegt hier, weil Backend (DiagnosticsService.isBypassed) und Frontend
+// (Druckerverwaltung) dieselbe Regel brauchen; das Frontend bekommt die
+// Zeitpunkte als ISO-Zeichenketten, das Backend als Date. Ob der Drucker
+// eingeschaltet ist, entscheidet der Aufrufer.
+export type PrinterTimestamp = Date | string | null | undefined;
+
+export interface PrinterOutcomeTimestamps {
+  lastErrorAt?: PrinterTimestamp;
+  lastOkAt?: PrinterTimestamp;
+}
+
+const toTime = (value: PrinterTimestamp): number | null => {
+  if (value === null || value === undefined || value === "") return null;
+  const time = value instanceof Date ? value.getTime() : Date.parse(value);
+  return Number.isNaN(time) ? null : time;
+};
+
+export const hasUnrecoveredPrinterError = (
+  printer: PrinterOutcomeTimestamps,
+): boolean => {
+  const errorAt = toTime(printer.lastErrorAt);
+  if (errorAt === null) return false;
+  const okAt = toTime(printer.lastOkAt);
+  return okAt === null || errorAt > okAt;
+};
